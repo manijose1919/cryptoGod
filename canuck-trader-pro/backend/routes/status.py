@@ -332,6 +332,99 @@ async def feature_importance():
     }
 
 
+@router.get("/api/ml/status")
+async def ml_status():
+    """Get ML status in format expected by MLDashboard frontend component."""
+    trader = get_trader()
+    has_model = False
+    latest_model = None
+    model_history = []
+    prediction_accuracy = {"total": 0, "correct": None, "avg_confidence": None, "accuracy_pct": None}
+
+    try:
+        transformer = get_transformer_model()
+        t_status = transformer.get_status()
+        if t_status.get("trained"):
+            has_model = True
+            latest_model = {
+                "id": 1,
+                "modelType": "Transformer-Lite + LSTM + Online",
+                "accuracy": t_status.get("accuracy", 0) or 0,
+                "sampleCount": t_status.get("training_samples", 0),
+                "trainedAt": int(time.time() * 1000),
+            }
+    except Exception:
+        pass
+
+    try:
+        ol = get_online_learner()
+        ol_status = ol.get_status()
+        total_preds = ol_status.get("total_predictions", 0)
+        val_acc = ol_status.get("validation_accuracy", 0)
+        if total_preds > 0:
+            prediction_accuracy = {
+                "total": total_preds,
+                "correct": int(total_preds * val_acc) if val_acc else None,
+                "avg_confidence": None,
+                "accuracy_pct": round(val_acc * 100, 1) if val_acc else None,
+            }
+    except Exception:
+        pass
+
+    return {
+        "hasModel": has_model,
+        "latestModel": latest_model,
+        "predictionAccuracy": prediction_accuracy,
+        "modelHistory": model_history,
+    }
+
+
+@router.get("/api/ml/predictions/{ticker}")
+async def ml_predictions(ticker: str):
+    """Get ML predictions for a ticker."""
+    trader = get_trader()
+    predictions = []
+    try:
+        if trader and hasattr(trader, 'local_ai'):
+            ai = trader.local_ai
+            symbol = ticker.replace("USD", "/USD") if "/" not in ticker else ticker
+            result = ai.analyze_trade(symbol, "BUY", {})
+            if result:
+                predictions.append({
+                    "id": 1,
+                    "timestamp": int(time.time() * 1000),
+                    "prediction": result.get("direction", "HOLD"),
+                    "confidence": result.get("confidence", 0),
+                    "actual_outcome": None,
+                    "was_correct": None,
+                })
+    except Exception:
+        pass
+    return {"predictions": predictions}
+
+
+@router.get("/api/ml/feature-importance")
+async def ml_feature_importance():
+    """Get ML feature importance rankings."""
+    fs = get_feature_selector()
+    top = fs.get_top_features(20)
+    result = []
+    for i, feat in enumerate(top):
+        if isinstance(feat, dict):
+            result.append({
+                "name": feat.get("feature", f"feature_{i}"),
+                "importance": feat.get("importance", 0),
+                "rank": i + 1,
+            })
+        elif isinstance(feat, (list, tuple)) and len(feat) >= 2:
+            result.append({
+                "name": str(feat[0]),
+                "importance": float(feat[1]),
+                "rank": i + 1,
+            })
+    return result
+
+
 @router.get("/api/ml/models")
 async def ml_models_status():
     """Get status of all ML models."""
