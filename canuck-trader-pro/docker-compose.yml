@@ -1,0 +1,73 @@
+# Canuck-Trader-Pro - KVM4 Docker Compose
+# 4 vCPU, 16GB RAM, 200GB NVMe
+#
+# Usage:
+#   docker compose up -d          # start
+#   docker compose logs -f bot    # watch logs
+#   docker compose down           # stop (state preserved in volumes)
+#   docker compose restart bot    # restart after config change
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canuck-trader
+    restart: unless-stopped
+    ports:
+      - "3033:3033"
+    volumes:
+      - trader-data:/app/data
+      - trader-models:/app/backend/models
+      - trader-logs:/app/backend/logs
+    env_file:
+      - .env
+    environment:
+      - HTTP_PORT=3033
+      - PAPER_TRADING=true
+      - LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        limits:
+          cpus: "3.5"
+          memory: 12G
+        reservations:
+          cpus: "2.0"
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3033/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Watchtower: auto-update container when image changes
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=3600
+      - WATCHTOWER_LABEL_ENABLE=false
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+
+volumes:
+  trader-data:
+    driver: local
+  trader-models:
+    driver: local
+  trader-logs:
+    driver: local

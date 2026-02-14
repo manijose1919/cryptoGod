@@ -1,0 +1,58 @@
+# ==============================================================================
+# Canuck-Trader-Pro — Docker Build Ignore
+# ==============================================================================
+
+# Dependencies (rebuilt inside container)
+node_modules
+.npm
+
+# Git
+.git
+.gitignore
+
+# Database files (use Docker volumes instead)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Logs
+*.log
+
+# Python virtual environments
+venv
+.venv
+__pycache__
+*.pyc
+*.pyo
+
+# Environment secrets (injected via env_file)
+.env.local
+
+# Windows null file artifact
+nul
+
+# IDE / Editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build output (rebuilt in container)
+dist
+
+# Test files
+tests
+test-*.js
+
+# Documentation
+*.md
+txt
+
+# Deployment archives
+*.tar
+*.tar.gz
+deploy
+
+# OS files
+Thumbs.db
+.DS_Store

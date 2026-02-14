@@ -1,0 +1,134 @@
+# ==============================================================================
+# Canuck-Trader-Pro — Docker Compose for KVM8 VPS
+# 8 vCPU / 32GB RAM / 400GB NVMe
+# Services: bot, redis, nginx, prometheus, grafana
+# ==============================================================================
+
+version: "3.9"
+
+services:
+  # ── Trading Bot (Python FastAPI + React frontend) ────────────────────────
+  bot:
+    build:
+      context: .
+      dockerfile: canuck-trader-pro/backend/Dockerfile
+    container_name: canuck-trader-bot
+    ports:
+      - "3033:3033"
+    env_file:
+      - .env
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - db-data:/app/data
+      - ./models:/app/models
+      - ./logs:/app/logs
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "6"
+          memory: 24G
+        reservations:
+          cpus: "2"
+          memory: 8G
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trading-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Redis Cache ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: canuck-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - trading-net
+
+  # ── Nginx Reverse Proxy ──────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: canuck-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: always
+    depends_on:
+      - bot
+    networks:
+      - trading-net
+
+  # ── Prometheus Metrics ───────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: canuck-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=10GB"
+    restart: always
+    networks:
+      - trading-net
+
+  # ── Grafana Dashboard ────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: canuck-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-canuck-trader-2024}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+    restart: always
+    depends_on:
+      - prometheus
+    networks:
+      - trading-net
+
+# ── Named Volumes ────────────────────────────────────────────────────────────
+volumes:
+  db-data:
+    driver: local
+  redis-data:
+    driver: local
+  grafana-data:
+    driver: local
+  prometheus-data:
+    driver: local
+
+# ── Network ──────────────────────────────────────────────────────────────────
+networks:
+  trading-net:
+    driver: bridge
