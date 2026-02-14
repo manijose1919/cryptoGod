@@ -147,22 +147,6 @@ def initialize_database(data_dir: str | None = None) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_sentiment_lookup
             ON sentiment_snapshots(ticker, created_at);
 
-        -- Performance indexes for common queries
-        CREATE INDEX IF NOT EXISTS idx_trades_ticker
-            ON trades(ticker, created_at);
-        CREATE INDEX IF NOT EXISTS idx_trades_strategy
-            ON trades(strategy, created_at);
-        CREATE INDEX IF NOT EXISTS idx_trades_outcome
-            ON trades(outcome, created_at);
-        CREATE INDEX IF NOT EXISTS idx_trade_memory_ticker
-            ON trade_memory(ticker, created_at);
-        CREATE INDEX IF NOT EXISTS idx_sessions_start
-            ON sessions(start_time);
-        CREATE INDEX IF NOT EXISTS idx_system_logs_time
-            ON system_logs(time);
-        CREATE INDEX IF NOT EXISTS idx_parameter_history_created
-            ON parameter_history(created_at);
-
         -- System activity logs
         CREATE TABLE IF NOT EXISTS system_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -178,6 +162,22 @@ def initialize_database(data_dir: str | None = None) -> sqlite3.Connection:
             value TEXT NOT NULL,
             updated_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000)
         );
+
+        -- Performance indexes for common queries
+        CREATE INDEX IF NOT EXISTS idx_trades_ticker
+            ON trades(ticker, created_at);
+        CREATE INDEX IF NOT EXISTS idx_trades_strategy
+            ON trades(strategy, created_at);
+        CREATE INDEX IF NOT EXISTS idx_trades_outcome
+            ON trades(outcome, created_at);
+        CREATE INDEX IF NOT EXISTS idx_trade_memory_ticker
+            ON trade_memory(ticker, created_at);
+        CREATE INDEX IF NOT EXISTS idx_sessions_start
+            ON sessions(start_time);
+        CREATE INDEX IF NOT EXISTS idx_system_logs_time
+            ON system_logs(time);
+        CREATE INDEX IF NOT EXISTS idx_parameter_history_created
+            ON parameter_history(created_at);
     """)
 
     logger.info(f"Initialized SQLite at {db_path}")

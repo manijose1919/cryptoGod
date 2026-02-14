@@ -225,12 +225,22 @@ def create_app() -> FastAPI:
         )
 
     # Serve built React frontend (production)
-    dist_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "dist")
-    # Also check project root for dist (when running from different CWD)
-    if not os.path.exists(dist_dir):
-        alt_dist = os.path.join(os.getcwd(), "dist")
-        if os.path.exists(alt_dist):
-            dist_dir = alt_dist
+    # Search multiple possible locations for the dist/ directory
+    _backend_dir = os.path.dirname(os.path.abspath(__file__))
+    _candidate_dirs = [
+        os.path.join(_backend_dir, "..", "..", "dist"),          # canuck-trader-pro/backend -> project root
+        os.path.join(_backend_dir, "..", "..", "..", "dist"),    # deeper nesting
+        os.path.join(os.getcwd(), "dist"),                      # CWD
+        "/opt/trading-bot/dist",                                # VPS absolute path
+    ]
+    dist_dir = None
+    for _candidate in _candidate_dirs:
+        _resolved = os.path.realpath(_candidate)
+        if os.path.exists(_resolved) and os.path.isfile(os.path.join(_resolved, "index.html")):
+            dist_dir = _resolved
+            break
+    if dist_dir is None:
+        dist_dir = os.path.join(_backend_dir, "..", "..", "dist")  # fallback for logging
 
     if os.path.exists(dist_dir):
         logger.info(f"Serving frontend from {dist_dir}")

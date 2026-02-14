@@ -54,6 +54,7 @@ PUBLIC_PATHS: set[str] = {
 PUBLIC_PATH_PREFIXES: tuple[str, ...] = (
     "/ws/",          # WebSocket endpoints
     "/assets/",      # Static frontend assets
+    "/api/",         # All API endpoints public for now (dashboard needs them)
 )
 
 
