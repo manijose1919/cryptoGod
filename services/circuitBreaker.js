@@ -1,0 +1,302 @@
+/**
+ * Circuit Breaker + Kelly Position Sizing Service
+ *
+ * Auto-pauses trading after:
+ *   - 3 consecutive losses
+ *   - 5% daily drawdown
+ *   - 5 losses in 1 hour
+ *
+ * Kelly Criterion:
+ *   Calculates optimal position size from historical win rate & avg win/loss.
+ *   Uses Half-Kelly for safety (full Kelly is too aggressive).
+ */
+
+// ============================================
+// STATE
+// ============================================
+
+const tradeHistory = [];      // { time, pnl, strategy, ticker }
+let consecutiveLosses = 0;
+let consecutiveWins = 0;
+let dailyPnl = 0;
+let dailyStartBalance = 0;
+let dailyDate = new Date().toDateString();
+let pausedUntil = 0;
+let pauseReason = '';
+
+const CIRCUIT_BREAKER_CONFIG = {
+  MAX_CONSECUTIVE_LOSSES: 6,            // Beast Mode: was 3
+  MAX_DAILY_DRAWDOWN_PERCENT: 15,       // Beast Mode: was 5
+  MAX_HOURLY_LOSSES: 12,                // Beast Mode: was 5
+  PAUSE_DURATION_MS: 3 * 60 * 1000,     // Beast Mode: 3min cooldown (was 15min)
+  ESCALATING_PAUSE: false,              // Beast Mode: no escalation (was true)
+};
+
+let pauseCount = 0;  // For escalating pauses
+
+// ============================================
+// CIRCUIT BREAKER
+// ============================================
+
+/**
+ * Record a completed trade result
+ */
+export function recordTradeResult(pnl, strategy = 'UNKNOWN', ticker = '') {
+  const now = Date.now();
+
+  // Reset daily tracking if new day
+  const today = new Date().toDateString();
+  if (today !== dailyDate) {
+    dailyPnl = 0;
+    dailyDate = today;
+    pauseCount = 0; // Reset escalation on new day
+  }
+
+  tradeHistory.push({ time: now, pnl, strategy, ticker });
+  dailyPnl += pnl;
+
+  // Keep last 500 trades
+  if (tradeHistory.length > 500) {
+    tradeHistory.splice(0, tradeHistory.length - 500);
+  }
+
+  if (pnl < 0) {
+    consecutiveLosses++;
+    consecutiveWins = 0;
+  } else if (pnl > 0) {
+    consecutiveWins++;
+    consecutiveLosses = 0;
+  }
+
+  // Check circuit breaker triggers
+  checkTriggers();
+}
+
+/**
+ * Set the daily start balance (call on bot start or login)
+ */
+export function setDailyBalance(balance) {
+  dailyStartBalance = balance;
+}
+
+function checkTriggers() {
+  // Trigger 1: Consecutive losses
+  if (consecutiveLosses >= CIRCUIT_BREAKER_CONFIG.MAX_CONSECUTIVE_LOSSES) {
+    triggerPause(`${consecutiveLosses} consecutive losses`);
+    return;
+  }
+
+  // Trigger 2: Daily drawdown
+  if (dailyStartBalance > 0) {
+    const drawdownPercent = (-dailyPnl / dailyStartBalance) * 100;
+    if (drawdownPercent >= CIRCUIT_BREAKER_CONFIG.MAX_DAILY_DRAWDOWN_PERCENT) {
+      triggerPause(`Daily drawdown ${drawdownPercent.toFixed(1)}% exceeds ${CIRCUIT_BREAKER_CONFIG.MAX_DAILY_DRAWDOWN_PERCENT}%`);
+      return;
+    }
+  }
+
+  // Trigger 3: Hourly loss rate
+  const oneHourAgo = Date.now() - 3600000;
+  const hourlyLosses = tradeHistory.filter(t => t.time > oneHourAgo && t.pnl < 0).length;
+  if (hourlyLosses >= CIRCUIT_BREAKER_CONFIG.MAX_HOURLY_LOSSES) {
+    triggerPause(`${hourlyLosses} losses in last hour`);
+  }
+}
+
+function triggerPause(reason) {
+  pauseCount++;
+  const duration = CIRCUIT_BREAKER_CONFIG.ESCALATING_PAUSE
+    ? CIRCUIT_BREAKER_CONFIG.PAUSE_DURATION_MS * pauseCount
+    : CIRCUIT_BREAKER_CONFIG.PAUSE_DURATION_MS;
+
+  pausedUntil = Date.now() + duration;
+  pauseReason = reason;
+  consecutiveLosses = 0; // Reset so it doesn't re-trigger immediately
+
+  const minutes = Math.round(duration / 60000);
+  console.log(`[CIRCUIT BREAKER] Trading paused for ${minutes}min. Reason: ${reason}`);
+}
+
+/**
+ * Check if trading should be paused
+ */
+export function shouldPauseTrading() {
+  if (Date.now() < pausedUntil) {
+    const remaining = Math.ceil((pausedUntil - Date.now()) / 60000);
+    return {
+      paused: true,
+      reason: pauseReason,
+      remainingMinutes: remaining,
+    };
+  }
+  return { paused: false, reason: '', remainingMinutes: 0 };
+}
+
+/**
+ * Manually reset the circuit breaker
+ */
+export function resetCircuitBreaker() {
+  pausedUntil = 0;
+  pauseReason = '';
+  consecutiveLosses = 0;
+  pauseCount = 0;
+}
+
+// ============================================
+// KELLY CRITERION POSITION SIZING
+// ============================================
+
+/**
+ * Calculate Kelly fraction from trade history
+ * Returns recommended position size as fraction of portfolio (0 to 1)
+ */
+export function calculateKellyFraction(minTrades = 5) {  // Beast Mode: was 10
+  const completedTrades = tradeHistory.filter(t => t.pnl !== 0);
+  if (completedTrades.length < minTrades) {
+    return {
+      kellyFull: 0.1,       // Default conservative 10%
+      kellyHalf: 0.05,
+      kellyQuarter: 0.025,
+      recommended: 0.05,    // Use half-Kelly by default
+      confidence: 'LOW',
+      stats: { trades: completedTrades.length, minRequired: minTrades },
+    };
+  }
+
+  const wins = completedTrades.filter(t => t.pnl > 0);
+  const losses = completedTrades.filter(t => t.pnl < 0);
+
+  const winRate = wins.length / completedTrades.length;
+  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 1;
+
+  // Kelly formula: f* = (bp - q) / b
+  // where b = avgWin/avgLoss, p = winRate, q = 1 - winRate
+  const b = avgLoss > 0 ? avgWin / avgLoss : 1;
+  const kellyFull = Math.max(0, (b * winRate - (1 - winRate)) / b);
+  const kellyHalf = kellyFull / 2;
+  const kellyQuarter = kellyFull / 4;
+
+  // Confidence based on sample size
+  let confidence = 'LOW';
+  if (completedTrades.length >= 50) confidence = 'HIGH';
+  else if (completedTrades.length >= 20) confidence = 'MEDIUM';
+
+  // Beast Mode: Cap at 40% max position size (was 25%)
+  const recommended = Math.min(0.40, kellyHalf);
+
+  return {
+    kellyFull: Math.min(1, kellyFull),
+    kellyHalf: Math.min(0.5, kellyHalf),
+    kellyQuarter: Math.min(0.25, kellyQuarter),
+    recommended,
+    confidence,
+    stats: {
+      trades: completedTrades.length,
+      winRate: (winRate * 100).toFixed(1) + '%',
+      avgWin: avgWin.toFixed(4),
+      avgLoss: avgLoss.toFixed(4),
+      profitFactor: avgLoss > 0 ? (avgWin * wins.length / (avgLoss * losses.length)).toFixed(2) : 'N/A',
+      expectancy: ((winRate * avgWin) - ((1 - winRate) * avgLoss)).toFixed(4),
+    },
+  };
+}
+
+/**
+ * Get recommended position size in dollars
+ */
+export function getKellyPositionSize(portfolioValue) {
+  const kelly = calculateKellyFraction();
+  return {
+    amount: portfolioValue * kelly.recommended,
+    fraction: kelly.recommended,
+    kelly,
+  };
+}
+
+/**
+ * Per-strategy Kelly: calculate for a specific strategy only
+ */
+export function getStrategyKelly(strategy, portfolioValue) {
+  const stratTrades = tradeHistory.filter(t => t.strategy === strategy && t.pnl !== 0);
+  if (stratTrades.length < 5) {
+    return { amount: portfolioValue * 0.05, fraction: 0.05, confidence: 'LOW' };
+  }
+
+  const wins = stratTrades.filter(t => t.pnl > 0);
+  const losses = stratTrades.filter(t => t.pnl < 0);
+  const winRate = wins.length / stratTrades.length;
+  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 1;
+  const b = avgLoss > 0 ? avgWin / avgLoss : 1;
+  const kellyHalf = Math.max(0, (b * winRate - (1 - winRate)) / b) / 2;
+  const recommended = Math.min(0.25, kellyHalf);
+
+  return {
+    amount: portfolioValue * recommended,
+    fraction: recommended,
+    confidence: stratTrades.length >= 20 ? 'HIGH' : 'MEDIUM',
+  };
+}
+
+// ============================================
+// STATUS
+// ============================================
+
+// ============================================
+// STATE EXPORT / IMPORT (for session persistence)
+// ============================================
+
+export function exportState() {
+  return {
+    tradeHistory: tradeHistory.slice(-500),
+    consecutiveLosses,
+    consecutiveWins,
+    dailyPnl,
+    dailyStartBalance,
+    dailyDate,
+    pausedUntil,
+    pauseReason,
+    pauseCount,
+  };
+}
+
+export function importState(state) {
+  if (!state) return;
+  tradeHistory.length = 0;
+  if (Array.isArray(state.tradeHistory)) {
+    tradeHistory.push(...state.tradeHistory);
+  }
+  consecutiveLosses = state.consecutiveLosses || 0;
+  consecutiveWins = state.consecutiveWins || 0;
+  dailyPnl = state.dailyPnl || 0;
+  dailyStartBalance = state.dailyStartBalance || 0;
+  dailyDate = state.dailyDate || new Date().toDateString();
+  pausedUntil = state.pausedUntil || 0;
+  pauseReason = state.pauseReason || '';
+  pauseCount = state.pauseCount || 0;
+}
+
+export function getCircuitBreakerStatus() {
+  const pauseCheck = shouldPauseTrading();
+  const kelly = calculateKellyFraction();
+
+  const oneHourAgo = Date.now() - 3600000;
+  const hourlyTrades = tradeHistory.filter(t => t.time > oneHourAgo);
+  const hourlyWins = hourlyTrades.filter(t => t.pnl > 0).length;
+  const hourlyLosses = hourlyTrades.filter(t => t.pnl < 0).length;
+
+  return {
+    paused: pauseCheck.paused,
+    pauseReason: pauseCheck.reason,
+    pauseRemainingMin: pauseCheck.remainingMinutes,
+    consecutiveLosses,
+    consecutiveWins,
+    dailyPnl: dailyPnl.toFixed(4),
+    dailyDrawdownPercent: dailyStartBalance > 0 ? ((-dailyPnl / dailyStartBalance) * 100).toFixed(2) : '0',
+    hourly: { trades: hourlyTrades.length, wins: hourlyWins, losses: hourlyLosses },
+    totalTrades: tradeHistory.length,
+    pauseCount,
+    kelly,
+  };
+}

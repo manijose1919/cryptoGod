@@ -1,0 +1,33 @@
+# ==============================================================================
+# Canuck-Trader-Pro — Prometheus Scrape Configuration
+# ==============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  # ── Trading Bot Metrics ──────────────────────────────────────────────────
+  - job_name: "trading-bot"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["bot:3033"]
+        labels:
+          instance: "canuck-trader-pro"
+          environment: "production"
+
+  # ── Node Exporter (if present on host) ───────────────────────────────────
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
+        labels:
+          instance: "kvm8-host"
+    # Gracefully handle node-exporter not being available
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # ── Prometheus Self-Monitoring ───────────────────────────────────────────
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

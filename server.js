@@ -1,0 +1,1919 @@
+// Use 'import' syntax for ES Modules
+import express from 'express';
+import cors from 'cors';
+import crypto from 'node:crypto';
+import http from 'node:http';
+import fetch from 'node-fetch';
+import { URLSearchParams, fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { WebSocketServer } from 'ws';
+import { 
+    calculateTCSeries, 
+    calculateBreakoutDetectorSeries, 
+    calculateWhaleMoneyFlowSeries, 
+    calculateTrendDashboard, 
+    calculateMomentumSeries, 
+    calculateDivergence, 
+    calculateAdaptiveTCSeries,
+    // New Smart Trading Features
+    detectMarketRegime,
+    calculateOpportunityScore,
+    calculateAdaptiveData,
+    calculateATR
+} from './server-indicator-service.js';
+
+// Import Advanced Services
+import * as VolatilityService from './services/volatilityService.js';
+import * as SentimentService from './services/sentimentService.js';
+import * as RiskService from './services/riskService.js';
+
+import { 
+    initializeDatabase, 
+    closeDatabase, 
+    insertCandlesBatch, 
+    setSetting, 
+    getSetting,
+    insertSystemLog,
+    getSystemLogs
+} from './services/database.js';
+import persistenceRoutes from './routes/persistence.js';
+import tradingviewRoutes, { injectSignal } from './routes/tradingview.js';
+import { SignalScanner } from './services/signalScanner.js';
+import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, exportState as pmExportState, importState as pmImportState } from './services/profitMethods.js';
+
+// Phase 2-5 Services
+import { initWebSocket, mergeCandles, getLatestPrice, isConnected as wsConnected, getWebSocketStatus, closeWebSocket } from './services/websocketService.js';
+import { analyzeMultiTimeframe, shouldEnterLong, getMultiTimeframeStatus } from './services/multiTimeframe.js';
+import { recordTradeResult as cbRecordTrade, setDailyBalance, shouldPauseTrading, resetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
+import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategyThrottled, getAdaptiveWeightsStatus, exportState as awExportState, importState as awImportState } from './services/adaptiveWeights.js';
+import { calculateAllIndicators } from './services/advancedIndicators.js';
+import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
+import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment } from './services/socialSentiment.js';
+import { setGeminiKey, getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
+import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, getBeastModeStatus, exportState as beastExportState, importState as beastImportState } from './services/beastMode.js';
+
+// Phase 6: New Backend Services (SIM parity)
+import { getMasterSurgeDecision, detectSurge, detectCandlestickPatterns } from './services/surgeTradingBackend.js';
+import { recordTradeForLearning, shouldTakeTradeAI, getAILearningStatus, restoreFromDatabase as restoreAILearning, getParameterAdjustments } from './services/aiLearningBackend.js';
+import { getOnChainSignals } from './services/onChainBackend.js';
+import { getAssetProfile, getStrategyAssetMatch, getBestStrategyForAsset, getPositionSizeForLiquidity, getRiskAdjustedParams } from './services/assetIntelligenceBackend.js';
+import * as CapitalTierManager from './services/capitalTierManager.js';
+import * as SessionManager from './services/sessionManager.js';
+
+// Batch 1: Trading Performance Services
+import { isStrategyEnabledForRegime, filterStrategiesByRegime } from './services/regimeStrategyMap.js';
+import { getMTFAlignmentScore, getMTFConfidencePoints } from './services/mtfConfluence.js';
+import { getFundingRateSignal, getFundingConfidenceAdjustment } from './services/fundingRateStrategy.js';
+
+// Batch 2: Intelligence Layer Services
+import { getOrderBookSignal, getOrderBookConfidenceAdjustment } from './services/orderBookSignals.js';
+import { getCorrelationMatrix, checkCorrelationRisk } from './services/correlationRiskBackend.js';
+import { initJournalTable, recordTradeForJournal, autoJournal, getJournalEntries, forceGenerateJournal } from './services/tradeJournal.js';
+
+// Batch 3: Quality of Life Services
+import { initTelegram, isEnabled as telegramEnabled, getStatus as telegramStatus, alertTradeExecution, alertCircuitBreaker, sendTestMessage } from './services/telegramService.js';
+
+// Batch 5: Session Persistence
+import { saveFullState, restoreFullState, getSessionStatus, recordSessionTrade, startAutoSave, stopAutoSave } from './services/sessionPersistence.js';
+
+// New Questrade & AI Services
+import { QuestradeService } from './services/questradeService.js';
+import { PaperTrader } from './services/PaperTrader.js';
+import { StrategyEngine } from './services/StrategyEngine.js';
+import { GeminiBrain } from './services/GeminiBrain.js';
+import { dataIngestion } from './services/DataIngestionService.js';
+
+// Phase 7: Multi-Exchange Data + ML Services
+import {
+    insertExchangeSnapshot, getExchangeSnapshots, getLatestExchangeSnapshot,
+    insertDerivativesData, getDerivativesHistory, getLatestDerivatives,
+    insertDeFiSnapshot, getLatestDeFiSnapshot, getDeFiHistory,
+    insertNewsItem, insertNewsItemsBatch, getNewsItems,
+    insertMLFeatures, getUnlabeledFeatures, getLabeledFeatures, labelMLFeatures,
+    insertMLModel, getLatestMLModel, getMLModelHistory,
+    insertMLPrediction, resolveMLPrediction, getMLPredictions, getMLAccuracyStats,
+    cleanupOldData
+} from './services/database.js';
+
+let multiExchangeService = null;
+let mlPredictionService = null;
+let selfTeachingLoop = null;
+let smartMoneyService = null;
+let localNLPService = null;
+let adaptiveThresholdsService = null;
+
+try {
+    const mes = await import('./services/multiExchangeService.js');
+    multiExchangeService = mes;
+    console.log('[Server] Multi-exchange service loaded');
+} catch (e) {
+    console.warn('[Server] Multi-exchange service not available:', e.message);
+}
+
+try {
+    mlPredictionService = await import('./services/mlPredictionService.js');
+    console.log('[Server] ML prediction service loaded');
+} catch (e) {
+    console.warn('[Server] ML prediction service not available:', e.message);
+}
+
+try {
+    selfTeachingLoop = await import('./services/selfTeachingLoop.js');
+    console.log('[Server] Self-teaching loop loaded');
+} catch (e) {
+    console.warn('[Server] Self-teaching loop not available:', e.message);
+}
+
+try {
+    smartMoneyService = await import('./services/smartMoneyService.js');
+    console.log('[Server] Smart money service loaded');
+} catch (e) {
+    console.warn('[Server] Smart money service not available:', e.message);
+}
+
+try {
+    localNLPService = await import('./services/localNLPService.js');
+    console.log('[Server] Local NLP service loaded');
+} catch (e) {
+    console.warn('[Server] Local NLP service not available:', e.message);
+}
+
+try {
+    adaptiveThresholdsService = await import('./services/adaptiveThresholds.js');
+    console.log('[Server] Adaptive thresholds service loaded');
+} catch (e) {
+    console.warn('[Server] Adaptive thresholds service not available:', e.message);
+}
+
+// Load environment variables from .env file
+import 'dotenv/config';
+
+// ============================================
+// CONFIGURATION
+// ============================================
+const CONFIG = {
+    PORT: 3033,
+    CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    API_BASE_URL: 'https://api.crypto.com/exchange/v1/',
+    BOT_INTERVAL_MS: 2000,             // Beast Mode: 2s (was 5s)
+    TICKER_REFRESH_MS: 3600000,
+    MAX_LOGS: 100,
+    RATE_LIMIT_WINDOW_MS: 60000,
+    RATE_LIMIT_MAX_REQUESTS: 100,
+
+    // Signal thresholds (BEAST MODE - further relaxed ~10-15%)
+    THRESHOLDS: {
+        TREND_BULLISH_ENTRY: 50,       // Beast Mode: was 45
+        TREND_BEARISH_EXIT: 75,        // Beast Mode: was 70 (hold longer)
+        BREAKOUT_SQUEEZE_ENTRY: 40,    // Beast Mode: was 35
+        BREAKOUT_EXPANSION_EXIT: 60,   // Beast Mode: was 55
+        WHALE_BUYING_ENTRY: 48,        // Beast Mode: was 52
+        WHALE_SELLING_EXIT: 35,        // Beast Mode: was 40 (hold longer)
+        CONFLUENCE_BULLISH_ENTRY: 2,   // Beast Mode: was 3
+        CONFLUENCE_BEARISH_EXIT: 1,    // Beast Mode: was 2
+        // MOMENTUM Strategy
+        MOMENTUM_BULLISH_ENTRY: 50,    // Beast Mode: was 55
+        MOMENTUM_BEARISH_EXIT: 25,     // Beast Mode: was 30 (hold longer)
+        // DIVERGENCE Strategy
+        DIVERGENCE_MIN_CONFIDENCE: 35, // Beast Mode: was 45
+        // ADAPTIVE Strategy (TC Adaptive Trades in Favor)
+        ADAPTIVE_BULLISH_ENTRY: 45,    // Beast Mode: was 40
+        ADAPTIVE_BEARISH_EXIT: 75,     // Beast Mode: was 70
+    },
+
+    MIN_TRADE_SIZE: 1.00,              // Practical minimum for Crypto.com
+    MIN_CANDLES_REQUIRED: 10,          // Beast Mode: 10 (was 15)
+};
+
+// ============================================
+// Server Setup
+// ============================================
+const app = express();
+let publicIp = 'not detected';
+
+// Initialize New Services
+const questrade = new QuestradeService();
+const paperTrader = new PaperTrader(questrade, 100000);
+const strategyEngine = new StrategyEngine();
+const brain = new GeminiBrain();
+const brainThoughts = []; // Store thinking logs
+
+// Questrade Bot State
+let questradeBotState = {
+    isActive: false,
+    isPaper: true,
+    accountId: null,
+    watchlist: ['SHOP', 'TD', 'RY', 'BNS', 'ENB', 'CNR', 'CP', 'BMO', 'BCE', 'T'],
+    interval: null,
+    loopMs: 5000,
+};
+
+// Setup Brain Listeners
+brain.on('thought', (thought) => {
+    brainThoughts.unshift({ time: Date.now(), ...thought });
+    if (brainThoughts.length > 50) brainThoughts.pop();
+    // Also push to main logs
+    addLog(`[BRAIN] ${thought.type}: ${thought.decision || 'Thinking'} on ${thought.asset}`, 'AI');
+});
+
+brain.on('learning', (data) => {
+    addLog(`[BRAIN] Learning insights: ${data.insights.slice(0, 100)}...`, 'AI');
+});
+
+// Setup Data Ingestion Listeners
+dataIngestion.on('data', (items) => {
+    // Optionally trigger immediate analysis on breaking news
+    if (items.length > 0) {
+        // console.log(`[DataIngestion] Received ${items.length} new items`);
+    }
+});
+
+// ============================================
+// Rate Limiting (Simple in-memory implementation)
+// ============================================
+const rateLimitStore = new Map();
+
+const rateLimit = (req, res, next) => {
+    const ip = req.ip || req.connection.remoteAddress;
+    const now = Date.now();
+    const windowStart = now - CONFIG.RATE_LIMIT_WINDOW_MS;
+
+    // Clean old entries
+    const requests = rateLimitStore.get(ip) || [];
+    const recentRequests = requests.filter(time => time > windowStart);
+
+    if (recentRequests.length >= CONFIG.RATE_LIMIT_MAX_REQUESTS) {
+        return res.status(429).json({
+            message: 'Too many requests. Please try again later.',
+            retryAfter: Math.ceil((recentRequests[0] + CONFIG.RATE_LIMIT_WINDOW_MS - now) / 1000)
+        });
+    }
+
+    recentRequests.push(now);
+    rateLimitStore.set(ip, recentRequests);
+    next();
+};
+
+// ============================================
+// Middleware
+// ============================================
+app.use(cors({
+    origin: function(origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        // Allow localhost on any port for development
+        if (origin.startsWith('http://localhost:')) return callback(null, true);
+        // Allow VPS direct access
+        if (origin.includes('31.97.7.138')) return callback(null, true);
+        // Allow configured origin
+        if (origin === CONFIG.CORS_ORIGIN) return callback(null, true);
+        return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true
+}));
+app.use(express.json({ limit: '10mb' })); // Increased for candle batch inserts
+app.use(rateLimit);
+
+// Serve built frontend (production)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Mount persistence routes (SQLite database)
+app.use('/api/db', persistenceRoutes);
+
+// Mount TradingView webhook routes
+// app.use('/api/tradingview', tradingviewRoutes);
+
+// Clean expired sessions periodically
+setInterval(() => {
+    const cleaned = SessionManager.cleanExpiredSessions();
+    if (cleaned > 0) {
+        console.log(`[SessionManager] Cleaned up ${cleaned} expired sessions.`);
+    }
+}, 300000); // Every 5 minutes
+
+// ============================================
+// In-Memory State
+// ============================================
+let peakValue = 0; // Track peak portfolio value for drawdown calculation
+
+let botState = {
+    isActive: false,
+    settings: {},
+    sessionId: null,
+};
+
+let portfolio = {
+    cash: 0,
+    initialBudget: 0,
+    positions: {},
+};
+
+let logs = [];
+let botInterval = null;
+let availableTickers = [];
+const instrumentSpecs = new Map(); // Cache: instrument_name -> { quantity_decimals, qty_tick_size }
+
+const addLog = (message, type = 'INFO') => {
+    const newLog = {
+        id: Date.now(),
+        time: Date.now(),
+        message: `[Backend] ${message}`,
+        type
+    };
+    logs = [newLog, ...logs].slice(0, CONFIG.MAX_LOGS);
+    console.log(`[${type}] ${message}`);
+
+    // Persist to database
+    try {
+        insertSystemLog(newLog);
+    } catch (e) {
+        console.error(`[Database] Failed to insert log: ${e.message}`);
+    }
+};
+
+// ============================================
+// Crypto.com API Logic
+// ============================================
+async function makePublicRequest(method, params = {}) {
+    const url = new URL(`${CONFIG.API_BASE_URL}${method}`);
+    url.search = new URLSearchParams(params).toString();
+
+    const response = await fetch(url.toString());
+    const data = await response.json();
+
+    if (data.code != 0) {
+        throw new Error(`Crypto.com API Error for ${method}: ${data.message || 'No message'}`);
+    }
+    return data.result;
+}
+
+function paramsToStr(obj, level = 0) {
+    const MAX_LEVEL = 3;
+    if (level >= MAX_LEVEL) return String(obj);
+
+    let result = '';
+    for (const key of Object.keys(obj).sort()) {
+        result += key;
+        const val = obj[key];
+        if (val === null || val === undefined) {
+            result += 'null';
+        } else if (Array.isArray(val)) {
+            for (const item of val) {
+                if (typeof item === 'object' && item !== null) {
+                    result += paramsToStr(item, level + 1);
+                } else {
+                    result += String(item);
+                }
+            }
+        } else if (typeof val === 'object') {
+            result += paramsToStr(val, level + 1);
+        } else {
+            result += String(val);
+        }
+    }
+    return result;
+}
+
+function generateSignature(method, id, apiKey, secretKey, params, nonce) {
+    const paramStr = params && Object.keys(params).length > 0
+        ? paramsToStr(params, 0)
+        : '';
+    const sigPayload = method + String(id) + apiKey + paramStr + String(nonce);
+    return crypto.createHmac('sha256', secretKey).update(sigPayload).digest('hex');
+}
+
+async function makeSignedRequest(method, params = {}, sessionId = null) {
+    // Get credentials from session or environment
+    let apiKey, secretKey;
+
+    if (sessionId) {
+        const session = SessionManager.getSession(sessionId);
+        if (session) {
+            apiKey = session.apiKey;
+            secretKey = session.secretKey;
+        }
+    }
+    
+    if (!apiKey || !secretKey) {
+        apiKey = process.env.SESSION_API_KEY;
+        secretKey = process.env.SESSION_SECRET_KEY;
+    }
+
+    if (!apiKey || !secretKey) {
+        throw new Error('API credentials not available. Please authenticate first.');
+    }
+
+    const id = Date.now();
+    const nonce = Date.now();
+    const sig = generateSignature(method, id, apiKey, secretKey, params, nonce);
+
+    const response = await fetch(`${CONFIG.API_BASE_URL}${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            id,
+            method,
+            api_key: apiKey,
+            params,
+            sig,
+            nonce
+        })
+    });
+
+    const data = await response.json();
+
+    if (data.code != 0) {
+        console.error(`[Crypto.com] ${method} failed:`, JSON.stringify(data));
+        throw new Error(`Crypto.com API Error (Code: ${data.code}): ${data.message || 'No message provided.'}`);
+    }
+    return data.result;
+}
+
+// ============================================
+// Helper: Convert ticker to instrument_name format
+// ============================================
+function toInstrumentName(ticker) {
+    if (ticker.includes('_')) return ticker; // Already formatted
+    if (ticker.endsWith('USDC')) return ticker.replace('USDC', '_USDC');
+    if (ticker.endsWith('USDT')) return ticker.replace('USDT', '_USDT');
+    if (ticker.endsWith('CAD')) return ticker.replace('CAD', '_CAD');
+    if (ticker.endsWith('USD')) return ticker.replace('USD', '_USD');
+    return ticker;
+}
+
+// Market Data Fetching (Parallel) + Auto-collect to SQLite
+// ============================================
+async function getMarketData(ticker, timeframe = '1m', count = 100) {
+    const instrument_name = toInstrumentName(ticker);
+    const result = await makePublicRequest('public/get-candlestick', { instrument_name, timeframe, count });
+    const candles = result.data;
+
+    // Auto-collect candles into SQLite for backtesting history
+    if (candles && candles.length > 0) {
+        try {
+            const rows = candles.map(c => ({
+                ticker: ticker,
+                timeframe: timeframe,
+                time: c.t,
+                open: c.o,
+                high: c.h,
+                low: c.l,
+                close: c.c,
+                volume: c.v,
+            }));
+            insertCandlesBatch(rows);
+        } catch (dbError) {
+            // Don't let DB errors break market data fetching
+            console.error(`[Database] Candle insert error for ${ticker}: ${dbError.message}`);
+        }
+    }
+
+    return candles;
+}
+
+async function getMultipleMarketData(tickers, timeframe = '1m') {
+    // Fetch all tickers in parallel for efficiency
+    const promises = tickers.map(async (ticker) => {
+        try {
+            const candles = await getMarketData(ticker, timeframe);
+            return { ticker, candles, error: null };
+        } catch (error) {
+            return { ticker, candles: null, error: error.message };
+        }
+    });
+
+    return Promise.all(promises);
+}
+
+// ============================================
+// Input Validation
+// ============================================
+function validateBotSettings(settings) {
+    const errors = [];
+
+    if (typeof settings.riskAmount !== 'number' || settings.riskAmount <= 0 || settings.riskAmount > 1) {
+        errors.push('riskAmount must be a number between 0 and 1');
+    }
+
+    if (typeof settings.maxConcurrentTrades !== 'number' || settings.maxConcurrentTrades < 1 || settings.maxConcurrentTrades > 20) {
+        errors.push('maxConcurrentTrades must be between 1 and 20');
+    }
+
+    if (typeof settings.sessionProfitGoal !== 'number' || settings.sessionProfitGoal < 0) {
+        errors.push('sessionProfitGoal must be a non-negative number');
+    }
+
+    if (settings.profitGoal !== undefined && (typeof settings.profitGoal !== 'number' || settings.profitGoal < 0)) {
+        errors.push('profitGoal must be a non-negative number');
+    }
+
+    return errors;
+}
+
+// ============================================
+// Session State Persistence
+// ============================================
+function saveSessionState() {
+  try {
+    setSetting('session_portfolio', JSON.stringify({
+      cash: portfolio.cash,
+      initialBudget: portfolio.initialBudget,
+      positions: portfolio.positions,
+    }));
+    setSetting('session_bot', JSON.stringify({
+      isActive: botState.isActive,
+      settings: botState.settings,
+    }));
+    setSetting('session_circuit_breaker', JSON.stringify(cbExportState()));
+    setSetting('session_adaptive_weights', JSON.stringify(awExportState()));
+    setSetting('session_beast_mode', JSON.stringify(beastExportState()));
+    setSetting('session_profit_methods', JSON.stringify(pmExportState()));
+    setSetting('session_timestamp', JSON.stringify(Date.now()));
+  } catch (e) {
+    console.log(`[SESSION] Save failed: ${e.message}`);
+  }
+}
+
+// ============================================
+// Trading Bot Loop (Optimized for Large Universes)
+// ============================================
+async function tradingBotLoop() {
+    if (!botState.isActive) return;
+
+    try {
+        const { sessionProfitGoal, riskAmount, profitGoals } = botState.settings;
+
+        // --- CAPITAL TIER MANAGEMENT ---
+        let holdingsValue = Object.values(portfolio.positions).reduce((sum, pos) =>
+            sum + (pos.quantity * (pos.currentPrice || pos.openPrice)), 0
+        );
+        let totalValue = portfolio.cash + holdingsValue;
+        if (totalValue > peakValue) peakValue = totalValue;
+        const tier = CapitalTierManager.getTier(totalValue);
+
+        // Auto-expand maxConcurrentTrades to at least cover existing positions + 2 new slots
+        // But also cap it by the tier's limit
+        const existingCount = Object.keys(portfolio.positions).length;
+        const maxConcurrentTrades = Math.min(
+            tier.limits.maxConcurrentTrades,
+            Math.max(botState.settings.maxConcurrentTrades || 5, existingCount + 2)
+        );
+
+        // Halt trading if drawdown exceeds tier limits
+        const drawdown = peakValue > 0 ? ((peakValue - totalValue) / peakValue) * 100 : 0;
+        if (drawdown > tier.limits.maxDrawdownLimit) {
+            if (Math.random() < 0.05) addLog(`[CAPITAL TIER] Trading halted: Drawdown ${drawdown.toFixed(1)}% exceeds ${tier.name} limit (${tier.limits.maxDrawdownLimit}%)`, 'WARN');
+            // Allow exits but skip all entries
+        }
+
+        // --- DYNAMIC MARKET SCANNING ---
+        const positionTickers = Object.keys(portfolio.positions);
+        
+        // Rotate through available tickers
+        const BATCH_SIZE = 20; 
+        const totalTickers = availableTickers.length;
+        const cycleIndex = Math.floor(Date.now() / 1000) % Math.ceil(totalTickers / BATCH_SIZE);
+        const scanBatch = availableTickers.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
+        
+        const tickersToFetch = [...new Set([...positionTickers, ...scanBatch])];
+        const allMarketData = await getMultipleMarketData(tickersToFetch);
+
+        // Create a lookup map
+        const marketDataMap = new Map();
+        for (const { ticker, candles, error } of allMarketData) {
+            if (!error && candles && candles.length >= CONFIG.MIN_CANDLES_REQUIRED) {
+                marketDataMap.set(ticker, candles);
+            }
+        }
+
+        // --- CIRCUIT BREAKER CHECK ---
+        const pauseCheck = shouldPauseTrading();
+        if (pauseCheck.paused) {
+            if (Math.random() < 0.1) addLog(`[CIRCUIT BREAKER] Paused: ${pauseCheck.reason} (${pauseCheck.remainingMinutes}min left)`, 'WARN');
+        }
+
+        // --- MULTI-TIMEFRAME DATA (5m, 15m alongside 1m) ---
+        let mtfDataMap = new Map();
+        try {
+            const mtfTickers = [...new Set([...positionTickers, ...scanBatch.slice(0, 6)])];
+            const [data5m, data15m] = await Promise.all([
+                getMultipleMarketData(mtfTickers, '5m'),
+                getMultipleMarketData(mtfTickers, '15m'),
+            ]);
+            for (const ticker of mtfTickers) {
+                const candles1m = marketDataMap.get(ticker);
+                const entry5m = data5m.find(d => d.ticker === ticker);
+                const entry15m = data15m.find(d => d.ticker === ticker);
+                if (candles1m) {
+                    mtfDataMap.set(ticker, {
+                        '1m': candles1m,
+                        '5m': entry5m?.candles || [],
+                        '15m': entry15m?.candles || [],
+                    });
+                }
+            }
+        } catch (e) {}
+
+        // --- MTF CONFLUENCE SCORING ---
+        const mtfScores = new Map();
+        for (const [ticker, tfData] of mtfDataMap) {
+            try {
+                const alignment = getMTFAlignmentScore(tfData);
+                mtfScores.set(ticker, alignment);
+            } catch (e) {}
+        }
+
+        // --- MERGE WEBSOCKET CANDLES ---
+        for (const [ticker, candles] of marketDataMap) {
+            const merged = mergeCandles(candles, ticker);
+            if (merged && merged.length > candles.length) {
+                marketDataMap.set(ticker, merged);
+            }
+        }
+
+        const prices = {};
+
+        // --- EXIT LOGIC ---
+        for (const ticker of positionTickers) {
+            const position = portfolio.positions[ticker];
+            const candles = marketDataMap.get(ticker);
+
+            if (!candles) continue;
+
+            const currentPrice = candles[candles.length - 1].c;
+            prices[ticker] = currentPrice;
+
+            const profitGoal = profitGoals?.[position.entryStrategy] || 0;
+            const currentProfit = (currentPrice - position.openPrice) * position.quantity;
+
+            let exitReason = null;
+
+            if (profitGoal > 0 && currentProfit >= profitGoal) {
+                exitReason = `Per-trade profit goal of $${profitGoal.toFixed(2)} reached.`;
+            }
+
+            if (!exitReason && position.entryStrategy !== 'EXISTING') {
+                const dynamicCheck = checkDynamicExit(position, currentPrice, candles);
+                if (dynamicCheck.shouldExit) exitReason = dynamicCheck.reason;
+            }
+
+            if (!exitReason) {
+                const tcValue = calculateTCSeries(candles).pop() ?? 50;
+                const momentumValue = calculateMomentumSeries(candles).pop() ?? 50;
+
+                switch (position.entryStrategy) {
+                    case 'TREND':
+                        if (tcValue > CONFIG.THRESHOLDS.TREND_BEARISH_EXIT) exitReason = 'Trend Signal: Bearish exit';
+                        break;
+                    case 'MOMENTUM':
+                        if (momentumValue < CONFIG.THRESHOLDS.MOMENTUM_BEARISH_EXIT) exitReason = 'Momentum Signal: Bearish Momentum';
+                        break;
+                }
+            }
+
+            if (exitReason) await handleSell(position, currentPrice, exitReason);
+        }
+
+        // --- PROFIT METHOD EXITS ---
+        const pmExits = checkProfitMethodExits(portfolio.positions, marketDataMap);
+        for (const exit of pmExits) {
+            const pos = portfolio.positions[exit.ticker];
+            if (!pos) continue;
+            const candles = marketDataMap.get(exit.ticker);
+            const exitPrice = candles ? candles[candles.length - 1].c : pos.openPrice;
+            await handleSell(pos, exitPrice, exit.reason);
+        }
+
+        // Recalculate total value
+        holdingsValue = Object.values(portfolio.positions).reduce((sum, pos) =>
+            sum + (pos.quantity * (prices[pos.ticker] || pos.openPrice)), 0
+        );
+        totalValue = portfolio.cash + holdingsValue;
+        beastUpdateBalance(totalValue);
+
+        if (sessionProfitGoal && totalValue >= sessionProfitGoal) {
+            addLog(`SESSION PROFIT GOAL REACHED! Total: $${totalValue.toFixed(2)}`, 'SPECIAL');
+            botState.isActive = false;
+            clearInterval(botInterval);
+            botInterval = null;
+            return;
+        }
+
+        // --- ENTRY LOGIC ---
+        // Determine current market regime for strategy filtering
+        const currentRegime = (() => {
+            try {
+                const firstCandles = marketDataMap.values().next().value;
+                if (firstCandles) {
+                    const regime = getMarketRegime(firstCandles);
+                    return regime?.regime || 'UNKNOWN';
+                }
+            } catch (e) {}
+            return 'UNKNOWN';
+        })();
+
+        const openSlots = maxConcurrentTrades - Object.keys(portfolio.positions).length;
+        if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && drawdown <= tier.limits.maxDrawdownLimit) {
+
+            // Calculate Opportunity Scores for current batch
+            const candidates = [];
+            for (const ticker of scanBatch) {
+                if (portfolio.positions[ticker]) continue;
+                const candles = marketDataMap.get(ticker);
+                if (!candles) continue;
+                const score = calculateOpportunityScore(candles, ticker);
+                if (score.compositeScore > 8) candidates.push({ ticker, score, candles });
+            }
+
+            candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
+
+            for (const candidate of candidates) {
+                if (maxConcurrentTrades - Object.keys(portfolio.positions).length <= 0) break;
+                if (portfolio.cash < CONFIG.MIN_TRADE_SIZE) break;
+
+                const { ticker, score, candles } = candidate;
+                const currentPrice = candles[candles.length - 1].c;
+                const tcValue = calculateTCSeries(candles).pop() ?? 50;
+
+                let entryStrategy = null;
+                if (tcValue < CONFIG.THRESHOLDS.TREND_BULLISH_ENTRY) entryStrategy = 'TREND';
+
+                // Feature 6: Regime-aware strategy filtering
+                if (entryStrategy && !isStrategyEnabledForRegime(entryStrategy, currentRegime)) {
+                    addLog(`[REGIME] ${entryStrategy} skipped for ${ticker} (regime: ${currentRegime})`, 'INFO');
+                    entryStrategy = null;
+                }
+
+                // Feature 3: MTF confluence confidence adjustment
+                let mtfConfidenceAdj = 0;
+                const mtfScore = mtfScores.get(ticker);
+                if (mtfScore) {
+                    mtfConfidenceAdj = getMTFConfidencePoints(mtfScore.alignmentScore);
+                }
+
+                // Feature 8: Funding rate adjustment
+                let fundingAdj = 0;
+                try {
+                    const fundingSignal = getFundingRateSignal(ticker);
+                    const fundingResult = getFundingConfidenceAdjustment(fundingSignal, 'LONG');
+                    fundingAdj = fundingResult.adjustment;
+                } catch (e) {}
+
+                if (entryStrategy && CapitalTierManager.isStrategyAllowed(entryStrategy, totalValue)) {
+                    // Feature 4: Dynamic Kelly position sizing
+                    const kellySize = getKellyPositionSize(totalValue);
+                    const kellyFraction = kellySize.kelly.stats?.trades >= 20
+                        ? Math.min(0.25, kellySize.fraction)
+                        : 0.10; // Fall back to 10% if < 20 trades
+
+                    let investmentAmount = Math.min(portfolio.cash * 0.95, totalValue * kellyFraction * riskAmount);
+                    investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
+
+                    if (investmentAmount > CONFIG.MIN_TRADE_SIZE) {
+                        await handleBuy(ticker, currentPrice, entryStrategy, `Batch scan signal (score=${score.compositeScore})`, investmentAmount);
+                    }
+                }
+            }
+        }
+
+        // --- PROFIT METHOD ENTRIES ---
+        if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && drawdown <= tier.limits.maxDrawdownLimit) {
+            const pmEntries = runProfitMethods(marketDataMap, portfolio, availableTickers, CONFIG.MIN_TRADE_SIZE);
+            for (const entry of pmEntries) {
+                if (portfolio.cash < CONFIG.MIN_TRADE_SIZE) break;
+                if (!CapitalTierManager.isStrategyAllowed(entry.strategy, totalValue)) continue;
+
+                let amount = CapitalTierManager.getRecommendedPositionSize(totalValue, Math.min(entry.amount, portfolio.cash * 0.9));
+                if (amount >= CONFIG.MIN_TRADE_SIZE) {
+                    await handleBuy(entry.ticker, entry.price, entry.strategy, entry.reason, amount);
+                }
+            }
+        }
+        saveSessionState();
+    } catch (error) {
+        console.error(`Bot loop error: ${error.message}`);
+    }
+}
+
+const handleBuy = async (ticker, price, strategy, reason, notional) => {
+    addLog(`Triggering BUY for ${ticker} @ ${price}. Reason: [${strategy}] ${reason}`, 'BUY');
+
+    try {
+        const orderResult = await makeSignedRequest('private/create-order', {
+            instrument_name: toInstrumentName(ticker),
+            side: 'BUY',
+            type: 'MARKET',
+            notional: notional.toFixed(2)
+        }, botState.sessionId);
+
+        const quantity = orderResult.order_info?.filled_quantity || (notional / price);
+        const avgPrice = orderResult.order_info?.avg_price || price;
+
+        portfolio.positions[ticker] = {
+            quantity: parseFloat(quantity),
+            openPrice: parseFloat(avgPrice),
+            ticker,
+            entryStrategy: strategy,
+            entryTime: Date.now(),
+            highestPrice: parseFloat(avgPrice),
+            lowestPrice: parseFloat(avgPrice)
+        };
+        const buyFee = notional * 0.00075;
+        portfolio.cash -= (notional + buyFee);
+        if (telegramEnabled()) alertTradeExecution({ type: 'BUY', ticker, price: parseFloat(avgPrice), strategy, pnl: null });
+        saveSessionState();
+        return { success: true };
+    } catch (error) {
+        addLog(`BUY order failed: ${error.message}`, 'ERROR');
+        return { success: false, insufficientBalance: error.message?.includes('INSUFFICIENT') };
+    }
+};
+
+const handleSell = async (position, price, reason) => {
+    addLog(`Triggering SELL for ${position.ticker} @ ${price}. Reason: ${reason}`, 'SELL');
+
+    try {
+        const instrument = toInstrumentName(position.ticker);
+        const specs = instrumentSpecs.get(instrument);
+        let decimals = specs ? specs.quantity_decimals : 2;
+        const factor = Math.pow(10, decimals);
+        const sellQty = (Math.floor(position.quantity * factor) / factor).toString();
+
+        const orderResult = await makeSignedRequest('private/create-order', {
+            instrument_name: instrument,
+            side: 'SELL',
+            type: 'MARKET',
+            quantity: sellQty
+        }, botState.sessionId);
+
+        const avgPrice = orderResult.order_info?.avg_price || price;
+        const sellFee = parseFloat(avgPrice) * position.quantity * 0.00075;
+        const pnl = (parseFloat(avgPrice) - position.openPrice) * position.quantity - sellFee;
+
+        portfolio.cash += (position.quantity * parseFloat(avgPrice)) - sellFee;
+        delete portfolio.positions[position.ticker];
+
+        cbRecordTrade(pnl, position.entryStrategy, position.ticker);
+        recordStrategyResult(position.entryStrategy, pnl);
+        beastRecordTrade(pnl, position.ticker, position.entryStrategy);
+        recordTradeForJournal({ ticker: position.ticker, strategy: position.entryStrategy, pnl, price: parseFloat(avgPrice), quantity: position.quantity, type: 'SELL' });
+        autoJournal();
+        recordSessionTrade(pnl);
+        if (telegramEnabled()) alertTradeExecution({ type: 'SELL', ticker: position.ticker, price: parseFloat(avgPrice), strategy: position.entryStrategy, pnl });
+        saveSessionState();
+    } catch (error) {
+        addLog(`SELL order failed: ${error.message}`, 'ERROR');
+    }
+};
+
+// ============================================
+// API Endpoints
+// ============================================
+app.get('/api/market-data', async (req, res, next) => {
+    try {
+        const { instrument_name, timeframe } = req.query;
+        if (!instrument_name || !timeframe) {
+            return res.status(400).json({ message: 'instrument_name and timeframe are required' });
+        }
+        const data = await getMarketData(instrument_name, timeframe, 200);
+        res.status(200).json({ data });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/instruments', async (req, res, next) => {
+    try {
+        const result = await makePublicRequest('public/get-instruments');
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.post('/api/test-connection', async (req, res, next) => {
+    try {
+        if (publicIp === 'not detected' || publicIp === 'error fetching IP') {
+            await logPublicIp();
+        }
+        res.status(200).json({ message: 'Backend connection successful!', ip: publicIp });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.post('/api/login', async (req, res, next) => {
+    try {
+        const { apiKey, secretKey } = req.body;
+        if (!apiKey || !secretKey) return res.status(400).json({ message: 'API Key and Secret Key are required.' });
+
+        const sessionId = SessionManager.createSession(apiKey, secretKey);
+        let balanceResult = await makeSignedRequest('private/user-balance', {}, sessionId);
+        
+        const dataArray = balanceResult?.data || [];
+        const topLevel = Array.isArray(dataArray) && dataArray.length > 0 ? dataArray[0] : dataArray;
+
+        let cashBalance = 0;
+        const holdings = {};
+        const positionBalances = topLevel?.position_balances || [];
+        
+        for (const pos of positionBalances) {
+            const currency = pos.instrument_name;
+            const qty = parseFloat(pos.quantity || '0');
+            if (qty <= 0) continue;
+            if (currency === 'USD' || currency === 'USDC') cashBalance += qty;
+            else holdings[currency] = { quantity: qty, usdValue: 0 };
+        }
+
+        const totalBalance = cashBalance; // Simplified for this overwrite
+        portfolio = { cash: cashBalance, initialBudget: totalBalance, positions: {}, holdings };
+        botState.sessionId = sessionId;
+        beastSetSessionBalance(totalBalance);
+        saveSessionState();
+
+        res.status(200).json({ balance: totalBalance, holdings, sessionId, portfolio });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.post('/api/ai/analyze', async (req, res, next) => {
+    try {
+        const { prompt, ticker, signals, sentiment, marketData } = req.body;
+        
+        let analysis;
+        if (ticker && signals && marketData) {
+            // Specialized analysis
+            analysis = await brain.analyzeTradeOpportunity(ticker, signals, sentiment || {}, marketData);
+        } else if (prompt) {
+            // Generic prompt analysis - handled locally
+            analysis = `Local AI: Received prompt (${prompt.length} chars). Use specific ticker/signals/marketData for trade analysis.`;
+        } else {
+            return res.status(400).json({ message: 'Prompt or ticker/signals/marketData required' });
+        }
+        
+        res.status(200).json({ analysis: typeof analysis === 'string' ? analysis : JSON.stringify(analysis) });
+    } catch (error) {
+        console.error('[AI Analyze Error]:', error.message);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+app.get('/api/status', (req, res) => {
+    res.status(200).json({ portfolio, logs, isBotActive: botState.isActive });
+});
+
+app.get('/api/system/status', (req, res) => {
+    try {
+        res.status(200).json({
+            websocket: getWebSocketStatus(),
+            circuitBreaker: getCircuitBreakerStatus(),
+            adaptiveWeights: getAdaptiveWeightsStatus(),
+            profitMethods: getProfitMethodsStatus(),
+            preTradeAI: getPreTradeAIStatus(),
+            beastMode: getBeastModeStatus(),
+            aiLearning: getAILearningStatus(),
+        });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+});
+
+app.get('/api/ws-auth', (req, res) => {
+    try {
+        const apiKey = process.env.SESSION_API_KEY;
+        const secretKey = process.env.SESSION_SECRET_KEY;
+        if (!apiKey || !secretKey) {
+            return res.status(404).json({ message: 'WebSocket auth keys not configured' });
+        }
+        const id = Date.now();
+        const nonce = Date.now();
+        const method = 'public/auth';
+        const sigPayload = method + id + apiKey + nonce;
+        const sig = crypto.createHmac('sha256', secretKey).update(sigPayload).digest('hex');
+        res.status(200).json({ id, method, api_key: apiKey, sig, nonce });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to generate WebSocket auth', error: error.message });
+    }
+});
+
+// New AI/Brain Endpoints
+app.get('/api/brain/thoughts', (req, res) => {
+    res.status(200).json(brainThoughts);
+});
+
+app.get('/api/feeds/live', async (req, res) => {
+    try {
+        const feeds = await dataIngestion.fetchAllFeeds();
+        res.status(200).json(feeds);
+    } catch (e) {
+        res.status(500).json({ message: 'Failed to fetch feeds' });
+    }
+});
+
+// ============================================
+// Questrade API Routes
+// ============================================
+
+app.post('/api/questrade/auth', async (req, res) => {
+    try {
+        const { refreshToken, isPractice } = req.body;
+        if (refreshToken) {
+            questrade.isPractice = isPractice ?? true;
+        }
+        await questrade.authenticate(refreshToken);
+        // Also reinitialize paper trader when re-authing
+        res.status(200).json({ success: true, status: questrade.getStatus() });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/questrade/status', (req, res) => {
+    res.status(200).json({
+        questrade: questrade.getStatus(),
+        bot: {
+            isActive: questradeBotState.isActive,
+            isPaper: questradeBotState.isPaper,
+            watchlist: questradeBotState.watchlist,
+        },
+        paperTrading: {
+            cash: paperTrader.portfolio.cash,
+            positions: Object.keys(paperTrader.portfolio.positions).length,
+            tradeCount: paperTrader.portfolio.history.length,
+        }
+    });
+});
+
+app.get('/api/questrade/accounts', async (req, res) => {
+    try {
+        const accounts = await questrade.getAccounts();
+        res.status(200).json({ accounts });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/questrade/balance/:accountId', async (req, res) => {
+    try {
+        const data = await questrade.getBalance(req.params.accountId);
+        res.status(200).json(data);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/questrade/positions/:accountId', async (req, res) => {
+    try {
+        const positions = await questrade.getPositions(req.params.accountId);
+        res.status(200).json({ positions });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/questrade/candles', async (req, res) => {
+    try {
+        const { symbol, interval, start, end } = req.query;
+        if (!symbol) return res.status(400).json({ message: 'symbol is required' });
+        const candles = await questrade.getCandlesByTicker(symbol, interval || '1m', start, end);
+        res.status(200).json({ candles });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/questrade/search', async (req, res) => {
+    try {
+        const { prefix } = req.query;
+        if (!prefix) return res.status(400).json({ message: 'prefix is required' });
+        const symbols = await questrade.searchSymbol(prefix);
+        res.status(200).json({ symbols });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/questrade/symbols', async (req, res) => {
+    try {
+        const { exchange } = req.query;
+        if (!exchange) return res.status(400).json({ message: 'exchange is required' });
+        const symbols = await questrade.getSymbolsByExchange(exchange);
+        res.status(200).json({ symbols });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.post('/api/questrade/order', async (req, res) => {
+    try {
+        const { accountId, ticker, side, quantity, orderType, limitPrice } = req.body;
+        if (!ticker || !side || !quantity) {
+            return res.status(400).json({ message: 'ticker, side, and quantity are required' });
+        }
+
+        if (questradeBotState.isPaper) {
+            // Paper trade
+            const trade = await paperTrader.createOrder(ticker, side, quantity, orderType || 'MARKET', limitPrice);
+            res.status(200).json({ success: true, trade, paper: true });
+        } else {
+            // Live trade
+            if (!accountId) return res.status(400).json({ message: 'accountId required for live trading' });
+            const symbolId = await questrade.getSymbolId(ticker);
+            const order = {
+                symbolId,
+                quantity,
+                icebergQuantity: quantity,
+                side: side === 'BUY' ? 'Buy' : 'Sell',
+                orderType: orderType === 'LIMIT' ? 'Limit' : 'Market',
+                timeInForce: 'Day',
+            };
+            if (limitPrice) order.limitPrice = limitPrice;
+            const result = await questrade.placeOrder(accountId, order);
+            res.status(200).json({ success: true, result, paper: false });
+        }
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+// Paper Trading endpoints
+app.get('/api/questrade/paper/summary', async (req, res) => {
+    try {
+        const summary = await paperTrader.getAccountSummary();
+        res.status(200).json(summary);
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/questrade/paper/history', (req, res) => {
+    res.status(200).json({ trades: paperTrader.getHistory() });
+});
+
+app.post('/api/questrade/paper/reset', (req, res) => {
+    const { balance } = req.body;
+    paperTrader.reset(balance || 100000);
+    res.status(200).json({ success: true, message: 'Paper trading reset' });
+});
+
+// Questrade Bot Control
+app.post('/api/questrade/bot/start', async (req, res) => {
+    try {
+        const { watchlist, isPaper, accountId } = req.body;
+        if (questradeBotState.isActive) {
+            return res.status(400).json({ message: 'Questrade bot already running' });
+        }
+
+        // Ensure authenticated
+        if (!questrade.isAuthenticated()) {
+            await questrade.authenticate();
+        }
+
+        questradeBotState.isActive = true;
+        questradeBotState.isPaper = isPaper !== false;
+        questradeBotState.accountId = accountId || null;
+        if (watchlist && Array.isArray(watchlist)) {
+            questradeBotState.watchlist = watchlist;
+        }
+
+        // Start bot loop
+        questradeBotState.interval = setInterval(() => questradeBotLoop(), questradeBotState.loopMs);
+        addLog(`[QUESTRADE BOT] Started (${questradeBotState.isPaper ? 'Paper' : 'Live'}) - Watchlist: ${questradeBotState.watchlist.join(', ')}`, 'INFO');
+        res.status(200).json({ success: true, state: questradeBotState });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.post('/api/questrade/bot/stop', (req, res) => {
+    if (questradeBotState.interval) {
+        clearInterval(questradeBotState.interval);
+        questradeBotState.interval = null;
+    }
+    questradeBotState.isActive = false;
+    addLog('[QUESTRADE BOT] Stopped', 'INFO');
+    res.status(200).json({ success: true });
+});
+
+// ============================================
+// Questrade Bot Loop
+// ============================================
+function isMarketOpen() {
+    const now = new Date();
+    // Convert to ET (UTC-5 or UTC-4 during DST)
+    const etOffset = -5; // EST (simplification - doesn't handle DST)
+    const utcHour = now.getUTCHours();
+    const utcMin = now.getUTCMinutes();
+    const etHour = (utcHour + etOffset + 24) % 24;
+    const etMinutes = etHour * 60 + utcMin;
+    const dayOfWeek = now.getUTCDay();
+
+    // Weekend check
+    if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+
+    // Market hours: 9:30 AM - 4:00 PM ET
+    const marketOpen = 9 * 60 + 30; // 570
+    const marketClose = 16 * 60; // 960
+    return etMinutes >= marketOpen && etMinutes < marketClose;
+}
+
+async function questradeBotLoop() {
+    if (!questradeBotState.isActive) return;
+
+    try {
+        if (!isMarketOpen()) {
+            // Log occasionally during off-hours
+            if (Math.random() < 0.01) {
+                addLog('[QUESTRADE BOT] Market closed - waiting', 'INFO');
+            }
+            return;
+        }
+
+        const trader = questradeBotState.isPaper ? paperTrader : questrade;
+        const watchlist = questradeBotState.watchlist;
+
+        for (const ticker of watchlist) {
+            try {
+                // 1. Fetch candles
+                const candles = await questrade.getCandlesByTicker(ticker, '5m');
+                if (!candles || candles.length < 50) continue;
+
+                // 2. Run strategy engine
+                const signals = strategyEngine.evaluate(ticker, candles);
+                if (signals.length === 0) continue;
+
+                // 3. Get best signal
+                const bestSignal = signals.reduce((best, s) =>
+                    s.confidence > best.confidence ? s : best, signals[0]
+                );
+
+                // 4. AI Brain analysis (skip if confidence is very high to save API calls)
+                let aiDecision = { decision: 'YES', confidence: bestSignal.confidence * 100 };
+                if (bestSignal.confidence < 0.8) {
+                    try {
+                        const lastCandle = candles[candles.length - 1];
+                        aiDecision = await brain.analyzeTradeOpportunity(
+                            ticker,
+                            signals,
+                            {},
+                            { price: lastCandle.c, volume: lastCandle.v }
+                        );
+                    } catch (e) {
+                        // AI failure shouldn't block trades
+                    }
+                }
+
+                if (aiDecision.decision === 'NO') continue;
+
+                // 5. Execute trade
+                const lastPrice = candles[candles.length - 1].c;
+                const positionSize = questradeBotState.isPaper
+                    ? Math.floor((paperTrader.portfolio.cash * 0.1) / lastPrice)
+                    : 1; // Conservative for live
+
+                if (positionSize <= 0) continue;
+
+                if (bestSignal.action === 'BUY') {
+                    if (questradeBotState.isPaper) {
+                        await paperTrader.createOrder(ticker, 'BUY', positionSize);
+                    } else if (questradeBotState.accountId) {
+                        const symbolId = await questrade.getSymbolId(ticker);
+                        await questrade.placeOrder(questradeBotState.accountId, {
+                            symbolId,
+                            quantity: positionSize,
+                            side: 'Buy',
+                            orderType: 'Market',
+                            timeInForce: 'Day',
+                        });
+                    }
+                    addLog(`[QUESTRADE BOT] BUY ${positionSize} ${ticker} @ ${lastPrice} (${bestSignal.strategy}: ${bestSignal.reason})`, 'BUY');
+                } else if (bestSignal.action === 'SELL') {
+                    // Check if we have a position to sell
+                    const hasPosition = questradeBotState.isPaper
+                        ? !!paperTrader.portfolio.positions[ticker]
+                        : false; // For live, would check Questrade positions
+
+                    if (hasPosition) {
+                        const pos = paperTrader.portfolio.positions[ticker];
+                        if (questradeBotState.isPaper) {
+                            await paperTrader.createOrder(ticker, 'SELL', pos.quantity);
+                        }
+                        addLog(`[QUESTRADE BOT] SELL ${pos.quantity} ${ticker} @ ${lastPrice} (${bestSignal.strategy}: ${bestSignal.reason})`, 'SELL');
+                    }
+                }
+
+                // Review trade with brain
+                brain.reviewTrade({
+                    ticker,
+                    signal: bestSignal,
+                    price: lastPrice,
+                    timestamp: Date.now(),
+                    paper: questradeBotState.isPaper,
+                });
+
+            } catch (tickerError) {
+                if (Math.random() < 0.1) {
+                    addLog(`[QUESTRADE BOT] Error on ${ticker}: ${tickerError.message}`, 'ERROR');
+                }
+            }
+        }
+    } catch (error) {
+        addLog(`[QUESTRADE BOT] Loop error: ${error.message}`, 'ERROR');
+    }
+}
+
+const logPublicIp = async () => {
+    try {
+        const response = await fetch('https://api.ipify.org?format=json');
+        const data = await response.json();
+        publicIp = data.ip;
+    } catch (error) {
+        publicIp = 'error';
+    }
+};
+
+const updateAvailableTickers = async () => {
+    try {
+        const result = await makePublicRequest('public/get-instruments');
+        const instruments = result.instruments || result.data || [];
+        availableTickers = instruments
+            .filter(i => i.tradeable === true || i.tradeable === 'true')
+            .map(i => i.instrument_name)
+            .sort();
+
+        for (const inst of instruments) {
+            const name = inst.instrument_name || inst.symbol || '';
+            if (name && inst.quantity_decimals !== undefined) {
+                instrumentSpecs.set(name, {
+                    quantity_decimals: parseInt(inst.quantity_decimals),
+                    qty_tick_size: inst.qty_tick_size || '0.01'
+                });
+            }
+        }
+    } catch (error) {
+        console.error('Ticker update failed');
+    }
+};
+
+// ============================================
+// Multi-Exchange Data & ML Routes
+// ============================================
+app.get('/api/exchange-data/:ticker', async (req, res) => {
+    try {
+        const { ticker } = req.params;
+        if (multiExchangeService) {
+            const snapshot = multiExchangeService.getExchangeSnapshot(ticker);
+            if (snapshot) return res.json(snapshot);
+        }
+        // Fallback: query DB directly
+        const dbData = getExchangeSnapshots(ticker, 1);
+        res.json({ ticker, snapshots: dbData.slice(0, 10), source: 'database' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/derivatives/:ticker', async (req, res) => {
+    try {
+        const { ticker } = req.params;
+        if (multiExchangeService) {
+            const data = multiExchangeService.getDerivativesSnapshot(ticker);
+            if (data) return res.json(data);
+        }
+        const dbData = getLatestDerivatives(ticker);
+        res.json(dbData || { ticker, error: 'No derivatives data yet' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/defi/overview', async (req, res) => {
+    try {
+        if (multiExchangeService) {
+            const data = multiExchangeService.getDeFiSnapshot();
+            if (data) return res.json(data);
+        }
+        const dbData = getLatestDeFiSnapshot();
+        res.json(dbData || { error: 'No DeFi data yet' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/sentiment/news/:ticker', async (req, res) => {
+    try {
+        const { ticker } = req.params;
+        const hours = parseInt(req.query.hours) || 24;
+        if (multiExchangeService) {
+            const data = multiExchangeService.getNewsSnapshot(ticker);
+            if (data) return res.json(data);
+        }
+        const dbData = getNewsItems({ ticker, hours, limit: 50 });
+        res.json({ ticker, items: dbData, source: 'database' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/sentiment/social/:ticker', async (req, res) => {
+    try {
+        const { ticker } = req.params;
+        if (multiExchangeService) {
+            const data = multiExchangeService.getSocialSnapshot(ticker);
+            if (data) return res.json(data);
+        }
+        res.json({ ticker, error: 'Social data not available yet' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/sentiment/fear-greed', async (req, res) => {
+    try {
+        if (multiExchangeService) {
+            const data = multiExchangeService.getFearGreed();
+            if (data) return res.json(data);
+        }
+        res.json({ value: 50, classification: 'Neutral', error: 'Fear & Greed not available yet' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/multi-exchange/status', (req, res) => {
+    try {
+        if (multiExchangeService) {
+            res.json(multiExchangeService.getCollectionStatus());
+        } else {
+            res.json({ isRunning: false, error: 'Multi-exchange service not loaded' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// ML Routes (Phase 2 - will be populated when ML engine is built)
+app.get('/api/ml/status', (req, res) => {
+    try {
+        const latestModel = getLatestMLModel();
+        const accuracy = getMLAccuracyStats();
+        const modelHistory = getMLModelHistory(10);
+        res.json({
+            hasModel: !!latestModel,
+            latestModel: latestModel ? {
+                type: latestModel.model_type,
+                accuracy: latestModel.accuracy,
+                sampleCount: latestModel.sample_count,
+                createdAt: latestModel.created_at
+            } : null,
+            predictionAccuracy: accuracy,
+            modelHistory: modelHistory.map(m => ({ type: m.model_type, accuracy: m.accuracy, samples: m.sample_count, date: m.created_at }))
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/ml/predictions/:ticker', (req, res) => {
+    try {
+        const { ticker } = req.params;
+        const limit = parseInt(req.query.limit) || 50;
+        const predictions = getMLPredictions({ ticker, limit });
+        res.json({ ticker, predictions });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/ml/feature-importance', (req, res) => {
+    try {
+        const latestModel = getLatestMLModel();
+        if (latestModel && latestModel.feature_importance_json) {
+            res.json(JSON.parse(latestModel.feature_importance_json));
+        } else {
+            res.json({ error: 'No model trained yet' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Smart Money / Whale Detection Routes
+app.get('/api/smart-money/:ticker', async (req, res) => {
+    try {
+        const { ticker } = req.params;
+        if (smartMoneyService) {
+            const signal = await smartMoneyService.getSmartMoneySignal(ticker);
+            return res.json(signal);
+        }
+        res.json({ signal: 'NEUTRAL', confidence: 0, summary: 'Smart money service not available' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// NLP Sentiment Analysis Route
+app.post('/api/nlp/analyze', (req, res) => {
+    try {
+        const { text, texts } = req.body;
+        if (!localNLPService) return res.json({ error: 'NLP service not available' });
+        if (texts && Array.isArray(texts)) {
+            res.json(localNLPService.analyzeMultiple(texts));
+        } else if (text) {
+            res.json(localNLPService.analyzeSentiment(text));
+        } else {
+            res.status(400).json({ error: 'Provide text or texts field' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Adaptive Thresholds Routes
+app.get('/api/adaptive-thresholds', (req, res) => {
+    try {
+        if (adaptiveThresholdsService) {
+            res.json(adaptiveThresholdsService.getThresholdsWithDefaults());
+        } else {
+            res.json({ error: 'Adaptive thresholds not available' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/adaptive-thresholds/reset', (req, res) => {
+    try {
+        if (adaptiveThresholdsService) {
+            adaptiveThresholdsService.resetToDefaults();
+            res.json({ success: true, message: 'Thresholds reset to defaults' });
+        } else {
+            res.json({ error: 'Adaptive thresholds not available' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Self-Teaching Status Route
+app.get('/api/self-teaching/status', (req, res) => {
+    try {
+        if (selfTeachingLoop) {
+            res.json(selfTeachingLoop.getPerformanceReport());
+        } else {
+            res.json({ isRunning: false, error: 'Self-teaching not available' });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Order Book Signal Route (Batch 2, Feature 2)
+app.get('/api/orderbook-signal/:ticker', (req, res) => {
+    try {
+        const signal = getOrderBookSignal(req.params.ticker);
+        res.json(signal);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Correlation Matrix Route (Batch 2, Feature 5)
+app.get('/api/correlation-matrix', (req, res) => {
+    try {
+        const timeframe = req.query.timeframe || '5m';
+        const lookback = parseInt(req.query.lookback) || 30;
+        const tickers = availableTickers.slice(0, 10); // Top 10 tickers
+        const result = getCorrelationMatrix(tickers, timeframe, lookback * 60);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Trade Journal Routes (Batch 2, Feature 7)
+app.get('/api/journal', (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 50;
+        const entries = getJournalEntries(limit);
+        res.json({ entries });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/journal/generate', (req, res) => {
+    try {
+        const entry = forceGenerateJournal();
+        res.json(entry);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Telegram Routes (Batch 3, Feature 9)
+app.post('/api/telegram/test', async (req, res) => {
+    try {
+        const result = await sendTestMessage();
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/telegram/status', (req, res) => {
+    res.json(telegramStatus());
+});
+
+// Config Routes (Batch 3, Feature 11)
+app.get('/api/config', (req, res) => {
+    try {
+        const raw = getSetting('trading_config');
+        res.json(raw ? JSON.parse(raw) : {});
+    } catch (e) {
+        res.json({});
+    }
+});
+
+app.post('/api/config', (req, res) => {
+    try {
+        setSetting('trading_config', JSON.stringify(req.body));
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Session & Health Routes (Batch 5)
+app.get('/api/health', (req, res) => {
+    const uptime = process.uptime();
+    res.json({
+        status: 'ok',
+        uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`,
+        uptimeSeconds: uptime,
+        memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        botActive: botState.isActive,
+        positions: Object.keys(portfolio.positions).length,
+    });
+});
+
+app.get('/api/session/status', (req, res) => {
+    res.json(getSessionStatus(portfolio, botState));
+});
+
+app.post('/api/session/pause', (req, res) => {
+    if (botState.isActive) {
+        botState.isActive = false;
+        if (botInterval) { clearInterval(botInterval); botInterval = null; }
+        addLog('[SESSION] Bot paused via API', 'WARN');
+        saveFullState({
+            portfolio, botState,
+            cbExportState, awExportState, beastExportState, pmExportState,
+            availableTickers,
+        });
+    }
+    res.json({ success: true, botActive: false });
+});
+
+app.post('/api/session/resume', (req, res) => {
+    if (!botState.isActive) {
+        botState.isActive = true;
+        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
+        addLog('[SESSION] Bot resumed via API', 'INFO');
+    }
+    res.json({ success: true, botActive: true });
+});
+
+// Backtest Routes (Batch 4, Feature 1)
+app.post('/api/backtest/run', (req, res) => {
+    try {
+        const result = runBacktest(req.body);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/backtest/available', (req, res) => {
+    try {
+        const data = getAvailableBacktestData();
+        res.json({ data });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/backtest/sweep', (req, res) => {
+    try {
+        const result = runParameterSweep(req.body);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/backtest/walk-forward', (req, res) => {
+    try {
+        const result = runWalkForward(req.body);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Funding Rate Signal Route (Batch 1, Feature 8)
+app.get('/api/funding-rate/:ticker', (req, res) => {
+    try {
+        const signal = getFundingRateSignal(req.params.ticker);
+        res.json(signal);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+app.use((err, req, res, next) => {
+    res.status(500).json({ message: err.message });
+});
+
+const startServer = async () => {
+    initializeDatabase();
+    initJournalTable();
+    initTelegram();
+
+    // Restore previous session state before anything else
+    const restoredState = restoreFullState();
+    if (restoredState) {
+        if (restoredState.portfolio) {
+            portfolio.cash = restoredState.portfolio.cash ?? portfolio.cash;
+            portfolio.initialBudget = restoredState.portfolio.initialBudget ?? portfolio.initialBudget;
+            portfolio.positions = restoredState.portfolio.positions ?? {};
+            portfolio.holdings = restoredState.portfolio.holdings ?? {};
+        }
+        if (restoredState.circuitBreaker) try { cbImportState(restoredState.circuitBreaker); } catch(e) {}
+        if (restoredState.adaptiveWeights) try { awImportState(restoredState.adaptiveWeights); } catch(e) {}
+        if (restoredState.beastMode) try { beastImportState(restoredState.beastMode); } catch(e) {}
+        if (restoredState.profitMethods) try { pmImportState(restoredState.profitMethods); } catch(e) {}
+        if (restoredState.botState?.sessionId) botState.sessionId = restoredState.botState.sessionId;
+        if (restoredState.botState?.settings) botState.settings = { ...botState.settings, ...restoredState.botState.settings };
+        console.log(`[Server] Session restored: $${portfolio.cash?.toFixed(2)} cash, ${Object.keys(portfolio.positions).length} positions`);
+    }
+
+    await logPublicIp();
+    await updateAvailableTickers();
+    if (process.env.GEMINI_API_KEY) setGeminiKey(process.env.GEMINI_API_KEY);
+    restoreAILearning();
+    
+    // Create HTTP server and attach WebSocket relay for frontend clients
+    const server = http.createServer(app);
+    const wss = new WebSocketServer({ server, path: '/ws/market' });
+    const frontendClients = new Set();
+
+    wss.on('connection', (clientWs) => {
+        frontendClients.add(clientWs);
+        clientWs.on('close', () => frontendClients.delete(clientWs));
+        clientWs.on('error', () => frontendClients.delete(clientWs));
+        // Send initial status
+        clientWs.send(JSON.stringify({ type: 'connected', tickers: availableTickers }));
+    });
+
+    // Broadcast function for relaying Crypto.com data to all frontend clients
+    function broadcastToFrontend(data) {
+        const msg = typeof data === 'string' ? data : JSON.stringify(data);
+        for (const client of frontendClients) {
+            if (client.readyState === 1) { // WebSocket.OPEN
+                client.send(msg);
+            }
+        }
+    }
+
+    initWebSocket(availableTickers, {
+        onConnect: () => console.log('WS Connected'),
+        onCandle: (ticker, candles) => {
+            if (candles && candles.length > 0) {
+                const latest = candles[candles.length - 1];
+                broadcastToFrontend({
+                    method: 'subscribe',
+                    result: {
+                        channel: `candlestick.1m.${ticker.replace(/USD$/, '_USD')}`,
+                        instrument_name: ticker.replace(/USD$/, '_USD'),
+                        data: [latest]
+                    }
+                });
+            }
+        },
+        onTrade: (ticker, trade) => {
+            broadcastToFrontend({
+                method: 'subscribe',
+                result: {
+                    channel: `trade.${ticker.replace(/USD$/, '_USD')}`,
+                    instrument_name: ticker.replace(/USD$/, '_USD'),
+                    data: [trade]
+                }
+            });
+        }
+    });
+
+    setInterval(updateAvailableTickers, CONFIG.TICKER_REFRESH_MS);
+
+    // Start multi-exchange data collection
+    if (multiExchangeService) {
+        try {
+            multiExchangeService.startDataCollection('BTCUSD');
+            console.log('[Server] Multi-exchange data collection started');
+        } catch (e) {
+            console.warn('[Server] Failed to start multi-exchange collection:', e.message);
+        }
+    }
+
+    // Initialize ML prediction engine
+    if (mlPredictionService) {
+        try {
+            await mlPredictionService.initializeML();
+            console.log('[Server] ML prediction engine initialized');
+        } catch (e) {
+            console.warn('[Server] ML init failed (will retry on data):', e.message);
+        }
+    }
+
+    // Initialize adaptive thresholds
+    if (adaptiveThresholdsService) {
+        try {
+            adaptiveThresholdsService.initializeThresholds();
+            console.log('[Server] Adaptive thresholds initialized');
+        } catch (e) {
+            console.warn('[Server] Adaptive thresholds init failed:', e.message);
+        }
+    }
+
+    // Start self-teaching loop
+    if (selfTeachingLoop) {
+        try {
+            selfTeachingLoop.startSelfTeaching();
+            console.log('[Server] Self-teaching loop started');
+        } catch (e) {
+            console.warn('[Server] Self-teaching start failed:', e.message);
+        }
+    }
+
+    // Schedule DB cleanup weekly
+    setInterval(() => {
+        try { cleanupOldData(30); } catch (e) { console.warn('[DB Cleanup] Error:', e.message); }
+    }, 7 * 24 * 60 * 60 * 1000);
+
+    const scanner = new SignalScanner(
+        async (ticker, timeframe) => await getMarketData(ticker, timeframe, 100),
+        addLog,
+        injectSignal
+    );
+    scanner.start();
+
+    // Auto-start bot if it was active in previous session
+    if (restoredState?.wasActive && botState.sessionId) {
+        botState.isActive = true;
+        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
+        console.log('[Server] Bot auto-resumed from previous session');
+        addLog('[SESSION] Bot auto-resumed after restart', 'INFO');
+    }
+
+    // Start auto-save (every 60 seconds)
+    startAutoSave({
+        get portfolio() { return portfolio; },
+        get botState() { return botState; },
+        cbExportState, awExportState, beastExportState, pmExportState,
+        get availableTickers() { return availableTickers; },
+    }, 60000);
+
+    server.listen(CONFIG.PORT, () => {
+        console.log(`Server running on port ${CONFIG.PORT} (HTTP + WebSocket relay)`);
+    });
+};
+
+function gracefulShutdown(signal) {
+    console.log(`[Server] ${signal} received, saving state...`);
+    try {
+        stopAutoSave();
+        saveFullState({
+            portfolio, botState,
+            cbExportState, awExportState, beastExportState, pmExportState,
+            availableTickers,
+        });
+        console.log('[Server] State saved successfully');
+    } catch (e) {
+        console.error('[Server] State save failed:', e.message);
+    }
+    closeWebSocket();
+    closeDatabase();
+    process.exit(0);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+startServer();
