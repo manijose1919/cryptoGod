@@ -1,4 +1,4 @@
-import type { Candle, TrendDashboardData, SRLevels, DivergenceData, MomentumData, VolumeProfileData, SignalScore, IndicatorData, AdaptiveData, HeatMapEntry, CorrelationData, MultiAssetAnalysis, MarketRegime, GapData, OpportunityScore, DynamicTradingParams, SessionAnalytics, TradingStrategy } from '../types';
+import type { Candle, TrendDashboardData, SRLevels, DivergenceData, MomentumData, VolumeProfileData, SignalScore, IndicatorData, AdaptiveData, HeatMapEntry, CorrelationData, MultiAssetAnalysis, MarketRegime, GapData, OpportunityScore, DynamicTradingParams, SessionAnalytics, TradingStrategy, SlowMarketResult } from '../types';
 import { INDICATOR_PARAMS, SIGNAL_THRESHOLDS, ADAPTIVE_ASSET_PARAMS, PROBABILITY_THRESHOLDS } from '../constants';
 
 // ============================================
@@ -1304,6 +1304,50 @@ export function calculateATR(candles: Candle[], period: number = 14): number[] {
  * Detect Market Regime - trending vs ranging, volatility level
  * This helps the bot adapt its strategy to current conditions
  */
+/**
+ * Detect slow/ranging market conditions
+ * Returns true when most recent candles show minimal price movement
+ */
+export function detectSlowMarket(candles: Candle[]): SlowMarketResult {
+    const defaultResult: SlowMarketResult = { isSlow: false, avgRange: 0, consecutiveSmallCandles: 0 };
+    if (candles.length < 10) return defaultResult;
+
+    const recent = candles.slice(-10);
+    let smallCount = 0;
+    let totalRange = 0;
+
+    for (const c of recent) {
+        const range = ((c.high - c.low) / c.low) * 100;
+        totalRange += range;
+        if (range < 0.10) smallCount++;
+    }
+
+    const avgRange = totalRange / recent.length;
+
+    // Also check 20-candle ATR as % of price
+    let atrSlow = false;
+    if (candles.length >= 20) {
+        let atrSum = 0;
+        for (let i = candles.length - 20; i < candles.length; i++) {
+            const prev = candles[i - 1] || candles[i];
+            const tr = Math.max(
+                candles[i].high - candles[i].low,
+                Math.abs(candles[i].high - prev.close),
+                Math.abs(candles[i].low - prev.close)
+            );
+            atrSum += tr;
+        }
+        const atr = atrSum / 20;
+        const lastPrice = candles[candles.length - 1].close;
+        const atrPercent = (atr / lastPrice) * 100;
+        atrSlow = atrPercent < 0.15;
+    }
+
+    const isSlow = smallCount >= 7 || (smallCount >= 5 && atrSlow);
+
+    return { isSlow, avgRange, consecutiveSmallCandles: smallCount };
+}
+
 export function detectMarketRegime(candles: Candle[]): MarketRegime {
     const defaultRegime: MarketRegime = {
         trend: 'SIDEWAYS',

@@ -140,10 +140,10 @@ def restore_full_state(trader) -> dict:
         trader._adaptive_conf_threshold = state.get("adaptive_conf_threshold", 40)
         trader._conf_threshold_history = state.get("conf_threshold_history", [])
 
-        # Auto-resume if was active
+        # Restore was_active flag for info, but do NOT auto-resume
+        # User must click "Start Simulation" in the UI to begin trading
         was_active = state.get("was_active", False)
-        if was_active:
-            trader.paused = False
+        # trader.paused stays True — requires manual start via UI
 
         summary = {
             "restored": True,

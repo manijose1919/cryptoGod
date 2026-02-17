@@ -54,8 +54,8 @@ FEATURE_NAMES = [
 
 # Training configuration
 MAX_TRAINING_BUFFER = 3000
-RETRAIN_EVERY_N = 200
-MIN_SAMPLES_TO_TRAIN = 80
+RETRAIN_EVERY_N = 25          # Was 200 — retrain more often while learning
+MIN_SAMPLES_TO_TRAIN = 15     # Was 80 — start training with less data
 BPTT_EPOCHS = 5
 BPTT_LEARNING_RATE = 0.005
 GRADIENT_CLIP = 5.0
@@ -793,19 +793,22 @@ class LSTMPredictor:
                 logger.warning(f"SGDClassifier training failed: {e}")
 
             # ---------------------------------------------------------------
-            # Evaluate accuracy
+            # Evaluate accuracy (on held-out 20% validation split)
             # ---------------------------------------------------------------
+            val_split = max(1, n_samples // 5)  # 20% validation
+            val_states = hidden_states[-val_split:]
+            val_labels = all_labels[-val_split:]
             correct = 0
-            for i in range(n_samples):
-                h_2d = hidden_states[i].reshape(1, -1)
+            for i in range(len(val_states)):
+                h_2d = val_states[i].reshape(1, -1)
                 try:
                     pred = self.classifier.predict(h_2d)[0]
-                    if pred == all_labels[i]:
+                    if pred == val_labels[i]:
                         correct += 1
                 except Exception:
                     pass
 
-            accuracy = (correct / n_samples * 100) if n_samples > 0 else 0.0
+            accuracy = (correct / len(val_states) * 100) if len(val_states) > 0 else 0.0
             self._accuracy_history.append(accuracy)
             if len(self._accuracy_history) > 50:
                 self._accuracy_history = self._accuracy_history[-50:]

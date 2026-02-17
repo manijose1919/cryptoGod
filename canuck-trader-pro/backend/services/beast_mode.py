@@ -137,11 +137,11 @@ def get_market_regime(candles: list[dict], ticker: str = "") -> str:
 
 def get_strategy_pool(regime: str) -> list[str]:
     pools = {
-        "UPTREND": ["TREND", "BREAKOUT", "WHALE", "MOMENTUM", "SWING", "ADAPTIVE"],
-        "SIDEWAYS": ["GRID", "PAIR_LONG", "ARB", "MM", "DCA", "CONFLUENCE", "DIVERGENCE"],
-        "DOWNTREND": ["DCA", "GRID", "DIVERGENCE", "ADAPTIVE"],
+        "UPTREND": ["TREND", "MOMENTUM", "SWING", "ADAPTIVE"],
+        "SIDEWAYS": ["GRID", "PAIR_LONG", "ARB", "MM", "DCA"],
+        "DOWNTREND": ["DCA", "GRID", "ADAPTIVE"],
     }
-    return pools.get(regime, ["TREND", "BREAKOUT", "WHALE", "CONFLUENCE", "MOMENTUM", "DIVERGENCE", "ADAPTIVE"])
+    return pools.get(regime, ["TREND", "MOMENTUM", "ADAPTIVE"])
 
 
 def is_strategy_allowed_for_regime(strategy: str, regime: str) -> bool:
@@ -219,18 +219,18 @@ def get_compound_multiplier() -> dict:
 
 def get_dynamic_targets(candles: list[dict]) -> dict:
     if len(candles) < 10:
-        return {"take_profit_pct": 0.8, "stop_loss_pct": 0.5, "regime": "NORMAL"}
+        return {"take_profit_pct": 1.5, "stop_loss_pct": 0.6, "regime": "NORMAL"}
 
     atr = _calc_atr(candles, 14)
     price = candles[-1]["c"]
     atr_pct = (atr / price) * 100 if price else 0
 
     if atr_pct > 1.5:
-        return {"take_profit_pct": 2.0, "stop_loss_pct": 1.5, "regime": "HIGH_VOL"}
+        return {"take_profit_pct": 3.0, "stop_loss_pct": 1.2, "regime": "HIGH_VOL"}    # 2.5:1 R:R
     elif atr_pct > 0.5:
-        return {"take_profit_pct": 1.2, "stop_loss_pct": 1.0, "regime": "NORMAL"}
+        return {"take_profit_pct": 2.0, "stop_loss_pct": 0.8, "regime": "NORMAL"}      # 2.5:1 R:R
     else:
-        return {"take_profit_pct": 0.75, "stop_loss_pct": 1.0, "regime": "LOW_VOL"}
+        return {"take_profit_pct": 1.5, "stop_loss_pct": 0.6, "regime": "LOW_VOL"}     # 2.5:1 R:R
 
 
 def check_dynamic_exit(position: dict, current_price: float, candles: list[dict]) -> dict:

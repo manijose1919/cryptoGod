@@ -22,6 +22,15 @@ export interface Position {
   entryTime: number;
   highestPrice: number; // For trailing stop
   lowestPrice: number;  // For tracking
+  exitStage: number;        // 0=no exits, 1=first partial, 2=second partial, 3=fully exited
+  originalQuantity: number; // Tracks initial size for partial exit % calculations
+}
+
+// Slow Market Detection Result
+export interface SlowMarketResult {
+  isSlow: boolean;
+  avgRange: number;
+  consecutiveSmallCandles: number;
 }
 
 export interface CryptoHolding {

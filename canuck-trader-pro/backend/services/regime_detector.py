@@ -35,13 +35,13 @@ REGIMES = ["TRENDING_UP", "TRENDING_DOWN", "RANGING", "VOLATILE"]
 REGIME_STRATEGIES = {
     "TRENDING_UP": {
         "enabled": ["EMA_CROSSOVER", "TRIPLE_EMA", "MACD", "ADX_TREND", "SUPERTREND",
-                     "MOMENTUM_ROC", "ICHIMOKU", "MULTI_CONSENSUS"],
+                     "MOMENTUM_ROC", "ICHIMOKU", "VWAP"],
         "position_mult": 1.2,
         "confidence_bonus": 5,
     },
     "TRENDING_DOWN": {
         "enabled": ["RSI", "STOCH_RSI", "WILLIAMS_R", "CCI", "MEAN_REVERT",
-                     "RSI_DIVERGENCE", "MACD_DIVERGENCE", "BOLLINGER"],
+                     "BOLLINGER", "ENGULFING"],
         "position_mult": 0.8,
         "confidence_bonus": 0,
     },
@@ -52,7 +52,7 @@ REGIME_STRATEGIES = {
         "confidence_bonus": 0,
     },
     "VOLATILE": {
-        "enabled": ["ATR_BREAKOUT", "VOL_SQUEEZE", "VOL_SPIKE",
+        "enabled": ["VOL_SQUEEZE", "VOL_SPIKE",
                      "DONCHIAN", "KELTNER", "ENGULFING"],
         "position_mult": 0.5,
         "confidence_bonus": -5,

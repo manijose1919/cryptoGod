@@ -274,11 +274,79 @@ async def portfolio_risk():
 
 @router.get("/api/journal")
 async def get_journal():
-    """Get recent trade journal entries."""
+    """Get recent trade journal entries with real stats from trade_memory."""
+    journal = get_trade_journal()
+    stats = journal.get_trade_stats()
+
+    # If journal table is empty, compute stats from trade_memory (the real trade log)
+    if stats.get("overall", {}).get("total_trades", 0) == 0:
+        try:
+            from services.database_service import get_db
+            db = get_db()
+            rows = db.execute(
+                "SELECT pnl_percent, outcome, hold_duration, strategy, ticker "
+                "FROM trade_memory WHERE outcome IS NOT NULL AND hold_duration >= 1.0 "
+                "ORDER BY created_at DESC LIMIT 2000"
+            ).fetchall()
+            if rows:
+                trades = [{"pnl_percent": r[0], "outcome": r[1], "hold_min": r[2],
+                           "strategy": r[3], "ticker": r[4]} for r in rows]
+                wins = [t for t in trades if t["outcome"] == "WIN"]
+                losses = [t for t in trades if t["outcome"] == "LOSS"]
+                win_pcts = [t["pnl_percent"] for t in wins]
+                loss_pcts = [abs(t["pnl_percent"]) for t in losses]
+                total = len(trades)
+                win_rate = len(wins) / total * 100 if total else 0
+
+                # Per-strategy breakdown
+                strat_map = {}
+                for t in trades:
+                    s = t["strategy"]
+                    if s not in strat_map:
+                        strat_map[s] = {"trades": 0, "wins": 0, "pnl_sum": 0}
+                    strat_map[s]["trades"] += 1
+                    strat_map[s]["pnl_sum"] += t["pnl_percent"]
+                    if t["outcome"] == "WIN":
+                        strat_map[s]["wins"] += 1
+                per_strategy = {
+                    s: {"trades": v["trades"],
+                        "win_rate": round(v["wins"] / v["trades"] * 100, 1) if v["trades"] else 0,
+                        "total_pnl_pct": round(v["pnl_sum"], 3)}
+                    for s, v in strat_map.items()
+                }
+
+                gross_win = sum(win_pcts) if win_pcts else 0
+                gross_loss = sum(loss_pcts) if loss_pcts else 0
+
+                stats = {
+                    "overall": {
+                        "total_trades": total,
+                        "wins": len(wins),
+                        "losses": len(losses),
+                        "breakeven": total - len(wins) - len(losses),
+                        "win_rate": round(win_rate, 1),
+                        "total_pnl_pct": round(sum(t["pnl_percent"] for t in trades), 3),
+                        "avg_pnl_pct": round(sum(t["pnl_percent"] for t in trades) / total, 4) if total else 0,
+                        "avg_win_pct": round(sum(win_pcts) / len(win_pcts), 4) if win_pcts else 0,
+                        "avg_loss_pct": round(sum(loss_pcts) / len(loss_pcts), 4) if loss_pcts else 0,
+                        "largest_win_pct": round(max(win_pcts), 4) if win_pcts else 0,
+                        "largest_loss_pct": round(max(loss_pcts), 4) if loss_pcts else 0,
+                        "profit_factor": round(gross_win / gross_loss, 3) if gross_loss > 0 else 0,
+                        "avg_hold_min": round(sum(t["hold_min"] for t in trades) / total, 1) if total else 0,
+                    },
+                    "per_strategy": per_strategy,
+                    "per_asset": {},
+                    "streaks": {"longest_win": 0, "longest_loss": 0, "current_streak": 0, "current_type": "NONE"},
+                    "risk_adjusted": {"sharpe": 0, "sortino": 0, "calmar": 0},
+                    "source": "trade_memory",
+                }
+        except Exception:
+            pass
+
     return {
-        "entries": get_trade_journal().get_recent_entries(20),
-        "stats": get_trade_journal().get_trade_stats(),
-        "recommendations": get_trade_journal().get_recommendations(),
+        "entries": journal.get_recent_entries(20),
+        "stats": stats,
+        "recommendations": journal.get_recommendations(),
     }
 
 
@@ -335,27 +403,63 @@ async def feature_importance():
 @router.get("/api/ml/status")
 async def ml_status():
     """Get ML status in format expected by MLDashboard frontend component."""
+    from services.database_service import get_db
+
     trader = get_trader()
     has_model = False
     latest_model = None
     model_history = []
     prediction_accuracy = {"total": 0, "correct": None, "avg_confidence": None, "accuracy_pct": None}
 
+    # ── Real trade win rate from DB (this is what matters) ──
+    # Bot writes completed trades to trade_memory (not trades table)
+    # Only count trades held >= 1 minute to exclude garbage micro-trades
+    real_win_rate = 0.0
+    total_trades = 0
+    total_wins = 0
+    total_losses = 0
+    total_breakeven = 0
+    avg_pnl = 0.0
+    try:
+        db = get_db()
+        row = db.execute(
+            "SELECT COUNT(*) as total, "
+            "SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) as wins, "
+            "SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) as losses, "
+            "SUM(CASE WHEN outcome='BREAKEVEN' THEN 1 ELSE 0 END) as breakeven, "
+            "AVG(pnl_percent) as avg_pnl "
+            "FROM trade_memory WHERE outcome IS NOT NULL AND hold_duration >= 1.0"
+        ).fetchone()
+        total_trades = row["total"] or 0
+        total_wins = row["wins"] or 0
+        total_losses = row["losses"] or 0
+        total_breakeven = row["breakeven"] or 0
+        avg_pnl = round(row["avg_pnl"] or 0, 4)
+        if total_trades > 0:
+            real_win_rate = round(total_wins / total_trades * 100, 1)
+    except Exception:
+        pass
+
+    # ── ML model info (separate from trade performance) ──
+    ml_model_accuracy = 0.0
     try:
         transformer = get_transformer_model()
         t_status = transformer.get_status()
         if t_status.get("trained"):
             has_model = True
+            ml_model_accuracy = t_status.get("accuracy", 0) or 0
             latest_model = {
                 "id": 1,
                 "modelType": "Transformer-Lite + LSTM + Online",
-                "accuracy": t_status.get("accuracy", 0) or 0,
-                "sampleCount": t_status.get("training_samples", 0),
+                "accuracy": real_win_rate,  # Show REAL win rate, not ML training accuracy
+                "mlModelAccuracy": round(ml_model_accuracy, 1),  # Keep ML accuracy separate
+                "sampleCount": total_trades,  # Real trade count
                 "trainedAt": int(time.time() * 1000),
             }
     except Exception:
         pass
 
+    # ── Prediction accuracy from online learner ──
     try:
         ol = get_online_learner()
         ol_status = ol.get_status()
@@ -376,6 +480,15 @@ async def ml_status():
         "latestModel": latest_model,
         "predictionAccuracy": prediction_accuracy,
         "modelHistory": model_history,
+        # ── Real trade performance (new fields) ──
+        "tradePerformance": {
+            "winRate": real_win_rate,
+            "totalTrades": total_trades,
+            "wins": total_wins,
+            "losses": total_losses,
+            "breakeven": total_breakeven,
+            "avgPnlPercent": avg_pnl,
+        },
     }
 
 

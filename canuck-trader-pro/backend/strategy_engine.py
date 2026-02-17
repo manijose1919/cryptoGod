@@ -508,14 +508,14 @@ ALL_STRATEGIES = [
     ema_crossover, triple_ema, macd_signal, adx_trend, supertrend,
     # Momentum (6-10)
     rsi_strategy, stochastic_rsi, williams_r, cci_strategy, momentum_rate,
-    # Volatility (11-15)
-    bollinger_bands, keltner_channel, atr_breakout, donchian_channel, volatility_squeeze,
-    # Volume (16-18)
+    # Volatility (11-14) — atr_breakout removed (BREAKOUT: 11% win rate)
+    bollinger_bands, keltner_channel, donchian_channel, volatility_squeeze,
+    # Volume (15-17)
     vwap_strategy, obv_strategy, volume_spike,
-    # Pattern (19-22)
+    # Pattern (18-21)
     mean_reversion, ichimoku_cloud, pivot_points, engulfing_pattern,
-    # Divergence (23-25)
-    rsi_divergence, macd_divergence, multi_timeframe_consensus,
+    # REMOVED: rsi_divergence, macd_divergence (DIVERGENCE: 16.7% win rate, -$7.5 PnL)
+    # REMOVED: multi_timeframe_consensus (CONFLUENCE: 5.6% win rate, -$40 PnL)
 ]
 
 
@@ -573,7 +573,7 @@ class StrategyEngine:
             results.append(result)
         return results
 
-    def get_consensus(self, signals: List[dict], min_confidence: int = 40) -> dict:
+    def get_consensus(self, signals: List[dict], min_confidence: int = 50) -> dict:
         """Aggregate strategy signals into a consensus.
 
         Returns: {

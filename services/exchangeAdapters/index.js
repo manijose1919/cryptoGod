@@ -1,0 +1,54 @@
+/**
+ * Exchange Adapter Factory
+ * Returns the correct adapter based on exchange ID.
+ * Runtime switchable via setActiveExchange().
+ */
+import { cryptoComAdapter, setSessionManager } from './cryptocomAdapter.js';
+import { krakenAdapter } from './krakenAdapter.js';
+
+const adapters = {
+    'crypto.com': cryptoComAdapter,
+    'kraken': krakenAdapter,
+};
+
+let activeExchangeId = process.env.TRADING_EXCHANGE || 'crypto.com';
+
+/** Get adapter by exchange ID (or active adapter if no ID given) */
+export function getExchangeAdapter(exchangeId) {
+    const id = exchangeId || activeExchangeId;
+    const adapter = adapters[id];
+    if (!adapter) {
+        throw new Error(`Unknown exchange: ${id}. Available: ${Object.keys(adapters).join(', ')}`);
+    }
+    return adapter;
+}
+
+/** Switch the active exchange at runtime */
+export function setActiveExchange(exchangeId) {
+    if (!adapters[exchangeId]) {
+        throw new Error(`Unknown exchange: ${exchangeId}. Available: ${Object.keys(adapters).join(', ')}`);
+    }
+    activeExchangeId = exchangeId;
+    console.log(`[Exchange] Switched to ${exchangeId}`);
+    return activeExchangeId;
+}
+
+/** Get the currently active exchange ID */
+export function getActiveExchangeId() {
+    return activeExchangeId;
+}
+
+/** List all available exchanges with status info */
+export function listExchanges() {
+    return Object.entries(adapters).map(([id, adapter]) => ({
+        id,
+        name: adapter.getName(),
+        feePercent: adapter.getFeePercent() * 100,
+        isActive: id === activeExchangeId,
+        hasCredentials: id === 'crypto.com'
+            ? !!(process.env.SESSION_API_KEY || process.env.CRYPTO_COM_API_KEY)
+            : !!(process.env.KRAKEN_API_KEY),
+    }));
+}
+
+export { setSessionManager };

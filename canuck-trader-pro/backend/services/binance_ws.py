@@ -115,19 +115,19 @@ class BinanceWebSocket:
     async def _connect_with_retry(self):
         """Connect with exponential backoff retry."""
         backoff = 5
-        max_backoff = 60
+        max_backoff = 300  # 5 minutes max (was 60s, reduces log spam when geoblocked)
 
         while self._running:
             try:
                 await self._stream()
+                backoff = 5  # Reset only on successful stream (not on every failure)
             except Exception as e:
                 self._reconnect_count += 1
-                logger.warning(f"WebSocket disconnected ({e}), reconnecting in {backoff}s...")
+                # Only log every 10th retry to avoid spam when geoblocked
+                if self._reconnect_count <= 3 or self._reconnect_count % 10 == 0:
+                    logger.warning(f"WebSocket disconnected ({e}), retry #{self._reconnect_count}, next in {backoff}s...")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
-
-            if self._running:
-                backoff = 5  # Reset on successful reconnect
 
     async def _stream(self):
         """Main streaming loop — subscribes to combined stream."""

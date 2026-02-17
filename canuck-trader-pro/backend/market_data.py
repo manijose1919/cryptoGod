@@ -27,14 +27,30 @@ class MarketData:
 
     def __init__(self):
         exchange_config = {"enableRateLimit": True}
-        if config.CRYPTO_COM_API_KEY:
-            exchange_config["apiKey"] = config.CRYPTO_COM_API_KEY
-            exchange_config["secret"] = config.CRYPTO_COM_SECRET
-        self.exchange = ccxt.cryptocom(exchange_config)
+
+        # Select exchange based on config
+        exchange_id = getattr(config, "EXCHANGE_ID", "cryptocom")
+        if exchange_id == "kraken":
+            if config.KRAKEN_API_KEY:
+                exchange_config["apiKey"] = config.KRAKEN_API_KEY
+                exchange_config["secret"] = config.KRAKEN_SECRET
+            exchange_cls = ccxt.kraken
+        else:
+            if config.CRYPTO_COM_API_KEY:
+                exchange_config["apiKey"] = config.CRYPTO_COM_API_KEY
+                exchange_config["secret"] = config.CRYPTO_COM_SECRET
+            exchange_cls = ccxt.cryptocom
+
+        self.exchange = exchange_cls(exchange_config)
+        logger.info(f"MarketData initialized with exchange: {exchange_id}")
 
         # Cache: { "BTC/USD:5m": (timestamp, DataFrame) }
         self._cache: Dict[str, tuple] = {}
-        self._cache_ttl = 5  # seconds
+        self._cache_ttl = 30  # seconds (candles don't change faster than 1 min)
+
+        # Ticker cache: { "BTC/USD": (timestamp, ticker_dict) }
+        self._ticker_cache: Dict[str, tuple] = {}
+        self._ticker_cache_ttl = 10  # seconds
 
     def fetch_ohlcv(
         self,
@@ -56,6 +72,9 @@ class MarketData:
             raw = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             if not raw:
                 logger.warning(f"No data returned for {symbol} {timeframe}")
+                # Return stale cache if available
+                if cache_key in self._cache:
+                    return self._cache[cache_key][1]
                 return None
 
             df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -71,20 +90,56 @@ class MarketData:
 
             return df
 
+        except (ccxt.RateLimitExceeded, ccxt.DDoSProtection) as e:
+            logger.warning(f"Rate limited on {symbol} {timeframe}: {e}")
+            # Return stale cache — better than crashing
+            if cache_key in self._cache:
+                logger.info(f"Returning stale cache for {symbol} {timeframe}")
+                return self._cache[cache_key][1]
+            # Wait and retry once
+            time.sleep(2)
+            try:
+                raw = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                if raw:
+                    df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                    df = df.astype({"open": float, "high": float, "low": float, "close": float, "volume": float})
+                    self._cache[cache_key] = (time.time(), df)
+                    return df
+            except Exception:
+                pass
+            return None
         except ccxt.NetworkError as e:
             logger.error(f"Network error fetching {symbol}: {e}")
+            if cache_key in self._cache:
+                return self._cache[cache_key][1]
         except ccxt.ExchangeError as e:
             logger.error(f"Exchange error fetching {symbol}: {e}")
+            if cache_key in self._cache:
+                return self._cache[cache_key][1]
         except Exception as e:
             logger.error(f"Unexpected error fetching {symbol}: {e}")
+            if cache_key in self._cache:
+                return self._cache[cache_key][1]
         return None
 
     def fetch_ticker(self, symbol: str) -> Optional[dict]:
-        """Fetch current ticker (bid, ask, last, volume)."""
+        """Fetch current ticker (bid, ask, last, volume) with caching."""
+        now = time.time()
+        if symbol in self._ticker_cache:
+            cached_time, cached_ticker = self._ticker_cache[symbol]
+            if now - cached_time < self._ticker_cache_ttl:
+                return cached_ticker
         try:
-            return self.exchange.fetch_ticker(symbol)
+            ticker = self.exchange.fetch_ticker(symbol)
+            if ticker:
+                self._ticker_cache[symbol] = (now, ticker)
+            return ticker
         except Exception as e:
             logger.error(f"Error fetching ticker {symbol}: {e}")
+            # Return stale cache if available
+            if symbol in self._ticker_cache:
+                return self._ticker_cache[symbol][1]
             return None
 
     def fetch_all_pairs(self, timeframe: str = config.DEFAULT_TIMEFRAME) -> Dict[str, pd.DataFrame]:

@@ -83,6 +83,9 @@ import { StrategyEngine } from './services/StrategyEngine.js';
 import { GeminiBrain } from './services/GeminiBrain.js';
 import { dataIngestion } from './services/DataIngestionService.js';
 
+// Exchange Adapter System
+import { getExchangeAdapter, setActiveExchange, getActiveExchangeId, listExchanges, setSessionManager as setAdapterSessionManager } from './services/exchangeAdapters/index.js';
+
 // Phase 7: Multi-Exchange Data + ML Services
 import {
     insertExchangeSnapshot, getExchangeSnapshots, getLatestExchangeSnapshot,
@@ -190,6 +193,9 @@ const CONFIG = {
 // ============================================
 const app = express();
 let publicIp = 'not detected';
+
+// Initialize Exchange Adapter with SessionManager
+setAdapterSessionManager(SessionManager);
 
 // Initialize New Services
 const questrade = new QuestradeService();
@@ -873,10 +879,19 @@ const handleSell = async (position, price, reason) => {
 // ============================================
 app.get('/api/market-data', async (req, res, next) => {
     try {
-        const { instrument_name, timeframe } = req.query;
+        const { instrument_name, timeframe, exchange } = req.query;
         if (!instrument_name || !timeframe) {
             return res.status(400).json({ message: 'instrument_name and timeframe are required' });
         }
+
+        // If a specific exchange is requested, use its adapter; otherwise use default
+        if (exchange && exchange !== 'crypto.com') {
+            const adapter = getExchangeAdapter(exchange);
+            const candles = await adapter.getCandles(instrument_name, timeframe, 200);
+            return res.status(200).json({ data: candles });
+        }
+
+        // Default: use existing getMarketData (Crypto.com with SQLite caching)
         const data = await getMarketData(instrument_name, timeframe, 200);
         res.status(200).json({ data });
     } catch (error) {
@@ -886,11 +901,49 @@ app.get('/api/market-data', async (req, res, next) => {
 
 app.get('/api/instruments', async (req, res, next) => {
     try {
+        const { exchange } = req.query;
+
+        if (exchange && exchange !== 'crypto.com') {
+            const adapter = getExchangeAdapter(exchange);
+            const result = await adapter.getInstruments();
+            return res.status(200).json(result);
+        }
+
         const result = await makePublicRequest('public/get-instruments');
         res.status(200).json(result);
     } catch (error) {
         next(error);
     }
+});
+
+// ── Exchange Adapter Routes ──
+app.get('/api/exchange/current', (req, res) => {
+    const adapter = getExchangeAdapter();
+    res.json({
+        exchange: adapter.getName(),
+        feePercent: adapter.getFeePercent() * 100,
+        roundTripFeePercent: adapter.getFeePercent() * 200,
+    });
+});
+
+app.post('/api/exchange/switch', (req, res) => {
+    try {
+        const { exchange } = req.body;
+        if (!exchange) return res.status(400).json({ message: 'exchange is required' });
+        const newId = setActiveExchange(exchange);
+        const adapter = getExchangeAdapter();
+        res.json({
+            exchange: newId,
+            name: adapter.getName(),
+            feePercent: adapter.getFeePercent() * 100,
+        });
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+});
+
+app.get('/api/exchange/list', (req, res) => {
+    res.json(listExchanges());
 });
 
 app.post('/api/test-connection', async (req, res, next) => {

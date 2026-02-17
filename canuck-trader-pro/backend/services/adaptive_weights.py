@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger("adaptive_weights")
 
 STRATEGIES = [
-    "TREND", "BREAKOUT", "WHALE", "CONFLUENCE", "MOMENTUM", "DIVERGENCE", "ADAPTIVE",
+    "TREND", "MOMENTUM", "ADAPTIVE",
     "SWING", "DCA", "GRID", "ARB", "PAIR_LONG", "MM",
 ]
 BASE_WEIGHT = 1.0 / len(STRATEGIES)

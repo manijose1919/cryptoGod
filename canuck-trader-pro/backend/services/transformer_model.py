@@ -46,8 +46,8 @@ NUM_LAYERS = 2             # Number of stacked transformer encoder layers
 OUTPUT_CLASSES = 3          # BUY, SELL, HOLD
 
 MAX_BUFFER_SIZE = 2000     # Maximum training sequences held in memory
-MIN_SAMPLES_TO_TRAIN = 100 # Minimum new samples before retraining
-RETRAIN_THRESHOLD = 100    # New samples needed to trigger auto-retrain
+MIN_SAMPLES_TO_TRAIN = 20  # Was 100 — start training with less data
+RETRAIN_THRESHOLD = 20     # Was 100 — retrain more often while learning
 
 ACTION_MAP = {"BUY": 0, "SELL": 1, "HOLD": 2}
 ACTION_NAMES = {0: "BUY", 1: "SELL", 2: "HOLD"}
@@ -556,9 +556,12 @@ class TransformerTradingModel:
             logger.error(f"MLPClassifier training failed: {e}")
             return
 
-        # 5. Evaluate accuracy
-        predictions = self.classifier.predict(embeddings)
-        accuracy = float(np.mean(predictions == all_labels)) * 100
+        # 5. Evaluate accuracy (on held-out 20% validation split, not training data)
+        val_split = max(1, len(embeddings) // 5)
+        val_embeddings = embeddings[-val_split:]
+        val_labels = all_labels[-val_split:]
+        predictions = self.classifier.predict(val_embeddings)
+        accuracy = float(np.mean(predictions == val_labels)) * 100
         self._training_accuracy = accuracy
 
         self._trained = True
