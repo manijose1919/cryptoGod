@@ -42,7 +42,8 @@ import { SignalScanner } from './services/signalScanner.js';
 import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, exportState as pmExportState, importState as pmImportState } from './services/profitMethods.js';
 
 // Phase 2-5 Services
-import { initWebSocket, mergeCandles, getLatestPrice, isConnected as wsConnected, getWebSocketStatus, closeWebSocket } from './services/websocketService.js';
+// WebSocket services are accessed dynamically via getWebSocketService()
+import * as cryptoComWsService from './services/websocketService.js';
 import { analyzeMultiTimeframe, shouldEnterLong, getMultiTimeframeStatus } from './services/multiTimeframe.js';
 import { recordTradeResult as cbRecordTrade, setDailyBalance, shouldPauseTrading, resetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
 import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategyThrottled, getAdaptiveWeightsStatus, exportState as awExportState, importState as awImportState } from './services/adaptiveWeights.js';
@@ -50,7 +51,7 @@ import { calculateAllIndicators } from './services/advancedIndicators.js';
 import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
 import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment } from './services/socialSentiment.js';
 import { setGeminiKey, getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
-import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, getBeastModeStatus, exportState as beastExportState, importState as beastImportState } from './services/beastMode.js';
+import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee } from './services/beastMode.js';
 
 // Phase 6: New Backend Services (SIM parity)
 import { getMasterSurgeDecision, detectSurge, detectCandlestickPatterns } from './services/surgeTradingBackend.js';
@@ -84,7 +85,7 @@ import { GeminiBrain } from './services/GeminiBrain.js';
 import { dataIngestion } from './services/DataIngestionService.js';
 
 // Exchange Adapter System
-import { getExchangeAdapter, setActiveExchange, getActiveExchangeId, listExchanges, setSessionManager as setAdapterSessionManager } from './services/exchangeAdapters/index.js';
+import { getExchangeAdapter, setActiveExchange, getActiveExchangeId, listExchanges, setSessionManager as setAdapterSessionManager, getWebSocketService } from './services/exchangeAdapters/index.js';
 
 // Phase 7: Multi-Exchange Data + ML Services
 import {
@@ -150,6 +151,86 @@ try {
 
 // Load environment variables from .env file
 import 'dotenv/config';
+
+// ============================================
+// DYNAMIC WEBSOCKET + FEE HELPERS
+// ============================================
+
+/** Get the active WS service (Crypto.com or Kraken) based on current exchange */
+function getActiveWsService() {
+    return getWebSocketService();
+}
+
+/** Proxy functions that delegate to the active WS service */
+function mergeCandles(restCandles, ticker) {
+    return getActiveWsService().mergeCandles(restCandles, ticker);
+}
+function getLatestPrice(ticker) {
+    return getActiveWsService().getLatestPrice(ticker);
+}
+function wsConnected() {
+    return getActiveWsService().isConnected();
+}
+function getWebSocketStatusProxy() {
+    return getActiveWsService().getWebSocketStatus();
+}
+
+/** Get dynamic fees from the active exchange adapter */
+function getActiveFees() {
+    const adapter = getExchangeAdapter();
+    const perSide = adapter.getFeePercent();  // e.g. 0.00075 or 0.0026
+    return { perSide, roundTrip: perSide * 2 };
+}
+
+/** Stored reference to broadcastToFrontend for WS reconnect on exchange switch */
+let _broadcastToFrontend = null;
+
+/** Initialize WebSocket for the active exchange with candle/trade relay to frontend */
+function initExchangeWebSocket(tickers, broadcastFn) {
+    if (broadcastFn) _broadcastToFrontend = broadcastFn;
+    const wsService = getActiveWsService();
+    wsService.initWebSocket(tickers, {
+        onConnect: () => console.log(`[WS] Connected to ${getActiveExchangeId()} market stream`),
+        onCandle: (ticker, candles) => {
+            if (candles && candles.length > 0 && _broadcastToFrontend) {
+                const latest = candles[candles.length - 1];
+                _broadcastToFrontend({
+                    method: 'subscribe',
+                    result: {
+                        channel: `candlestick.1m.${ticker.replace(/USD$/, '_USD')}`,
+                        instrument_name: ticker.replace(/USD$/, '_USD'),
+                        data: [latest]
+                    }
+                });
+            }
+        },
+        onTrade: (ticker, trade) => {
+            if (_broadcastToFrontend) {
+                _broadcastToFrontend({
+                    method: 'subscribe',
+                    result: {
+                        channel: `trade.${ticker.replace(/USD$/, '_USD')}`,
+                        instrument_name: ticker.replace(/USD$/, '_USD'),
+                        data: [trade]
+                    }
+                });
+            }
+        }
+    });
+}
+
+/** Reconnect WebSocket when exchange is switched */
+function reconnectWebSocketForExchange(tickers) {
+    // Close the old WS (try both services to be safe)
+    try { cryptoComWsService.closeWebSocket(); } catch (e) { /* ok */ }
+    try {
+        const krakenWs = getWebSocketService('kraken');
+        krakenWs.closeWebSocket();
+    } catch (e) { /* ok */ }
+
+    // Init the new one
+    initExchangeWebSocket(tickers, _broadcastToFrontend);
+}
 
 // ============================================
 // CONFIGURATION
@@ -826,7 +907,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional) => {
             highestPrice: parseFloat(avgPrice),
             lowestPrice: parseFloat(avgPrice)
         };
-        const buyFee = notional * 0.00075;
+        const buyFee = notional * getActiveFees().perSide;
         portfolio.cash -= (notional + buyFee);
         if (telegramEnabled()) alertTradeExecution({ type: 'BUY', ticker, price: parseFloat(avgPrice), strategy, pnl: null });
         saveSessionState();
@@ -855,7 +936,7 @@ const handleSell = async (position, price, reason) => {
         }, botState.sessionId);
 
         const avgPrice = orderResult.order_info?.avg_price || price;
-        const sellFee = parseFloat(avgPrice) * position.quantity * 0.00075;
+        const sellFee = parseFloat(avgPrice) * position.quantity * getActiveFees().perSide;
         const pnl = (parseFloat(avgPrice) - position.openPrice) * position.quantity - sellFee;
 
         portfolio.cash += (position.quantity * parseFloat(avgPrice)) - sellFee;
@@ -930,12 +1011,25 @@ app.post('/api/exchange/switch', (req, res) => {
     try {
         const { exchange } = req.body;
         if (!exchange) return res.status(400).json({ message: 'exchange is required' });
+        const prevExchange = getActiveExchangeId();
         const newId = setActiveExchange(exchange);
         const adapter = getExchangeAdapter();
+
+        // Update beast mode fee awareness
+        const fees = getActiveFees();
+        beastSetRoundTripFee(fees.roundTrip * 100);
+
+        // Reconnect WebSocket to new exchange if changed
+        if (prevExchange !== newId) {
+            reconnectWebSocketForExchange(availableTickers);
+            addLog(`[Exchange] Switched from ${prevExchange} to ${newId}, WebSocket reconnected`, 'INFO');
+        }
+
         res.json({
             exchange: newId,
             name: adapter.getName(),
             feePercent: adapter.getFeePercent() * 100,
+            roundTripFeePercent: adapter.getFeePercent() * 200,
         });
     } catch (error) {
         res.status(400).json({ message: error.message });
@@ -1021,7 +1115,7 @@ app.get('/api/status', (req, res) => {
 app.get('/api/system/status', (req, res) => {
     try {
         res.status(200).json({
-            websocket: getWebSocketStatus(),
+            websocket: getWebSocketStatusProxy(),
             circuitBreaker: getCircuitBreakerStatus(),
             adaptiveWeights: getAdaptiveWeightsStatus(),
             profitMethods: getProfitMethodsStatus(),
@@ -1846,32 +1940,8 @@ const startServer = async () => {
         }
     }
 
-    initWebSocket(availableTickers, {
-        onConnect: () => console.log('WS Connected'),
-        onCandle: (ticker, candles) => {
-            if (candles && candles.length > 0) {
-                const latest = candles[candles.length - 1];
-                broadcastToFrontend({
-                    method: 'subscribe',
-                    result: {
-                        channel: `candlestick.1m.${ticker.replace(/USD$/, '_USD')}`,
-                        instrument_name: ticker.replace(/USD$/, '_USD'),
-                        data: [latest]
-                    }
-                });
-            }
-        },
-        onTrade: (ticker, trade) => {
-            broadcastToFrontend({
-                method: 'subscribe',
-                result: {
-                    channel: `trade.${ticker.replace(/USD$/, '_USD')}`,
-                    instrument_name: ticker.replace(/USD$/, '_USD'),
-                    data: [trade]
-                }
-            });
-        }
-    });
+    // Initialize WebSocket for the active exchange
+    initExchangeWebSocket(availableTickers, broadcastToFrontend);
 
     setInterval(updateAvailableTickers, CONFIG.TICKER_REFRESH_MS);
 
@@ -1961,7 +2031,7 @@ function gracefulShutdown(signal) {
     } catch (e) {
         console.error('[Server] State save failed:', e.message);
     }
-    closeWebSocket();
+    getActiveWsService().closeWebSocket();
     closeDatabase();
     process.exit(0);
 }

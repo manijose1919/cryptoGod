@@ -28,6 +28,14 @@ const streakState = {
   peakBalance: 0,
 };
 
+// Dynamic round-trip fee (percentage, e.g. 0.15 for Crypto.com, 0.52 for Kraken)
+let roundTripFeePercent = 0.15;
+
+/** Set the round-trip fee for the active exchange (called on exchange switch) */
+export function setRoundTripFee(fee) {
+  roundTripFeePercent = fee;
+}
+
 // Per-ticker regime cache
 const regimeCache = new Map(); // ticker -> { regime, timestamp, ema10, ema30, rsi }
 const REGIME_CACHE_TTL = 30000; // 30s cache
@@ -285,15 +293,18 @@ export function getDynamicTargets(candles) {
   const price = candles[candles.length - 1].c;
   const atrPercent = (atr / price) * 100;
 
+  // Fee-aware minimum: target must exceed round-trip fee + margin
+  const feeFloor = roundTripFeePercent + 0.30;
+
   if (atrPercent > 1.5) {
-    // High volatility: wider targets (all above 0.15% round-trip fee)
-    return { takeProfitPct: 2.0, stopLossPct: 1.5, regime: 'HIGH_VOL' };
+    // High volatility: wider targets
+    return { takeProfitPct: Math.max(2.0, feeFloor), stopLossPct: 1.5, regime: 'HIGH_VOL' };
   } else if (atrPercent > 0.5) {
     // Normal volatility
-    return { takeProfitPct: 1.2, stopLossPct: 1.0, regime: 'NORMAL' };
+    return { takeProfitPct: Math.max(1.2, feeFloor), stopLossPct: 1.0, regime: 'NORMAL' };
   } else {
-    // Low volatility: still must exceed fees
-    return { takeProfitPct: 0.75, stopLossPct: 1.0, regime: 'LOW_VOL' };
+    // Low volatility: must still exceed fees
+    return { takeProfitPct: Math.max(0.75, feeFloor), stopLossPct: 1.0, regime: 'LOW_VOL' };
   }
 }
 
@@ -306,7 +317,7 @@ export function getDynamicTargets(candles) {
  */
 export function checkDynamicExit(position, currentPrice, candles) {
   const pnlPercent = ((currentPrice - position.openPrice) / position.openPrice) * 100;
-  const feeAdjustedPnl = pnlPercent - 0.15; // Subtract round-trip fee
+  const feeAdjustedPnl = pnlPercent - roundTripFeePercent; // Subtract round-trip fee (dynamic per exchange)
   const targets = getDynamicTargets(candles);
   const holdTimeMs = Date.now() - position.entryTime;
   const holdMinutes = holdTimeMs / 60000;

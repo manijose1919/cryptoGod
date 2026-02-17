@@ -1171,11 +1171,11 @@ const App: React.FC = () => {
                 const currentPrice = Number(currentData.candles.at(-1)!.close) || 0;
                 const profitGoal = profitGoals[position.entryStrategy];
                 const rawProfit = (currentPrice - position.openPrice) * position.quantity;
-                const feesPaid = (position.openPrice * position.quantity * TRADING_FEES.TAKER_FEE_PERCENT / 100) +
-                                 (currentPrice * position.quantity * TRADING_FEES.TAKER_FEE_PERCENT / 100);
+                const feesPaid = (position.openPrice * position.quantity * currentExchangeFees.takerFee / 100) +
+                                 (currentPrice * position.quantity * currentExchangeFees.takerFee / 100);
                 const currentProfit = rawProfit - feesPaid;
                 const profitPercent = ((currentPrice - position.openPrice) / position.openPrice) * 100;
-                const profitPercentAfterFees = profitPercent - TRADING_FEES.ROUND_TRIP_FEE_PERCENT;
+                const profitPercentAfterFees = profitPercent - currentExchangeFees.roundTripFee;
 
                 // Update highest price for trailing stop
                 const updatedPosition = {
@@ -1197,9 +1197,9 @@ const App: React.FC = () => {
                         const sellQty = origQty * (PARTIAL_EXIT.STAGE_1_PERCENT / 100);
                         if (sellQty > 0 && updatedPosition.quantity > sellQty) {
                             const sellValue = sellQty * currentPrice;
-                            const sellFee = sellValue * TRADING_FEES.TAKER_FEE_PERCENT / 100;
+                            const sellFee = sellValue * currentExchangeFees.takerFee / 100;
                             const partialPnl = (currentPrice - updatedPosition.openPrice) * sellQty -
-                                (updatedPosition.openPrice * sellQty * TRADING_FEES.TAKER_FEE_PERCENT / 100) - sellFee;
+                                (updatedPosition.openPrice * sellQty * currentExchangeFees.takerFee / 100) - sellFee;
 
                             updatedPosition.quantity -= sellQty;
                             updatedPosition.exitStage = 1;
@@ -1222,9 +1222,9 @@ const App: React.FC = () => {
                         const sellQty = origQty * (PARTIAL_EXIT.STAGE_2_PERCENT / 100);
                         if (sellQty > 0 && updatedPosition.quantity > sellQty) {
                             const sellValue = sellQty * currentPrice;
-                            const sellFee = sellValue * TRADING_FEES.TAKER_FEE_PERCENT / 100;
+                            const sellFee = sellValue * currentExchangeFees.takerFee / 100;
                             const partialPnl = (currentPrice - updatedPosition.openPrice) * sellQty -
-                                (updatedPosition.openPrice * sellQty * TRADING_FEES.TAKER_FEE_PERCENT / 100) - sellFee;
+                                (updatedPosition.openPrice * sellQty * currentExchangeFees.takerFee / 100) - sellFee;
 
                             updatedPosition.quantity -= sellQty;
                             updatedPosition.exitStage = 2;
@@ -1281,8 +1281,10 @@ const App: React.FC = () => {
 
                 // SLOW MARKET: Use adjusted targets/stops in slow markets
                 if (!exitReason && isSlowMarket && !isMicroMode) {
-                    if (profitPercentAfterFees >= SLOW_MARKET.PROFIT_TARGET_SLOW) {
-                        exitReason = `[SLOW-MKT] Profit target: +${profitPercentAfterFees.toFixed(3)}% (target: ${SLOW_MARKET.PROFIT_TARGET_SLOW}%)`;
+                    // Fee-aware slow market target: must exceed round-trip fees + margin
+                    const slowTarget = Math.max(SLOW_MARKET.PROFIT_TARGET_SLOW, currentExchangeFees.roundTripFee + 0.20);
+                    if (profitPercentAfterFees >= slowTarget) {
+                        exitReason = `[SLOW-MKT] Profit target: +${profitPercentAfterFees.toFixed(3)}% (target: ${slowTarget.toFixed(2)}%)`;
                     } else {
                         const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
                         if (profitPercentAfterFees > 0 && dropFromHigh >= SLOW_MARKET.TRAILING_STOP_SLOW) {
@@ -1364,7 +1366,7 @@ const App: React.FC = () => {
                 }
 
                 if (exitReason) {
-                    const sellFee = currentPrice * position.quantity * TRADING_FEES.TAKER_FEE_PERCENT / 100;
+                    const sellFee = currentPrice * position.quantity * currentExchangeFees.takerFee / 100;
                     const saleValue = position.quantity * currentPrice;
                     const pnl = currentProfit;
 
@@ -1943,7 +1945,7 @@ const App: React.FC = () => {
                                 originalQuantity: quantity
                             };
 
-                            const buyFee = investmentAmount * TRADING_FEES.TAKER_FEE_PERCENT / 100;
+                            const buyFee = investmentAmount * currentExchangeFees.takerFee / 100;
                             currentPortfolio = {
                                 ...currentPortfolio,
                                 cash: currentPortfolio.cash - investmentAmount - buyFee,
@@ -2277,7 +2279,7 @@ const App: React.FC = () => {
             const currentPrice = Number(currentData.candles.at(-1)!.close) || 0;
             const pnl = (currentPrice - position.openPrice) * position.quantity;
             const saleValue = position.quantity * currentPrice;
-            const sellFee = saleValue * TRADING_FEES.TAKER_FEE_PERCENT / 100;
+            const sellFee = saleValue * currentExchangeFees.takerFee / 100;
 
             addLog(
                 `FORCE SELL: ${Number(position.quantity).toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${Number(currentPrice).toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)}. PnL: $${Number(pnl).toFixed(2)}.`,

@@ -5,10 +5,17 @@
  */
 import { cryptoComAdapter, setSessionManager } from './cryptocomAdapter.js';
 import { krakenAdapter } from './krakenAdapter.js';
+import * as cryptoComWs from '../websocketService.js';
+import * as krakenWs from '../krakenWebsocketService.js';
 
 const adapters = {
     'crypto.com': cryptoComAdapter,
     'kraken': krakenAdapter,
+};
+
+const wsServices = {
+    'crypto.com': cryptoComWs,
+    'kraken': krakenWs,
 };
 
 let activeExchangeId = process.env.TRADING_EXCHANGE || 'crypto.com';
@@ -49,6 +56,12 @@ export function listExchanges() {
             ? !!(process.env.SESSION_API_KEY || process.env.CRYPTO_COM_API_KEY)
             : !!(process.env.KRAKEN_API_KEY),
     }));
+}
+
+/** Get the WebSocket service for the active (or specified) exchange */
+export function getWebSocketService(exchangeId) {
+    const id = exchangeId || activeExchangeId;
+    return wsServices[id] || wsServices['crypto.com'];
 }
 
 export { setSessionManager };

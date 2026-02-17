@@ -1,0 +1,407 @@
+/**
+ * Kraken WebSocket v2 Real-Time Data Service
+ *
+ * Same public API as websocketService.js (Crypto.com) so server.js
+ * can swap them based on the active exchange.
+ *
+ * Channels:
+ *   - ohlc (interval 1) - 1-minute candle updates
+ *   - trade           - Real-time trade prices
+ *
+ * Kraken WS v2 docs: https://docs.kraken.com/api/docs/websocket-v2/
+ */
+
+import WebSocket from 'ws';
+
+// ============================================
+// STATE
+// ============================================
+
+let ws = null;
+let connected = false;
+let reconnectTimer = null;
+let heartbeatTimer = null;
+let subscribedTickers = new Set();       // Our internal ticker names (e.g. "BTCUSD")
+let onCandleCallback = null;
+let onTradeCallback = null;
+let onConnectCallback = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 100;
+const RECONNECT_BASE_MS = 5000;
+const RECONNECT_MAX_MS = 60000;
+const HEARTBEAT_CHECK_MS = 20000;        // Check for stale connection every 20s
+const HEARTBEAT_TIMEOUT_MS = 30000;      // Consider dead if no message for 30s
+const WS_URL = 'wss://ws.kraken.com/v2';
+
+// Real-time candle buffer: ticker -> candles array
+const realtimeCandles = new Map();
+const MAX_BUFFERED_CANDLES = 200;
+
+// Latest trade prices: ticker -> price
+const latestPrices = new Map();
+
+// Track last message time for heartbeat detection
+let lastMessageTime = 0;
+
+// ============================================
+// PAIR FORMAT CONVERSION
+// ============================================
+
+/** Convert our internal ticker (BTCUSD) to Kraken WS v2 format (XBT/USD) */
+function toKrakenWsPair(ticker) {
+    // BTCUSD → XBT/USD, ETHUSD → ETH/USD, etc.
+    let base = ticker.replace(/USD$/, '');
+    const quote = 'USD';
+    if (base === 'BTC') base = 'XBT';
+    return `${base}/${quote}`;
+}
+
+/** Convert Kraken WS pair (XBT/USD) back to internal format (BTCUSD) */
+function fromKrakenWsPair(krakenPair) {
+    // XBT/USD → BTCUSD, ETH/USD → ETHUSD
+    let pair = krakenPair.replace('/', '');
+    pair = pair.replace('XBT', 'BTC');
+    return pair;
+}
+
+// ============================================
+// CONNECTION MANAGEMENT
+// ============================================
+
+function connect() {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
+    try {
+        ws = new WebSocket(WS_URL);
+
+        ws.on('open', () => {
+            connected = true;
+            reconnectAttempts = 0;
+            lastMessageTime = Date.now();
+            console.log('[KrakenWS] Connected to Kraken market stream');
+
+            // Start heartbeat checker
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = setInterval(checkHeartbeat, HEARTBEAT_CHECK_MS);
+
+            // Re-subscribe to all tickers
+            if (subscribedTickers.size > 0) {
+                sendSubscriptions([...subscribedTickers]);
+            }
+
+            if (onConnectCallback) onConnectCallback();
+        });
+
+        ws.on('message', (data) => {
+            lastMessageTime = Date.now();
+            try {
+                const msg = JSON.parse(data.toString());
+                handleMessage(msg);
+            } catch (e) {
+                // Ignore parse errors
+            }
+        });
+
+        ws.on('close', (code, reason) => {
+            connected = false;
+            console.log(`[KrakenWS] Disconnected (code: ${code}). Reconnecting...`);
+            clearInterval(heartbeatTimer);
+            scheduleReconnect();
+        });
+
+        ws.on('error', (error) => {
+            console.error(`[KrakenWS] Error: ${error.message}`);
+            // 'close' event fires after error
+        });
+
+    } catch (error) {
+        console.error(`[KrakenWS] Connection failed: ${error.message}`);
+        scheduleReconnect();
+    }
+}
+
+function scheduleReconnect() {
+    if (reconnectTimer) return;
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        console.error(`[KrakenWS] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Resetting for 24/7 resilience.`);
+        reconnectAttempts = 0;
+    }
+
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_MS);
+    reconnectAttempts++;
+    console.log(`[KrakenWS] Reconnecting in ${(delay / 1000).toFixed(0)}s (attempt ${reconnectAttempts})`);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+    }, delay);
+}
+
+/** Kraken sends heartbeat messages; if we haven't received anything in a while, reconnect */
+function checkHeartbeat() {
+    if (!connected) return;
+    const elapsed = Date.now() - lastMessageTime;
+    if (elapsed > HEARTBEAT_TIMEOUT_MS) {
+        console.warn(`[KrakenWS] No message in ${(elapsed / 1000).toFixed(0)}s, reconnecting...`);
+        if (ws) {
+            ws.close();
+            ws = null;
+        }
+        connected = false;
+        scheduleReconnect();
+    }
+}
+
+// ============================================
+// SUBSCRIBE
+// ============================================
+
+function sendSubscriptions(tickers) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const krakenPairs = tickers.map(t => toKrakenWsPair(t));
+
+    // Subscribe to OHLC (1-minute candles)
+    ws.send(JSON.stringify({
+        method: 'subscribe',
+        params: {
+            channel: 'ohlc',
+            symbol: krakenPairs,
+            interval: 1,
+        },
+    }));
+
+    // Subscribe to trades for real-time prices
+    ws.send(JSON.stringify({
+        method: 'subscribe',
+        params: {
+            channel: 'trade',
+            symbol: krakenPairs,
+        },
+    }));
+
+    console.log(`[KrakenWS] Subscribed to ${krakenPairs.length} pairs: ${krakenPairs.join(', ')}`);
+}
+
+// ============================================
+// MESSAGE HANDLING
+// ============================================
+
+function handleMessage(msg) {
+    // Heartbeat
+    if (msg.channel === 'heartbeat') {
+        // Kraken sends heartbeats automatically; just note receipt (lastMessageTime already updated)
+        return;
+    }
+
+    // Status / system messages
+    if (msg.channel === 'status') {
+        if (msg.data && msg.data[0]) {
+            console.log(`[KrakenWS] System status: ${msg.data[0].system} / API: ${msg.data[0].version}`);
+        }
+        return;
+    }
+
+    // Subscription confirmations
+    if (msg.method === 'subscribe' && msg.success === true) {
+        return;
+    }
+    if (msg.method === 'subscribe' && msg.success === false) {
+        console.error(`[KrakenWS] Subscribe failed: ${msg.error}`);
+        return;
+    }
+
+    // OHLC updates
+    if (msg.channel === 'ohlc') {
+        handleOhlcUpdate(msg);
+        return;
+    }
+
+    // Trade updates
+    if (msg.channel === 'trade') {
+        handleTradeUpdate(msg);
+        return;
+    }
+}
+
+function handleOhlcUpdate(msg) {
+    const data = msg.data;
+    if (!data || data.length === 0) return;
+
+    for (const candle of data) {
+        const ticker = fromKrakenWsPair(candle.symbol);
+
+        const formatted = {
+            t: new Date(candle.timestamp).getTime(),
+            o: parseFloat(candle.open),
+            h: parseFloat(candle.high),
+            l: parseFloat(candle.low),
+            c: parseFloat(candle.close),
+            v: parseFloat(candle.volume || candle.vwap || 0),
+        };
+
+        // Update buffer
+        let buffer = realtimeCandles.get(ticker);
+        if (!buffer) {
+            buffer = [];
+            realtimeCandles.set(ticker, buffer);
+        }
+
+        // Replace or append candle based on timestamp
+        const existing = buffer.findIndex(c => c.t === formatted.t);
+        if (existing >= 0) {
+            buffer[existing] = formatted;
+        } else {
+            buffer.push(formatted);
+            if (buffer.length > MAX_BUFFERED_CANDLES) {
+                buffer.shift();
+            }
+        }
+
+        // Update latest price
+        latestPrices.set(ticker, formatted.c);
+    }
+
+    // Callback with the first ticker's data
+    if (data.length > 0 && onCandleCallback) {
+        const ticker = fromKrakenWsPair(data[0].symbol);
+        onCandleCallback(ticker, realtimeCandles.get(ticker));
+    }
+}
+
+function handleTradeUpdate(msg) {
+    const data = msg.data;
+    if (!data || data.length === 0) return;
+
+    // Process last trade in the batch
+    const lastTrade = data[data.length - 1];
+    const ticker = fromKrakenWsPair(lastTrade.symbol);
+    const price = parseFloat(lastTrade.price);
+
+    if (price > 0) {
+        latestPrices.set(ticker, price);
+    }
+
+    if (onTradeCallback) {
+        onTradeCallback(ticker, {
+            price,
+            quantity: parseFloat(lastTrade.qty || 0),
+            side: (lastTrade.side || 'unknown').toUpperCase(),
+            time: new Date(lastTrade.timestamp).getTime(),
+        });
+    }
+}
+
+// ============================================
+// PUBLIC API (same interface as websocketService.js)
+// ============================================
+
+/**
+ * Initialize WebSocket connection and subscribe to tickers
+ */
+export function initWebSocket(tickers, callbacks = {}) {
+    onCandleCallback = callbacks.onCandle || null;
+    onTradeCallback = callbacks.onTrade || null;
+    onConnectCallback = callbacks.onConnect || null;
+
+    for (const ticker of tickers) {
+        subscribedTickers.add(ticker);
+    }
+
+    connect();
+}
+
+/**
+ * Subscribe to additional tickers
+ */
+export function subscribeTickers(tickers) {
+    const newTickers = [];
+    for (const ticker of tickers) {
+        if (!subscribedTickers.has(ticker)) {
+            subscribedTickers.add(ticker);
+            newTickers.push(ticker);
+        }
+    }
+
+    if (newTickers.length > 0 && connected) {
+        sendSubscriptions(newTickers);
+    }
+}
+
+/**
+ * Get buffered real-time candles for a ticker.
+ * Returns array of candles { t, o, h, l, c, v } or null if no data.
+ */
+export function getRealtimeCandles(ticker) {
+    return realtimeCandles.get(ticker) || null;
+}
+
+/**
+ * Merge real-time candles with REST-fetched candles.
+ * REST candles are the base, real-time candles update/extend them.
+ */
+export function mergeCandles(restCandles, ticker) {
+    const rtCandles = realtimeCandles.get(ticker);
+    if (!rtCandles || rtCandles.length === 0) return restCandles;
+    if (!restCandles || restCandles.length === 0) return rtCandles;
+
+    const merged = new Map();
+    for (const c of restCandles) {
+        merged.set(c.t, c);
+    }
+    for (const c of rtCandles) {
+        merged.set(c.t, c);
+    }
+
+    return [...merged.values()].sort((a, b) => a.t - b.t).slice(-MAX_BUFFERED_CANDLES);
+}
+
+/**
+ * Get latest price for a ticker (from trades or candles)
+ */
+export function getLatestPrice(ticker) {
+    return latestPrices.get(ticker) || null;
+}
+
+/**
+ * Check if WebSocket is connected
+ */
+export function isConnected() {
+    return connected;
+}
+
+/**
+ * Get WebSocket status info
+ */
+export function getWebSocketStatus() {
+    return {
+        connected,
+        exchange: 'kraken',
+        subscriptions: subscribedTickers.size,
+        tickers: [...realtimeCandles.keys()],
+        bufferedCandles: Object.fromEntries(
+            [...realtimeCandles.entries()].map(([k, v]) => [k, v.length])
+        ),
+        reconnectAttempts,
+        latestPrices: Object.fromEntries(latestPrices),
+    };
+}
+
+/**
+ * Close WebSocket connection
+ */
+export function closeWebSocket() {
+    clearInterval(heartbeatTimer);
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    if (ws) {
+        ws.close();
+        ws = null;
+    }
+    connected = false;
+    subscribedTickers.clear();
+    realtimeCandles.clear();
+    latestPrices.clear();
+    console.log('[KrakenWS] Connection closed');
+}
