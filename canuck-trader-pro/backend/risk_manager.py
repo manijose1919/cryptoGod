@@ -337,50 +337,61 @@ class RiskManager:
         return result
 
     def _update_trailing_stop(self, symbol: str, price: float):
-        """Update trailing stop with dynamic tightening.
+        """Update trailing stop — percentage-based trail behind price.
 
-        Trail percentage tightens as profit grows:
-        - 1-2R: trail at 50% of max profit
-        - 2-3R: trail at 60% of max profit
-        - 3R+:  trail at 75% of max profit
+        Activates at TRAILING_STOP_ACTIVATION_PCT profit (+0.5%).
+        Then trails TRAILING_STOP_DISTANCE_PCT behind the high-water mark.
+        Also uses R-multiple tightening on big winners.
         """
         pos = self.positions[symbol]
         entry = pos["entry"]
         initial_risk = abs(entry - pos["initial_stop"])
 
-        if initial_risk <= 0:
-            return
+        trail_activation = getattr(config, "TRAILING_STOP_ACTIVATION_PCT", 0.005)
+        trail_distance = getattr(config, "TRAILING_STOP_DISTANCE_PCT", 0.005)
 
         if pos["side"] == "BUY":
             pos["high_water"] = max(pos["high_water"], price)
-            profit = pos["high_water"] - entry
-            r_multiple = profit / initial_risk
+            unrealized_pct = (pos["high_water"] - entry) / entry
 
-            if r_multiple >= 1.0:
-                if r_multiple >= 3.0:
-                    trail_pct = 0.75
-                elif r_multiple >= 2.0:
-                    trail_pct = 0.60
-                else:
-                    trail_pct = 0.50
-                trail_stop = entry + profit * trail_pct
+            # Percentage trailing stop: activate at +0.5%, trail 0.5% behind peak
+            if unrealized_pct >= trail_activation:
+                trail_stop = pos["high_water"] * (1 - trail_distance)
                 if trail_stop > pos["stop"]:
+                    if not pos.get("trailing_active"):
+                        logger.info(f"TRAIL {symbol}: activated at +{unrealized_pct*100:.2f}%, trail={trail_distance*100:.1f}%")
+                        pos["trailing_active"] = True
                     pos["stop"] = trail_stop
+
+            # R-multiple tightening on big runners (if initial_risk is valid)
+            if initial_risk > 0:
+                profit = pos["high_water"] - entry
+                r_multiple = profit / initial_risk
+                if r_multiple >= 3.0:
+                    # At 3R+, tighten trail to 0.3% behind price
+                    tight_stop = pos["high_water"] * (1 - 0.003)
+                    if tight_stop > pos["stop"]:
+                        pos["stop"] = tight_stop
+
         else:  # SELL
             pos["low_water"] = min(pos["low_water"], price)
-            profit = entry - pos["low_water"]
-            r_multiple = profit / initial_risk
+            unrealized_pct = (entry - pos["low_water"]) / entry
 
-            if r_multiple >= 1.0:
-                if r_multiple >= 3.0:
-                    trail_pct = 0.75
-                elif r_multiple >= 2.0:
-                    trail_pct = 0.60
-                else:
-                    trail_pct = 0.50
-                trail_stop = entry - profit * trail_pct
+            if unrealized_pct >= trail_activation:
+                trail_stop = pos["low_water"] * (1 + trail_distance)
                 if trail_stop < pos["stop"]:
+                    if not pos.get("trailing_active"):
+                        logger.info(f"TRAIL {symbol}: activated at +{unrealized_pct*100:.2f}%, trail={trail_distance*100:.1f}%")
+                        pos["trailing_active"] = True
                     pos["stop"] = trail_stop
+
+            if initial_risk > 0:
+                profit = entry - pos["low_water"]
+                r_multiple = profit / initial_risk
+                if r_multiple >= 3.0:
+                    tight_stop = pos["low_water"] * (1 + 0.003)
+                    if tight_stop < pos["stop"]:
+                        pos["stop"] = tight_stop
 
     def _check_partial_exit(self, symbol: str, price: float) -> Optional[dict]:
         """Check if we should do a partial exit (50% at 1R profit).
@@ -443,13 +454,39 @@ class RiskManager:
             price = current_prices[symbol]
             pos = self.positions[symbol]
 
-            # Update trailing stop
+            # Grace period: no stop-loss in first 60s (let trade breathe past noise)
+            hold_seconds = time.time() - pos.get("open_time", time.time())
+
+            # Update trailing stop (always, even during grace)
             self._update_trailing_stop(symbol, price)
 
-            # Check partial exit
-            partial = self._check_partial_exit(symbol, price)
-            if partial:
-                closed.append(partial)
+            # Break-even stop: once +0.3% in profit, move stop to entry + fees
+            # This prevents green trades from turning into losses
+            if not pos.get("breakeven_set"):
+                if pos["side"] == "BUY":
+                    unrealized_pct = (price - pos["entry"]) / pos["entry"]
+                else:
+                    unrealized_pct = (pos["entry"] - price) / pos["entry"]
+                if unrealized_pct >= 0.003:  # +0.3%
+                    fee_buffer = pos["entry"] * config.ROUND_TRIP_FEE_PCT  # cover fees
+                    if pos["side"] == "BUY":
+                        new_stop = pos["entry"] + fee_buffer
+                        if new_stop > pos["stop"]:
+                            pos["stop"] = new_stop
+                            pos["breakeven_set"] = True
+                            logger.info(f"BREAKEVEN {symbol}: stop moved to {new_stop:.4f} (+fees)")
+                    else:
+                        new_stop = pos["entry"] - fee_buffer
+                        if new_stop < pos["stop"]:
+                            pos["stop"] = new_stop
+                            pos["breakeven_set"] = True
+                            logger.info(f"BREAKEVEN {symbol}: stop moved to {new_stop:.4f} (-fees)")
+
+            # Check partial exit (only after grace)
+            if hold_seconds >= 60:
+                partial = self._check_partial_exit(symbol, price)
+                if partial:
+                    closed.append(partial)
 
             # Check full stop/target (position may still be open after partial)
             if symbol not in self.positions:
@@ -461,13 +498,38 @@ class RiskManager:
             hit_target = (pos["side"] == "BUY" and price >= pos["target"]) or \
                          (pos["side"] == "SELL" and price <= pos["target"])
 
-            # Time-based exit: 15min with no profit
+            # During grace period, only allow take-profit (not stop-loss or time exits)
+            if hold_seconds < 60:
+                if hit_target:
+                    result = self.close_position(symbol, price)
+                    if result:
+                        result["reason"] = "TAKE_PROFIT"
+                        closed.append(result)
+                continue
+
+            # Time-based exit: configurable (default 45min) with no profit
             hold_time = time.time() - pos["open_time"]
             if pos["side"] == "BUY":
                 unrealized = (price - pos["entry"]) / pos["entry"]
             else:
                 unrealized = (pos["entry"] - price) / pos["entry"]
-            time_exit = hold_time > 900 and unrealized < config.ROUND_TRIP_FEE_PCT
+            time_exit_seconds = getattr(config, "TIME_EXIT_MINUTES", 45) * 60
+            time_exit = hold_time > time_exit_seconds and unrealized < config.ROUND_TRIP_FEE_PCT
+
+            # When target is hit AFTER partial exit: let trailing stop manage the runner
+            if hit_target and pos.get("partial_exited"):
+                # Remove fixed target — trailing stop is now the only exit
+                if pos["side"] == "BUY":
+                    pos["target"] = pos["entry"] * 1.50  # effectively no cap (50% above entry)
+                else:
+                    pos["target"] = pos["entry"] * 0.50  # effectively no cap (50% below entry)
+                logger.info(f"RUNNER {symbol}: target hit, switching to trailing-stop-only mode")
+                hit_target = False  # don't exit now
+
+            # Time exit: only force-exit if NOT in profit (let winners run past 15min)
+            if time_exit:
+                if unrealized > config.ROUND_TRIP_FEE_PCT:
+                    time_exit = False  # in profit — keep running with trailing stop
 
             if hit_stop or hit_target or time_exit:
                 reason = "STOP_LOSS" if hit_stop else ("TAKE_PROFIT" if hit_target else "TIME_EXIT")

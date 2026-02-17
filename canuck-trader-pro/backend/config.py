@@ -18,15 +18,24 @@ CORS_ORIGINS = [
 CRYPTO_COM_API_KEY = os.environ.get("CRYPTO_COM_API_KEY", "")
 CRYPTO_COM_SECRET = os.environ.get("CRYPTO_COM_SECRET", "")
 
+# ── Kraken API ─────────────────────────────────────────────────────────────
+KRAKEN_API_KEY = os.environ.get("KRAKEN_API_KEY", "")
+KRAKEN_SECRET = os.environ.get("KRAKEN_SECRET", "")
+
+# ── Exchange Selection ────────────────────────────────────────────────────
+# 'cryptocom' or 'kraken' — determines which ccxt exchange to use
+EXCHANGE_ID = os.environ.get("EXCHANGE_ID", "cryptocom")
+
 # ── Local ML (no external API dependencies) ───────────────────────────────
 ML_MODEL_DIR = "models"            # directory for persisted models
-ML_MIN_SAMPLES = 50                # trades before switching heuristic → ML
-ML_RETRAIN_INTERVAL = 25           # retrain after this many new outcomes
+ML_MIN_SAMPLES = 15                # trades before switching heuristic → ML (was 50)
+ML_RETRAIN_INTERVAL = 10           # retrain after this many new outcomes (was 25)
 
-# ── Canadian-Allowed USD Pairs (10) ────────────────────────────────────────
+# ── Trading Pairs (focused on liquid, trending assets) ────────────────────
+# Reduced from 9 to 5: removed ADA, DOGE, DOT, AVAX (mostly RANGING, all negative PnL)
+# These 5 have the best volume + trend behavior on Crypto.com
 PAIRS = [
-    "BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD",
-    "ADA/USD", "DOGE/USD", "LINK/USD", "DOT/USD", "AVAX/USD",
+    "BTC/USD", "ETH/USD", "XRP/USD", "SOL/USD", "LINK/USD",
 ]
 
 # ── Timeframes ─────────────────────────────────────────────────────────────
@@ -46,10 +55,20 @@ TRADING_FEE_PCT = 0.00075      # 0.075% per side (Crypto.com)
 ROUND_TRIP_FEE_PCT = 0.0015    # 0.15% round-trip
 
 # ── Strategy Thresholds ────────────────────────────────────────────────────
-MIN_SIGNAL_CONFIDENCE = 40     # minimum score (0-100) to act on signal
-CONSENSUS_THRESHOLD = 5        # min strategies agreeing for consensus signal
-PROFIT_TARGET_PCT = 0.01       # 1% default take-profit
-STOP_LOSS_PCT = 0.008          # 0.8% default stop-loss
+MIN_SIGNAL_CONFIDENCE = 65     # only high-conviction signals (was 55)
+CONSENSUS_THRESHOLD = 7        # require 7+ strategies agreeing (was 5)
+PROFIT_TARGET_PCT = 0.025      # 2.5% take-profit (must exceed avg loss)
+STOP_LOSS_PCT = 0.005          # 0.5% stop-loss (tighter = better R:R)
+
+# ── Trailing Stop ─────────────────────────────────────────────────────────
+TRAILING_STOP_ACTIVATION_PCT = 0.005   # Activate trailing stop at +0.5% profit
+TRAILING_STOP_DISTANCE_PCT = 0.005     # Trail 0.5% behind price
+
+# ── Time-of-Day Filter ───────────────────────────────────────────────────
+# Block trading during low-liquidity Asian session (2-8 AM UTC)
+# Crypto has most volume/momentum during US + EU overlap (13-21 UTC)
+QUIET_HOURS_START = 2   # UTC hour to start blocking
+QUIET_HOURS_END = 8     # UTC hour to stop blocking
 
 # ── Kelly Criterion ────────────────────────────────────────────────────────
 KELLY_FRACTION = 0.25          # quarter-Kelly for safety
@@ -60,8 +79,16 @@ ATR_PERIOD = 14
 ATR_STOP_MULTIPLIER = 2.0      # stop = entry - 2 * ATR
 
 # ── Loop Timing ────────────────────────────────────────────────────────────
-MAIN_LOOP_INTERVAL = 10        # seconds between full analysis cycles
+MAIN_LOOP_INTERVAL = 5         # seconds between full analysis cycles (was 10, faster for learning)
 HEARTBEAT_INTERVAL = 5         # seconds between ZMQ heartbeats
+
+# ── Learning Acceleration ────────────────────────────────────────────────
+LEARNING_MODE = False          # Disabled: enough data collected, now focus on quality
+LEARNING_MIN_CONFIDENCE = 65   # Match MIN_SIGNAL_CONFIDENCE
+LEARNING_MAX_POSITIONS = 3     # Max 3 concurrent positions
+
+# ── Time Exit ────────────────────────────────────────────────────────────
+TIME_EXIT_MINUTES = 45         # Give trades 45 min to work (was 15 — trades never reached TP)
 
 # ── ZMQ Ports ──────────────────────────────────────────────────────────────
 ZMQ_PUB_PORT = 5555            # PUB socket for data broadcast
@@ -86,6 +113,15 @@ QUESTRADE_IS_PRACTICE = os.environ.get("QUESTRADE_IS_PRACTICE", "false").lower()
 
 # ── Gemini API (optional, for AI analysis) ────────────────────────────────
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# ── Disabled Strategies ──────────────────────────────────────────────────
+# Strategies in this set will be blocked from opening new trades
+DISABLED_STRATEGIES = {
+    "CONFLUENCE", "MULTI_CONSENSUS",  # 5.6% win rate, -$40 PnL
+    "WHALE",                          # 0% win rate, -$1.6 PnL
+    "DIVERGENCE", "RSI_DIVERGENCE", "MACD_DIVERGENCE",  # 16.7% win rate, -$7.5 PnL
+    "BREAKOUT", "ATR_BREAKOUT",       # 11% win rate, -$14.3 PnL
+}
 
 # ── Beast Mode Thresholds ─────────────────────────────────────────────────
 BEAST_MODE = True

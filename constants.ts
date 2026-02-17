@@ -124,6 +124,54 @@ export const TRADING_FEES = {
 } as const;
 
 // ============================================
+// KRAKEN FEES
+// ============================================
+export const KRAKEN_FEES = {
+    TAKER_FEE_PERCENT: 0.26,       // Kraken taker fee per side (base tier)
+    ROUND_TRIP_FEE_PERCENT: 0.52,  // Total buy + sell fees
+    FEE_BUFFER_PERCENT: 0.10,      // Slippage buffer
+} as const;
+
+// ============================================
+// PARTIAL EXIT (3-STAGE EXIT SYSTEM)
+// ============================================
+export const PARTIAL_EXIT = {
+    ENABLED: true,
+    STAGE_1_PERCENT: 30,           // Sell 30% of position
+    STAGE_1_TARGET: 0.50,          // At +0.50% profit after fees
+    STAGE_2_PERCENT: 40,           // Sell 40% of position
+    STAGE_2_TARGET: 1.50,          // At +1.50% profit after fees
+    STAGE_3_TRAILING_START: 1.5,   // Start trailing at 1.5% profit
+    STAGE_3_TRAILING_TIGHT: 0.75,  // Tighten to 0.75% as profit grows
+} as const;
+
+// ============================================
+// SLOW MARKET DETECTION
+// ============================================
+export const SLOW_MARKET = {
+    ENABLED: true,
+    MIN_SMALL_CANDLES: 7,          // of last 10 candles
+    SMALL_CANDLE_RANGE: 0.10,      // % threshold for "small" candle
+    ATR_SLOW_THRESHOLD: 0.15,      // ATR as % of price
+    PROFIT_TARGET_SLOW: 0.35,      // % (above 0.15% fees)
+    STOP_LOSS_SLOW: 2.5,           // % (wider to avoid whipsaws)
+    TRAILING_STOP_SLOW: 1.5,       // %
+    ALLOWED_STRATEGIES: ['RANGE', 'MEAN_REVERSION', 'ADAPTIVE', 'DIVERGENCE'] as readonly string[],
+} as const;
+
+// ============================================
+// REGIME → STRATEGY MAP
+// ============================================
+export const REGIME_STRATEGY_MAP: Record<string, readonly string[]> = {
+    STRONG_UP:    ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE', 'ADAPTIVE'],
+    UP:           ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE', 'ADAPTIVE'],
+    SIDEWAYS:     ['RANGE', 'MEAN_REVERSION', 'ADAPTIVE', 'DIVERGENCE'],
+    DOWN:         ['REVERSAL', 'DIVERGENCE', 'ADAPTIVE'],
+    STRONG_DOWN:  ['REVERSAL', 'DIVERGENCE', 'ADAPTIVE'],
+    VOLATILE:     ['ADAPTIVE'],
+} as const;
+
+// ============================================
 // ML CONFIGURATION
 // ============================================
 export const ML_CONFIG = {

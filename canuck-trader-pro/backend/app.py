@@ -100,11 +100,17 @@ stock_strategy = StockStrategyEngine()
 
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60  # seconds
-RATE_LIMIT_MAX = 100
+RATE_LIMIT_MAX = 500  # raised from 100 — our own frontend is the main consumer
+_EXEMPT_IPS = {"127.0.0.1", "::1", "localhost"}
 
 
 async def rate_limit_middleware(request: Request, call_next):
     ip = request.client.host if request.client else "unknown"
+
+    # Skip rate limiting for localhost / internal health checks
+    if ip in _EXEMPT_IPS:
+        return await call_next(request)
+
     now = time.time()
 
     # Clean old entries
@@ -114,6 +120,7 @@ async def rate_limit_middleware(request: Request, call_next):
         return JSONResponse(
             status_code=429,
             content={"message": "Too many requests. Please try again later."},
+            headers={"Retry-After": "10"},
         )
 
     _rate_limit_store[ip].append(now)

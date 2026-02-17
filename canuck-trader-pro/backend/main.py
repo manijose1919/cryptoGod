@@ -3,12 +3,14 @@ Canuck-Trader-Pro - Main Entry Point
 Orchestrates: market data → 25 strategies → local ML → risk management → ZMQ broadcast.
 Now also runs FastAPI HTTP server for the React frontend.
 """
+import datetime
 import json
 import logging
 import signal
 import sys
 import time
 import threading
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -148,15 +150,15 @@ class CanuckTrader:
         self._thread_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="pair-analysis")  # KVM8: 8 threads
 
         # Adaptive confidence threshold (learned from performance)
-        self._adaptive_conf_threshold = config.MIN_CONFIDENCE if hasattr(config, 'MIN_CONFIDENCE') else 40
+        self._adaptive_conf_threshold = getattr(config, 'LEARNING_MIN_CONFIDENCE', 15)
         self._conf_threshold_history: list = []  # (threshold, win_rate) pairs
 
         # Regime-strategy mapping
         self._regime_strategy_map = {
             "UPTREND": {"EMA_CROSSOVER", "TRIPLE_EMA", "MACD", "ADX_TREND", "SUPERTREND", "MOMENTUM_ROC", "VWAP", "ICHIMOKU"},
-            "DOWNTREND": {"RSI", "STOCH_RSI", "WILLIAMS_R", "CCI", "MEAN_REVERT", "RSI_DIVERGENCE", "MACD_DIVERGENCE", "ENGULFING"},
-            "SIDEWAYS": {"BOLLINGER", "KELTNER", "DONCHIAN", "VOL_SQUEEZE", "MEAN_REVERT", "PIVOT_POINTS", "ATR_BREAKOUT"},
-            "HIGH_VOL": {"ATR_BREAKOUT", "DONCHIAN", "VOL_SPIKE", "MOMENTUM_ROC", "ENGULFING"},
+            "DOWNTREND": {"RSI", "STOCH_RSI", "WILLIAMS_R", "CCI", "MEAN_REVERT", "ENGULFING"},
+            "SIDEWAYS": {"BOLLINGER", "KELTNER", "DONCHIAN", "VOL_SQUEEZE", "MEAN_REVERT", "PIVOT_POINTS"},
+            "HIGH_VOL": {"DONCHIAN", "VOL_SPIKE", "MOMENTUM_ROC", "ENGULFING"},
             "LOW_VOL": {"BOLLINGER", "KELTNER", "VOL_SQUEEZE", "MEAN_REVERT", "VWAP"},
         }
 
@@ -167,7 +169,7 @@ class CanuckTrader:
         circuit_breaker.set_daily_balance(config.STARTING_BALANCE)
         beast_mode.set_session_balance(config.STARTING_BALANCE)
 
-        self.paused = False
+        self.paused = True  # Always start paused — wait for user to click "Start"
         self.cycle_count = 0
         self.start_time = time.time()
         self.trades_today = 0
@@ -192,7 +194,7 @@ class CanuckTrader:
                             f"{restore_result['positions_restored']} positions, "
                             f"{restore_result['age_hours']:.1f}h old")
                 if restore_result.get("was_active"):
-                    logger.info("Previous session was active - auto-resuming bot")
+                    logger.info("Previous session was active - waiting for user to click Start")
             else:
                 logger.info(f"No session to restore: {restore_result.get('reason', 'unknown')}")
         except Exception as e:
@@ -394,7 +396,7 @@ class CanuckTrader:
 
         # 1b. Regime-based strategy filtering — disable strategies bad for current regime
         try:
-            regime_info = self.regime.detect(df)
+            regime_info = self.regime.detect(symbol, df)
             current_regime = regime_info.get("regime", "SIDEWAYS")
             allowed_strategies = self._regime_strategy_map.get(current_regime, set())
             if allowed_strategies:
@@ -425,15 +427,32 @@ class CanuckTrader:
         action = ai_result["action"]
         confidence = ai_result["confidence"]
 
+        # Debug: Log AI decision for every pair (track why nothing trades)
+        logger.info(f"[AI] {symbol} → {action} conf={confidence} "
+                    f"buy={raw_consensus['buy_count']} sell={raw_consensus['sell_count']} "
+                    f"hold={raw_consensus['hold_count']} regime={current_regime}")
+
+        # ── Save pre-chain confidence (chain can only subtract up to 25 points) ──
+        pre_chain_confidence = confidence
+
+        # 5-early. Compute asset intelligence (needed by step 4k and later)
+        asset_intel = self._compute_asset_intel(symbol, df)
+
         # 4. Apply MLOFI confidence adjustment
-        mlofi_adj = self.mlofi.get_confidence_adjustment(symbol, action)
-        if mlofi_adj != 0:
-            confidence = max(0, min(95, confidence + mlofi_adj))
+        try:
+            mlofi_adj = self.mlofi.get_confidence_adjustment(symbol, action)
+            if mlofi_adj != 0:
+                confidence = max(0, min(95, confidence + mlofi_adj))
+        except Exception as e:
+            logger.debug(f"[CHAIN-4] MLOFI error {symbol}: {e}")
 
         # 4b. Apply liquidation proximity adjustment
-        liq_adj = self.liquidation.get_confidence_adjustment(symbol, action)
-        if liq_adj != 0:
-            confidence = max(0, min(95, confidence + liq_adj))
+        try:
+            liq_adj = self.liquidation.get_confidence_adjustment(symbol, action)
+            if liq_adj != 0:
+                confidence = max(0, min(95, confidence + liq_adj))
+        except Exception as e:
+            logger.debug(f"[CHAIN-4b] Liquidation error {symbol}: {e}")
 
         # 4c. Apply sentiment adjustment
         try:
@@ -452,9 +471,12 @@ class CanuckTrader:
             logger.debug(f"Sentiment fetch error for {symbol}: {e}")
 
         # 4d. Apply derivatives pressure adjustment
-        deriv_adj = self.derivatives.get_confidence_adjustment(symbol, action)
-        if deriv_adj != 0:
-            confidence = max(0, min(95, confidence + deriv_adj))
+        try:
+            deriv_adj = self.derivatives.get_confidence_adjustment(symbol, action)
+            if deriv_adj != 0:
+                confidence = max(0, min(95, confidence + deriv_adj))
+        except Exception as e:
+            logger.debug(f"[CHAIN-4d] Derivatives error {symbol}: {e}")
         # Feed funding rate to carry service
         try:
             deriv_data = self.derivatives.get_pressure(symbol)
@@ -465,23 +487,36 @@ class CanuckTrader:
             pass
 
         # 4e. Regime detection for strategy filtering
-        regime_data = self.regime.detect(symbol, df)
+        try:
+            regime_data = self.regime.detect(symbol, df)
+        except Exception as e:
+            regime_data = {}
+            logger.debug(f"[CHAIN-4e] Regime detect error {symbol}: {e}")
 
         # 4f. VPIN toxic flow detection
-        self.vpin.initialize_from_candles(symbol, df.tail(50))
-        vpin_adj = self.vpin.get_confidence_adjustment(symbol, action)
-        if vpin_adj != 0:
-            confidence = max(0, min(95, confidence + vpin_adj))
+        try:
+            self.vpin.initialize_from_candles(symbol, df.tail(50))
+            vpin_adj = self.vpin.get_confidence_adjustment(symbol, action)
+            if vpin_adj != 0:
+                confidence = max(0, min(95, confidence + vpin_adj))
+        except Exception as e:
+            logger.debug(f"[CHAIN-4f] VPIN error {symbol}: {e}")
 
         # 4g. Multi-timeframe confluence
-        mtf_adj = self.mtf.get_confidence_adjustment(symbol, action, df)
-        if mtf_adj != 0:
-            confidence = max(0, min(95, confidence + mtf_adj))
+        try:
+            mtf_adj = self.mtf.get_confidence_adjustment(symbol, action, df)
+            if mtf_adj != 0:
+                confidence = max(0, min(95, confidence + mtf_adj))
+        except Exception as e:
+            logger.debug(f"[CHAIN-4g] MTF error {symbol}: {e}")
 
         # 4h. Time-of-day filter
-        time_adj = get_combined_time_adjustment()
-        if time_adj["total_adjustment"] != 0:
-            confidence = max(0, min(95, confidence + time_adj["total_adjustment"]))
+        try:
+            time_adj = get_combined_time_adjustment()
+            if time_adj["total_adjustment"] != 0:
+                confidence = max(0, min(95, confidence + time_adj["total_adjustment"]))
+        except Exception as e:
+            logger.debug(f"[CHAIN-4h] Time-of-day error {symbol}: {e}")
 
         # 4i. Signal scanner cross-check (multi-indicator confluence)
         try:
@@ -495,9 +530,12 @@ class CanuckTrader:
             pass
 
         # 4j. Anomaly detection (Isolation Forest)
-        anomaly_adj = self.anomaly.get_confidence_adjustment(symbol, action, df)
-        if anomaly_adj != 0:
-            confidence = max(0, min(95, confidence + anomaly_adj))
+        try:
+            anomaly_adj = self.anomaly.get_confidence_adjustment(symbol, action, df)
+            if anomaly_adj != 0:
+                confidence = max(0, min(95, confidence + anomaly_adj))
+        except Exception as e:
+            logger.debug(f"[CHAIN-4j] Anomaly error {symbol}: {e}")
 
         # 4j0. Volatility breakout filter (ATR expansion/compression)
         try:
@@ -569,13 +607,16 @@ class CanuckTrader:
             pass
 
         # 4k. Mean reversion after extreme moves (>3% in 12 candles = 1h on 5m)
-        if len(df) >= 13:
-            ret_1h = (df["close"].iloc[-1] - df["close"].iloc[-13]) / df["close"].iloc[-13]
-            rsi_val = asset_intel.get("rsi", 50)
-            if ret_1h < -0.03 and rsi_val < 30 and action == "BUY":
-                confidence = min(95, confidence + 10)
-            elif ret_1h > 0.03 and rsi_val > 70 and action == "SELL":
-                confidence = min(95, confidence + 10)
+        try:
+            if len(df) >= 13:
+                ret_1h = (df["close"].iloc[-1] - df["close"].iloc[-13]) / df["close"].iloc[-13]
+                rsi_val = asset_intel.get("rsi", 50)
+                if ret_1h < -0.03 and rsi_val < 30 and action == "BUY":
+                    confidence = min(95, confidence + 10)
+                elif ret_1h > 0.03 and rsi_val > 70 and action == "SELL":
+                    confidence = min(95, confidence + 10)
+        except Exception as e:
+            logger.debug(f"[CHAIN-4k] Mean reversion error {symbol}: {e}")
 
         # 4l. Relative strength / anti-correlation boost
         try:
@@ -714,8 +755,15 @@ class CanuckTrader:
         except Exception:
             pass
 
-        # 5. Asset intelligence
-        asset_intel = self._compute_asset_intel(symbol, df)
+        # 5. Asset intelligence (already computed above step 4)
+
+        # ── Cap chain damage: don't let 24 adjustments destroy strong signals ──
+        # The chain can only subtract up to 25 points from the AI's original confidence.
+        # Without this, AI=85 gets butchered to 13 by 24 steps each subtracting a bit.
+        chain_damage = pre_chain_confidence - confidence
+        if chain_damage > 25:
+            confidence = max(confidence, pre_chain_confidence - 25)
+            logger.debug(f"[CHAIN-CAP] {symbol}: chain tried to subtract {chain_damage:.0f}, capped at -25 (restored to {confidence:.0f})")
 
         # Build per-strategy breakdown for scanner
         strategy_breakdown = []
@@ -759,8 +807,99 @@ class CanuckTrader:
 
         # Maybe open a trade (adaptive threshold)
         effective_threshold = max(self._adaptive_conf_threshold, config.MIN_SIGNAL_CONFIDENCE)
+
+        # Debug: Log EVERY evaluation (including HOLD) to diagnose no-trade issue
+        logger.info(f"[GATE] {symbol} {action} conf={confidence:.0f} thr={effective_threshold} "
+                    f"{'>>> PASS <<<' if (action != 'HOLD' and confidence >= effective_threshold) else 'skip'}")
+
         if action == "HOLD" or confidence < effective_threshold:
             return scan_entry
+
+        # ── QUALITY FILTERS (only take trades with a real edge) ──────────
+
+        # Filter -1: TIME-OF-DAY — no new trades during low-liquidity hours (2-8 AM UTC)
+        utc_hour = datetime.datetime.now(datetime.timezone.utc).hour
+        quiet_start = getattr(config, "QUIET_HOURS_START", 2)
+        quiet_end = getattr(config, "QUIET_HOURS_END", 8)
+        if quiet_start <= utc_hour < quiet_end:
+            logger.info(f"[FILTER-TOD] {symbol} {action} BLOCKED: quiet hours ({utc_hour}:00 UTC, block {quiet_start}-{quiet_end} UTC)")
+            return scan_entry
+
+        # Filter 0: ONLY TRADE TRENDING MARKETS
+        # Only TRENDING_UP and TRENDING_DOWN have directional edge
+        # VOLATILE uses half size but is allowed
+        if current_regime in ("SIDEWAYS", "RANGING", "UNKNOWN"):
+            logger.info(f"[FILTER-0] {symbol} {action} BLOCKED: regime={current_regime} (no directional edge)")
+            return scan_entry
+
+        # Filter 1: Strong directional consensus — need 5+ aligned strategies, net advantage >= 3
+        buy_c = raw_consensus["buy_count"]
+        sell_c = raw_consensus["sell_count"]
+        min_directional = 5  # need at least 5 strategies agreeing
+        min_net = 3          # net advantage must be >= 3
+        if action == "BUY":
+            net_advantage = buy_c - sell_c
+            if buy_c < min_directional or net_advantage < min_net:
+                logger.info(f"[FILTER-1] {symbol} BUY BLOCKED: buy={buy_c} sell={sell_c} net={net_advantage} (need {min_directional}+ buy, net {min_net}+)")
+                return scan_entry
+        if action == "SELL":
+            net_advantage = sell_c - buy_c
+            if sell_c < min_directional or net_advantage < min_net:
+                logger.info(f"[FILTER-1] {symbol} SELL BLOCKED: sell={sell_c} buy={buy_c} net={net_advantage} (need {min_directional}+ sell, net {min_net}+)")
+                return scan_entry
+
+        # Filter 2: Regime-direction alignment (no counter-trend trades)
+        if current_regime == "TRENDING_UP" and action == "SELL":
+            logger.info(f"[FILTER-2] {symbol} SELL BLOCKED: counter-trend (regime=TRENDING_UP)")
+            return scan_entry
+        if current_regime == "TRENDING_DOWN" and action == "BUY":
+            logger.info(f"[FILTER-2] {symbol} BUY BLOCKED: counter-trend (regime=TRENDING_DOWN)")
+            return scan_entry
+
+        # Filter 3: Loss cooldown (skip pair for 10 min after 2 consecutive losses)
+        if not hasattr(self, '_pair_loss_tracker'):
+            self._pair_loss_tracker = {}  # {symbol: {"consecutive": int, "last_loss_time": float}}
+        loss_info = self._pair_loss_tracker.get(symbol, {})
+        if loss_info.get("consecutive", 0) >= 2:
+            cooldown_remaining = 600 - (time.time() - loss_info.get("last_loss_time", 0))
+            if cooldown_remaining > 0:
+                logger.debug(f"[FILTER] {symbol} skipped: loss cooldown ({cooldown_remaining:.0f}s remaining)")
+                return scan_entry
+            else:
+                self._pair_loss_tracker[symbol] = {"consecutive": 0, "last_loss_time": 0}
+
+        # Filter 4: Max 2 concurrent positions (concentrate capital on best setups)
+        if len(self.risk.positions) >= 2:
+            return scan_entry
+
+        # Filter 5: RSI confirmation (don't buy overbought or sell oversold)
+        try:
+            rsi_val = asset_intel.get("rsi", 50)
+            if action == "BUY" and rsi_val > 70:
+                logger.info(f"[FILTER-5] {symbol} BUY BLOCKED: overbought RSI={rsi_val:.0f}")
+                return scan_entry
+            if action == "SELL" and rsi_val < 30:
+                logger.info(f"[FILTER-5] {symbol} SELL BLOCKED: oversold RSI={rsi_val:.0f}")
+                return scan_entry
+        except Exception:
+            pass
+
+        # Filter 6: Pullback entry (enter on dips in uptrend, bounces in downtrend)
+        # Don't chase price — wait for a 2-3 candle pullback within the trend
+        try:
+            if len(df) >= 5:
+                last3_ret = (df["close"].iloc[-1] - df["close"].iloc[-4]) / df["close"].iloc[-4] * 100
+                if action == "BUY" and last3_ret > 0.5:
+                    # Price already surged +0.5% in last 3 candles — chasing, not a pullback
+                    logger.info(f"[FILTER-6] {symbol} BUY BLOCKED: chasing +{last3_ret:.2f}% (wait for pullback)")
+                    return scan_entry
+                if action == "SELL" and last3_ret < -0.5:
+                    # Price already dropped -0.5% in last 3 candles — chasing
+                    logger.info(f"[FILTER-6] {symbol} SELL BLOCKED: chasing {last3_ret:.2f}% (wait for bounce)")
+                    return scan_entry
+        except Exception:
+            pass
+
         if not self.risk.can_open_position(symbol):
             return scan_entry
 
@@ -795,7 +934,7 @@ class CanuckTrader:
         candle_dicts = [{"h": r["high"], "l": r["low"], "c": r["close"], "v": r.get("volume", 0)} for _, r in df.tail(50).iterrows()]
         beast_targets = beast_mode.get_dynamic_targets(candle_dicts)
         stop_price = self.risk.atr_stop_loss(df, entry_price, side=action)
-        target_price = self.risk.atr_take_profit(df, entry_price, side=action)
+        target_price = self.risk.atr_take_profit(df, entry_price, side=action, rr_ratio=3.0)
         # Use beast mode targets if they are tighter/better
         beast_stop = entry_price * (1 - beast_targets["stop_loss_pct"] / 100) if action == "BUY" else entry_price * (1 + beast_targets["stop_loss_pct"] / 100)
         beast_target = entry_price * (1 + beast_targets["take_profit_pct"] / 100) if action == "BUY" else entry_price * (1 - beast_targets["take_profit_pct"] / 100)
@@ -813,6 +952,11 @@ class CanuckTrader:
         position_usd *= size_mult
         # Apply adaptive strategy weight sizing
         top_signal = raw_consensus.get("top_signal", {}).get("name", "") if raw_consensus.get("top_signal") else ""
+        # Block disabled strategies
+        disabled = getattr(config, "DISABLED_STRATEGIES", set())
+        if top_signal in disabled:
+            logger.info(f"[FILTER] {symbol} BLOCKED: strategy {top_signal} is disabled")
+            return scan_entry
         if top_signal and not adaptive_weights.is_strategy_throttled(top_signal):
             position_usd = adaptive_weights.adjust_position_size(top_signal, position_usd, self.risk.balance)
         elif top_signal and adaptive_weights.is_strategy_throttled(top_signal):
@@ -914,6 +1058,11 @@ class CanuckTrader:
             if df is None:
                 continue
 
+            # ── MINIMUM HOLD TIME: let trades breathe before exits fire ──
+            hold_seconds = time.time() - pos.get("open_time", time.time())
+            if hold_seconds < 300:  # 5 minutes minimum hold before service exits can trigger
+                continue
+
             exit_reasons = []
 
             # VPIN toxic flow exit
@@ -970,7 +1119,7 @@ class CanuckTrader:
             try:
                 smart_exit_signals = self.smart_exits_svc.check_exits(symbol, pos, df, price)
                 for se in smart_exit_signals:
-                    if se.get("should_exit") and se.get("urgency", 0) >= 6:
+                    if se.get("should_exit") and se.get("urgency", 0) >= 8:
                         exit_reasons.append(f"SMART_{se['type']}")
                 # Update trailing stop from smart exits
                 trail_stop = self.smart_exits_svc.get_trailing_stop(symbol, pos, df)
@@ -985,16 +1134,29 @@ class CanuckTrader:
             # If any exit reason triggered, close position
             if exit_reasons:
                 reason = "+".join(exit_reasons)
-                self.risk.close_position(symbol, price, reason=reason)
+                result = self.risk.close_position(symbol, price, reason=reason)
                 self.zmq.publish_log("WARN", f"SERVICE EXIT {symbol}: {reason}")
+                # Track loss for cooldown
+                if result and not hasattr(self, '_pair_loss_tracker'):
+                    self._pair_loss_tracker = {}
+                if result:
+                    if result["pnl_pct"] < 0:
+                        info = self._pair_loss_tracker.get(symbol, {"consecutive": 0, "last_loss_time": 0})
+                        info["consecutive"] = info["consecutive"] + 1
+                        info["last_loss_time"] = time.time()
+                        self._pair_loss_tracker[symbol] = info
+                    else:
+                        self._pair_loss_tracker[symbol] = {"consecutive": 0, "last_loss_time": 0}
                 self.telegram.alert_trade_exit({
-                    "symbol": symbol, "pnl_pct": 0, "pnl_usd": 0, "reason": reason
+                    "symbol": symbol,
+                    "pnl_pct": result["pnl_pct"] if result else 0,
+                    "pnl_usd": result["pnl_usd"] if result else 0,
+                    "reason": reason,
                 })
 
     def _run_nightly_tasks(self, all_data: dict):
         """Run hyperopt + walk-forward + DB maintenance once per day (at ~00:00 UTC)."""
-        import datetime
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         if now.hour != 0 or (time.time() - self._last_nightly_run) < 82800:  # 23 hours min gap
             return
 
@@ -1062,6 +1224,17 @@ class CanuckTrader:
             circuit_breaker.record_trade_result(pnl_pct / 100, top_signal, trade["symbol"])
             beast_mode.record_trade_result(pnl_pct / 100, trade["symbol"], top_signal)
             adaptive_weights.record_strategy_result(top_signal, pnl_pct / 100)
+            # Update loss cooldown tracker
+            if not hasattr(self, '_pair_loss_tracker'):
+                self._pair_loss_tracker = {}
+            sym = trade["symbol"]
+            if pnl_pct < 0:
+                info = self._pair_loss_tracker.get(sym, {"consecutive": 0, "last_loss_time": 0})
+                info["consecutive"] = info["consecutive"] + 1
+                info["last_loss_time"] = time.time()
+                self._pair_loss_tracker[sym] = info
+            else:
+                self._pair_loss_tracker[sym] = {"consecutive": 0, "last_loss_time": 0}
             # Meta-learner: record which strategy led to this outcome
             last_features = self.ai._last_features.get(trade["symbol"])
             if last_features is not None and top_signal:
@@ -1079,13 +1252,20 @@ class CanuckTrader:
             self.calibration.record_outcome(trade.get("confidence", 50), pnl_pct > 0)
             # Trade journal: record full trade with context
             try:
+                entry_p = trade.get("entry", 0)
+                exit_p = trade.get("exit_price", entry_p)
+                size_usd = trade.get("size_usd", 0)
+                qty = size_usd / entry_p if entry_p > 0 else 0
+                j_outcome = "WIN" if pnl_pct > 0 else ("LOSS" if pnl_pct < 0 else "BREAKEVEN")
                 self.journal.record_trade({
                     "ticker": trade["symbol"],
                     "strategy": top_signal,
-                    "entry_price": trade.get("entry", 0),
-                    "exit_price": trade.get("exit_price", trade.get("entry", 0)),
+                    "entry_price": entry_p,
+                    "exit_price": exit_p,
+                    "quantity": qty,
                     "pnl": trade.get("pnl_usd", 0),
                     "pnl_percent": pnl_pct,
+                    "outcome": j_outcome,
                     "confidence": trade.get("confidence", 50),
                     "regime": trade.get("regime", "UNKNOWN"),
                     "hold_duration_s": trade.get("hold_duration_min", 0) * 60,
@@ -1367,7 +1547,21 @@ class CanuckTrader:
                 if not self.paused:
                     self.run_cycle()
                 else:
-                    self.zmq.publish_log("INFO", "Paused - waiting for resume")
+                    # Still manage existing positions (stops/targets) while paused
+                    if self.risk.positions:
+                        try:
+                            prices = self.market.get_current_prices()
+                            if prices:
+                                self.zmq.publish_prices(prices)
+                                closed_trades = self.risk.check_stops(prices)
+                                for trade in closed_trades:
+                                    trade["ts"] = time.time()
+                                    self._last_trade = trade
+                                    self.zmq.publish_trade(trade)
+                                    self.zmq.publish_log("INFO", f"PAUSED EXIT: {trade['symbol']} {trade.get('exit_reason','stop')} PnL={trade.get('pnl_pct',0):.2f}%")
+                        except Exception as e:
+                            logger.debug(f"Paused position check failed: {e}")
+                    self.zmq.publish_log("INFO", "Paused - click Start to begin trading")
 
                 # Auto-save session state every 60 seconds
                 if time.time() - self._last_auto_save >= self._auto_save_interval:
@@ -1381,8 +1575,17 @@ class CanuckTrader:
                 interval = self.event_loop.current_interval
                 time.sleep(interval)
             except Exception as e:
-                logger.error(f"Main loop error: {e}", exc_info=True)
-                self.zmq.publish_log("ERROR", str(e))
+                tb = traceback.format_exc()
+                logger.error(f"CRITICAL LOOP ERROR: {e}\n{tb}")
+                self.zmq.publish_log("ERROR", f"Loop crash: {e}")
+                # Write to file as backup (PM2 logs can lose output)
+                try:
+                    import os as _os
+                    crash_log = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "loop_crash.log")
+                    with open(crash_log, "a") as f:
+                        f.write(f"\n{'='*60}\n{time.strftime('%Y-%m-%d %H:%M:%S')} LOOP ERROR:\n{tb}\n")
+                except Exception:
+                    pass
                 time.sleep(5)
 
     def _graceful_shutdown(self, signum=None, frame=None):

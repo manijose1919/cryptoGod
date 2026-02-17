@@ -70,6 +70,11 @@ async def api_create_trade_memory(request: Request):
     if not m.get("ticker") or not m.get("strategy"):
         raise HTTPException(400, "Missing required fields: ticker, strategy")
 
+    # Reject garbage sub-1-minute trades (prevents frontend churn from polluting ML data)
+    hold_dur = m.get("holdDuration", 0) or 0
+    if hold_dur < 1.0:  # less than 1 minute
+        raise HTTPException(422, "Trade too short: minimum 1 minute hold for ML training quality")
+
     conditions = m.get("marketConditions", {})
     indicators = m.get("indicators", {})
     row_id = insert_trade_memory({

@@ -64,6 +64,41 @@ async def get_market_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/market-data/batch")
+async def get_market_data_batch(
+    timeframe: str = Query("5m", description="Candle timeframe"),
+    count: int = Query(200, ge=1, le=1000),
+):
+    """Fetch candle data for ALL configured pairs in a single request.
+    Saves 8 HTTP round-trips vs fetching each pair individually.
+    """
+    trader = get_trader()
+    if not trader or not trader.market:
+        return {"pairs": {}, "timeframe": timeframe}
+
+    result = {}
+    for pair in config.PAIRS:
+        instrument = pair.replace("/", "_")
+        try:
+            df = trader.market.fetch_ohlcv(pair, timeframe, limit=count)
+            if df is not None and not df.empty:
+                candles = []
+                for _, row in df.iterrows():
+                    candles.append({
+                        "t": int(row["timestamp"].timestamp() * 1000) if hasattr(row["timestamp"], "timestamp") else int(row["timestamp"]),
+                        "o": row["open"],
+                        "h": row["high"],
+                        "l": row["low"],
+                        "c": row["close"],
+                        "v": row["volume"],
+                    })
+                result[instrument] = candles
+        except Exception:
+            result[instrument] = []
+
+    return {"pairs": result, "timeframe": timeframe}
+
+
 @router.get("/api/instruments")
 async def get_instruments():
     try:

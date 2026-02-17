@@ -16,6 +16,7 @@ import { TradeHistory } from './components/TradeHistory';
 import { SignalHeatMap } from './components/SignalHeatMap';
 import { AdaptiveDashboard } from './components/AdaptiveDashboard';
 import { AILearningPanel } from './components/AILearningPanel';
+import { ExchangeSelector } from './components/ExchangeSelector';
 import { AssetIntelligencePanel } from './components/AssetIntelligencePanel';
 import { VolatilityPanel } from './components/VolatilityPanel';
 import { RiskMetricsPanel } from './components/RiskMetricsPanel';
@@ -45,6 +46,7 @@ import {
     sma,
     ema,
     detectMarketRegime,
+    detectSlowMarket,
     detectGap,
     calculateDynamicParams,
     calculateSessionAnalytics,
@@ -112,7 +114,7 @@ import {
 import type {
     Candle, PortfolioState, Trade, WatchlistData, TradingStrategy,
     MTFData, ScannerInsights, SystemEvent, TradingMode, ApiCredentials,
-    Position, BotSettings, AdaptiveData, MultiAssetAnalysis
+    Position, BotSettings, AdaptiveData, MultiAssetAnalysis, SlowMarketResult
 } from './types';
 import {
     TIME_FRAMES_MAP,
@@ -127,7 +129,10 @@ import {
     MICRO_TRADING,
     SURGE_TRADING,
     PROFIT_METHODS,
-    TRADING_FEES
+    TRADING_FEES,
+    PARTIAL_EXIT,
+    SLOW_MARKET,
+    REGIME_STRATEGY_MAP
 } from './constants';
 import { getSurgeTradingDecision } from './services/surgeTradingService';
 import { processGrid } from './services/gridTradingService';
@@ -237,6 +242,13 @@ const App: React.FC = () => {
     const [onChainEnabled, setOnChainEnabled] = useState<boolean>(true);
     const [onChainSignals, setOnChainSignals] = useState<OnChainSignals | null>(null);
 
+    // Exchange State (Kraken/Crypto.com)
+    const [currentExchange, setCurrentExchange] = useState<string>('crypto.com');
+    const [currentExchangeFees, setCurrentExchangeFees] = useState<{ takerFee: number; roundTripFee: number }>({
+        takerFee: TRADING_FEES.TAKER_FEE_PERCENT,
+        roundTripFee: TRADING_FEES.ROUND_TRIP_FEE_PERCENT,
+    });
+
     // Risk Metrics & Kelly State (NEW)
     const [riskMetricsEnabled, setRiskMetricsEnabled] = useState<boolean>(true);
     const [riskMetrics, setRiskMetrics] = useState<RiskMetrics | null>(null);
@@ -271,6 +283,20 @@ const App: React.FC = () => {
     useEffect(() => {
         sessionDurationRef.current = sessionDurationMinutes;
     }, [sessionDurationMinutes]);
+
+    // Fetch current exchange info on mount
+    useEffect(() => {
+        fetch('/api/exchange/current')
+            .then(r => r.json())
+            .then(data => {
+                if (data.exchange) setCurrentExchange(data.exchange);
+                if (data.feePercent) setCurrentExchangeFees({
+                    takerFee: data.feePercent,
+                    roundTripFee: data.roundTripFeePercent || data.feePercent * 2,
+                });
+            })
+            .catch(() => { /* Backend not running yet, use defaults */ });
+    }, []);
 
     // ============================================
     // LOGGING HELPERS
@@ -1096,12 +1122,22 @@ const App: React.FC = () => {
             // --- SMART TRADING: Calculate Dynamic Parameters First ---
             let dynamicStopLossForExit = isMicroMode ? microStopLoss : stopLossPercent;
 
+            // Slow market detection (available to both exit and entry logic)
+            let isSlowMarket = false;
+            let slowMarketResult: SlowMarketResult = { isSlow: false, avgRange: 0, consecutiveSmallCandles: 0 };
+
             if (smartTradingEnabled) {
                 const primaryTicker = availableTickers.find(t => t.includes('BTC')) || availableTickers[0];
                 const primaryData = watchlistDataRef.current[primaryTicker];
 
                 if (primaryData && primaryData.candles.length > 20) {
                     const localRegime = detectMarketRegime(primaryData.candles);
+
+                    // Detect slow market
+                    if (SLOW_MARKET.ENABLED) {
+                        slowMarketResult = detectSlowMarket(primaryData.candles);
+                        isSlowMarket = slowMarketResult.isSlow;
+                    }
 
                     // Auto-detect slow market and suggest micro-trading
                     if (!microTradingEnabled && localRegime.volatility === 'LOW') {
@@ -1114,6 +1150,11 @@ const App: React.FC = () => {
                         dynamicStopLossForExit = (isMicroMode ? microStopLoss : stopLossPercent) * 1.5; // Wider stops in volatile markets
                     } else if (localRegime.volatility === 'LOW') {
                         dynamicStopLossForExit = (isMicroMode ? microStopLoss : stopLossPercent) * 0.75; // Tighter stops in calm markets
+                    }
+
+                    // Slow market overrides stop loss
+                    if (isSlowMarket) {
+                        dynamicStopLossForExit = SLOW_MARKET.STOP_LOSS_SLOW;
                     }
                 }
             }
@@ -1143,6 +1184,79 @@ const App: React.FC = () => {
 
                 let exitReason: string | null = null;
 
+                // ======== PARTIAL EXIT SYSTEM (3-stage) ========
+                if (PARTIAL_EXIT.ENABLED && (updatedPosition.exitStage ?? 0) < 3 && updatedPosition.originalQuantity > 0) {
+                    const stage = updatedPosition.exitStage ?? 0;
+                    const origQty = updatedPosition.originalQuantity;
+
+                    // Stage 1: Sell 30% at +0.50% after fees
+                    if (stage === 0 && profitPercentAfterFees >= PARTIAL_EXIT.STAGE_1_TARGET) {
+                        const sellQty = origQty * (PARTIAL_EXIT.STAGE_1_PERCENT / 100);
+                        if (sellQty > 0 && updatedPosition.quantity > sellQty) {
+                            const sellValue = sellQty * currentPrice;
+                            const sellFee = sellValue * TRADING_FEES.TAKER_FEE_PERCENT / 100;
+                            const partialPnl = (currentPrice - updatedPosition.openPrice) * sellQty -
+                                (updatedPosition.openPrice * sellQty * TRADING_FEES.TAKER_FEE_PERCENT / 100) - sellFee;
+
+                            updatedPosition.quantity -= sellQty;
+                            updatedPosition.exitStage = 1;
+                            currentPortfolio.cash += sellValue - sellFee;
+
+                            addLog(
+                                `[PARTIAL-1] SELL ${sellQty.toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${currentPrice.toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)} (30% of position). PnL: $${partialPnl.toFixed(2)} (+${profitPercentAfterFees.toFixed(2)}%)`,
+                                'SELL'
+                            );
+                            addTrade({
+                                type: 'SELL', price: currentPrice, quantity: sellQty,
+                                ticker: positionTicker, strategy: updatedPosition.entryStrategy,
+                                reason: `[PARTIAL-1] +${profitPercentAfterFees.toFixed(2)}% after fees`, pnl: partialPnl
+                            });
+                        }
+                    }
+
+                    // Stage 2: Sell 40% at +1.50% after fees
+                    if (stage === 1 && profitPercentAfterFees >= PARTIAL_EXIT.STAGE_2_TARGET) {
+                        const sellQty = origQty * (PARTIAL_EXIT.STAGE_2_PERCENT / 100);
+                        if (sellQty > 0 && updatedPosition.quantity > sellQty) {
+                            const sellValue = sellQty * currentPrice;
+                            const sellFee = sellValue * TRADING_FEES.TAKER_FEE_PERCENT / 100;
+                            const partialPnl = (currentPrice - updatedPosition.openPrice) * sellQty -
+                                (updatedPosition.openPrice * sellQty * TRADING_FEES.TAKER_FEE_PERCENT / 100) - sellFee;
+
+                            updatedPosition.quantity -= sellQty;
+                            updatedPosition.exitStage = 2;
+                            currentPortfolio.cash += sellValue - sellFee;
+
+                            addLog(
+                                `[PARTIAL-2] SELL ${sellQty.toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${currentPrice.toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)} (40% of position). PnL: $${partialPnl.toFixed(2)} (+${profitPercentAfterFees.toFixed(2)}%)`,
+                                'SELL'
+                            );
+                            addTrade({
+                                type: 'SELL', price: currentPrice, quantity: sellQty,
+                                ticker: positionTicker, strategy: updatedPosition.entryStrategy,
+                                reason: `[PARTIAL-2] +${profitPercentAfterFees.toFixed(2)}% after fees`, pnl: partialPnl
+                            });
+                        }
+                    }
+
+                    // Stage 3: Tightening trailing stop on remaining 30%
+                    if (stage === 2 && profitPercentAfterFees >= PARTIAL_EXIT.STAGE_3_TRAILING_START) {
+                        // Interpolate trailing stop: starts at STAGE_3_TRAILING_START, tightens to STAGE_3_TRAILING_TIGHT
+                        const profitAboveStart = profitPercentAfterFees - PARTIAL_EXIT.STAGE_3_TRAILING_START;
+                        const tightenFactor = Math.min(1, profitAboveStart / 3); // Fully tight at +4.5% profit
+                        const trailingPct = PARTIAL_EXIT.STAGE_3_TRAILING_START -
+                            tightenFactor * (PARTIAL_EXIT.STAGE_3_TRAILING_START - PARTIAL_EXIT.STAGE_3_TRAILING_TIGHT);
+
+                        const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
+                        if (dropFromHigh >= trailingPct) {
+                            exitReason = `[PARTIAL-3] Trailing stop on remaining 30%: dropped ${dropFromHigh.toFixed(2)}% from high (trail: ${trailingPct.toFixed(2)}%)`;
+                        }
+                    }
+
+                    // Update the position in the portfolio after partial sells
+                    currentPortfolio.positions[positionTicker] = updatedPosition;
+                }
+
                 // MICRO-TRADING: Quick profit exits
                 if (isMicroMode) {
                     // Take quick profits in micro mode (fee-adjusted)
@@ -1158,6 +1272,18 @@ const App: React.FC = () => {
                         const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
                         if (dropFromHigh >= microTrailingStop) {
                             exitReason = `[MICRO] Trailing stop: dropped ${dropFromHigh.toFixed(3)}% from high`;
+                        }
+                    }
+                }
+
+                // SLOW MARKET: Use adjusted targets/stops in slow markets
+                if (!exitReason && isSlowMarket && !isMicroMode) {
+                    if (profitPercentAfterFees >= SLOW_MARKET.PROFIT_TARGET_SLOW) {
+                        exitReason = `[SLOW-MKT] Profit target: +${profitPercentAfterFees.toFixed(3)}% (target: ${SLOW_MARKET.PROFIT_TARGET_SLOW}%)`;
+                    } else {
+                        const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
+                        if (profitPercentAfterFees > 0 && dropFromHigh >= SLOW_MARKET.TRAILING_STOP_SLOW) {
+                            exitReason = `[SLOW-MKT] Trailing stop: dropped ${dropFromHigh.toFixed(2)}% from high`;
                         }
                     }
                 }
@@ -1449,9 +1575,12 @@ const App: React.FC = () => {
 
                             const isDipBuySignal = surgeDecision.strategy === 'DIP_BUY';
 
-                            // Block non-dip entries at overbought/resistance
-                            if ((isOverbought || atResistance) && !isDipBuySignal) {
-                                // Skip - FOMO protection
+                            // Slow market: only allow DIP_BUY surges
+                            const slowMarketBlocked = isSlowMarket && !isDipBuySignal;
+
+                            // Block non-dip entries at overbought/resistance or in slow markets
+                            if (((isOverbought || atResistance) && !isDipBuySignal) || slowMarketBlocked) {
+                                // Skip - FOMO protection / slow market filter
                             } else {
                                 // Map surge strategy to trading strategy
                                 switch (surgeDecision.strategy) {
@@ -1504,15 +1633,12 @@ const App: React.FC = () => {
                             ? [regime.recommendedStrategy, ...Object.keys(DEFAULT_PROFIT_GOALS) as TradingStrategy[]]
                             : [...Object.keys(DEFAULT_PROFIT_GOALS) as TradingStrategy[]];
 
-                        // Feature 6: Regime-aware strategy filtering
-                        const regimeLabel = regime?.regime || regime?.tradingCondition || 'UNKNOWN';
-                        const REGIME_STRATEGY_MAP: Record<string, TradingStrategy[]> = {
-                            'UPTREND': ['TREND', 'MOMENTUM', 'BREAKOUT', 'MA_CROSSOVER', 'ADAPTIVE', 'CONFLUENCE'],
-                            'SIDEWAYS': ['RANGE', 'MEAN_REVERSION', 'BREAKOUT', 'ADAPTIVE', 'CONFLUENCE'],
-                            'DOWNTREND': ['REVERSAL', 'MEAN_REVERSION', 'DIVERGENCE', 'ADAPTIVE'],
-                            'VOLATILE': ['BREAKOUT', 'MOMENTUM', 'ADAPTIVE', 'DIVERGENCE'],
-                        };
-                        const allowedForRegime = REGIME_STRATEGY_MAP[regimeLabel.toUpperCase()] || allStrategies;
+                        // Regime-aware strategy filtering using imported map
+                        // Slow market overrides regime filtering with its own allowed set
+                        const regimeTrend = regime?.trend || 'SIDEWAYS';
+                        const allowedForRegime: readonly string[] = isSlowMarket
+                            ? SLOW_MARKET.ALLOWED_STRATEGIES
+                            : (REGIME_STRATEGY_MAP[regimeTrend] || allStrategies);
                         const prioritizedStrategies = allStrategies.filter(s => allowedForRegime.includes(s));
 
                         for (const strat of prioritizedStrategies) {
@@ -1809,7 +1935,9 @@ const App: React.FC = () => {
                                 entryStrategy,
                                 entryTime: Date.now(),
                                 highestPrice: currentPrice,
-                                lowestPrice: currentPrice
+                                lowestPrice: currentPrice,
+                                exitStage: 0,
+                                originalQuantity: quantity
                             };
 
                             const buyFee = investmentAmount * TRADING_FEES.TAKER_FEE_PERCENT / 100;
@@ -1853,7 +1981,7 @@ const App: React.FC = () => {
                                     cash: currentPortfolio.cash - gridAmount,
                                     positions: {
                                         ...currentPortfolio.positions,
-                                        [gridTicker]: { quantity: qty, openPrice: gridPrice, ticker: gridTicker, entryStrategy: 'ADAPTIVE' as TradingStrategy, entryTime: Date.now(), highestPrice: gridPrice, lowestPrice: gridPrice }
+                                        [gridTicker]: { quantity: qty, openPrice: gridPrice, ticker: gridTicker, entryStrategy: 'ADAPTIVE' as TradingStrategy, entryTime: Date.now(), highestPrice: gridPrice, lowestPrice: gridPrice, exitStage: 0, originalQuantity: qty }
                                     }
                                 };
                             }
@@ -1891,7 +2019,7 @@ const App: React.FC = () => {
                                 cash: currentPortfolio.cash - dcaSignal.amount,
                                 positions: {
                                     ...currentPortfolio.positions,
-                                    [dcaTicker]: { quantity: dcaQty, openPrice: dcaPrice, ticker: dcaTicker, entryStrategy: 'CONFLUENCE' as TradingStrategy, entryTime: Date.now(), highestPrice: dcaPrice, lowestPrice: dcaPrice }
+                                    [dcaTicker]: { quantity: dcaQty, openPrice: dcaPrice, ticker: dcaTicker, entryStrategy: 'CONFLUENCE' as TradingStrategy, entryTime: Date.now(), highestPrice: dcaPrice, lowestPrice: dcaPrice, exitStage: 0, originalQuantity: dcaQty }
                                 }
                             };
                         } else {
@@ -1957,7 +2085,7 @@ const App: React.FC = () => {
                                 cash: currentPortfolio.cash - arbAmount,
                                 positions: {
                                     ...currentPortfolio.positions,
-                                    [opp.buyTicker]: { quantity: arbQty, openPrice: buyPrice, ticker: opp.buyTicker, entryStrategy: 'MOMENTUM' as TradingStrategy, entryTime: Date.now(), highestPrice: buyPrice, lowestPrice: buyPrice }
+                                    [opp.buyTicker]: { quantity: arbQty, openPrice: buyPrice, ticker: opp.buyTicker, entryStrategy: 'MOMENTUM' as TradingStrategy, entryTime: Date.now(), highestPrice: buyPrice, lowestPrice: buyPrice, exitStage: 0, originalQuantity: arbQty }
                                 }
                             };
                         }
@@ -1998,7 +2126,7 @@ const App: React.FC = () => {
                                 cash: currentPortfolio.cash - pairAmount,
                                 positions: {
                                     ...currentPortfolio.positions,
-                                    [signal.longTicker]: { quantity: pairQty, openPrice: longPrice, ticker: signal.longTicker, entryStrategy: 'DIVERGENCE' as TradingStrategy, entryTime: Date.now(), highestPrice: longPrice, lowestPrice: longPrice }
+                                    [signal.longTicker]: { quantity: pairQty, openPrice: longPrice, ticker: signal.longTicker, entryStrategy: 'DIVERGENCE' as TradingStrategy, entryTime: Date.now(), highestPrice: longPrice, lowestPrice: longPrice, exitStage: 0, originalQuantity: pairQty }
                                 }
                             };
                         }
@@ -2055,7 +2183,7 @@ const App: React.FC = () => {
                                     cash: currentPortfolio.cash - swingAmount,
                                     positions: {
                                         ...currentPortfolio.positions,
-                                        [swingTicker]: { quantity: swingQty, openPrice: swingPrice, ticker: swingTicker, entryStrategy: 'ADAPTIVE' as TradingStrategy, entryTime: Date.now(), highestPrice: swingPrice, lowestPrice: swingPrice }
+                                        [swingTicker]: { quantity: swingQty, openPrice: swingPrice, ticker: swingTicker, entryStrategy: 'ADAPTIVE' as TradingStrategy, entryTime: Date.now(), highestPrice: swingPrice, lowestPrice: swingPrice, exitStage: 0, originalQuantity: swingQty }
                                     }
                                 };
                             }
@@ -2255,6 +2383,13 @@ const App: React.FC = () => {
             <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 p-4">
                 {/* Left Column */}
                 <div className="lg:col-span-3 space-y-4">
+                    <ExchangeSelector
+                        currentExchange={currentExchange}
+                        onExchangeChange={(exchange, fees) => {
+                            setCurrentExchange(exchange);
+                            setCurrentExchangeFees(fees);
+                        }}
+                    />
                     <TradingControls
                         onStart={handleStartSimulation}
                         activeTicker={ticker}

@@ -55,11 +55,12 @@ FEE_ROUND_TRIP_PCT = 0.0015          # 0.15% round-trip fee
 BREAKEVEN_PROFIT_TRIGGER = 0.005     # Move stop to breakeven after +0.5%
 
 # Time-weighted exit schedule (seconds -> target multiplier)
+# Patient schedule: let trades work for 45+ min before decaying targets
 TIME_WEIGHTED_SCHEDULE = [
-    (0,        1.00),   # 0-15 min:  full target
-    (15 * 60,  0.75),   # 15-30 min: 75% of target
-    (30 * 60,  0.50),   # 30-60 min: 50% of target
-    (60 * 60,  0.00),   # 60 min+:   market exit (take whatever PnL)
+    (0,        1.00),   # 0-45 min:   full target (let trade work)
+    (45 * 60,  0.80),   # 45-90 min:  80% of target
+    (90 * 60,  0.50),   # 90-120 min: 50% of target
+    (120 * 60, 0.00),   # 120 min+:   market exit (take whatever PnL)
 ]
 
 # Partial take-profit tiers (fraction_of_target, fraction_of_position)
@@ -657,12 +658,16 @@ class SmartExits:
 
         elapsed_min = elapsed_s / 60.0
 
-        # 60 min+: market exit - take whatever PnL exists
+        # 60 min+: market exit ONLY if losing or breakeven (let winners run!)
         if active_mult == 0.0:
             if state.side == "BUY":
                 pnl_pct = (current_price - entry) / entry
             else:
                 pnl_pct = (entry - current_price) / entry
+
+            # If in profit, DON'T force exit — trailing stop will manage
+            if pnl_pct > FEE_ROUND_TRIP_PCT:
+                return None  # winner — let it run
 
             self._stats["time_weighted_exits"] += 1
             return {

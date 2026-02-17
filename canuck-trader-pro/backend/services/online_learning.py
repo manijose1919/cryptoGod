@@ -46,11 +46,11 @@ PRIORITY_BETA_START = 0.4   # Importance-sampling exponent (annealed to 1.0)
 PRIORITY_BETA_INCREMENT = 0.001
 PRIORITY_EPSILON = 1e-6     # Small constant so zero-error samples still get sampled
 
-# Curriculum phase boundaries
-PHASE_1_LIMIT = 200
-PHASE_2_LIMIT = 1_000
-PHASE_1_CONFIDENCE_MIN = 70
-PHASE_2_CONFIDENCE_MIN = 50
+# Curriculum phase boundaries (accelerated for paper trading data collection)
+PHASE_1_LIMIT = 10         # Was 200 — skip to phase 2 fast
+PHASE_2_LIMIT = 30         # Was 1000 — skip to phase 3 fast
+PHASE_1_CONFIDENCE_MIN = 10  # Was 70 — accept almost everything in phase 1
+PHASE_2_CONFIDENCE_MIN = 5   # Was 50 — accept everything in phase 2
 
 # Validation set fraction for curriculum auto-progression
 VALIDATION_FRACTION = 0.15

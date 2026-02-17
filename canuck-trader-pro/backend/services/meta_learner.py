@@ -95,7 +95,7 @@ class MetaLearner:
                         "probability": round(float(proba[idx]) * 100, 1),
                     })
 
-        best = top_3[0] if top_3 else {"strategy": "MULTI_CONSENSUS", "probability": 50}
+        best = top_3[0] if top_3 else {"strategy": "ADAPTIVE", "probability": 50}
 
         return {
             "strategy": best["strategy"],
@@ -120,7 +120,7 @@ class MetaLearner:
     def _heuristic_ranking(self) -> dict:
         """Fallback ranking based on observed performance."""
         if not self._strategy_performance:
-            return {"strategy": "MULTI_CONSENSUS", "confidence": 50, "top_3": [], "method": "default"}
+            return {"strategy": "ADAPTIVE", "confidence": 50, "top_3": [], "method": "default"}
 
         ranked = []
         for name, perf in self._strategy_performance.items():
@@ -130,7 +130,7 @@ class MetaLearner:
                 ranked.append((name, win_rate, perf["total_pnl"]))
 
         if not ranked:
-            return {"strategy": "MULTI_CONSENSUS", "confidence": 50, "top_3": [], "method": "default"}
+            return {"strategy": "ADAPTIVE", "confidence": 50, "top_3": [], "method": "default"}
 
         ranked.sort(key=lambda x: x[2], reverse=True)  # sort by total PnL
         top_3 = [{"strategy": r[0], "probability": round(r[1] * 100, 1)} for r in ranked[:3]]
