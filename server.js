@@ -1021,8 +1021,11 @@ app.post('/api/exchange/switch', (req, res) => {
 
         // Reconnect WebSocket to new exchange if changed
         if (prevExchange !== newId) {
-            reconnectWebSocketForExchange(availableTickers);
-            addLog(`[Exchange] Switched from ${prevExchange} to ${newId}, WebSocket reconnected`, 'INFO');
+            // Use Canadian-allowed tickers as fallback when availableTickers is empty (e.g. Kraken)
+            const FALLBACK_TICKERS = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
+            const tickers = availableTickers.length > 0 ? availableTickers : FALLBACK_TICKERS;
+            reconnectWebSocketForExchange(tickers);
+            addLog(`[Exchange] Switched from ${prevExchange} to ${newId}, WebSocket reconnected (${tickers.length} tickers)`, 'INFO');
         }
 
         res.json({
@@ -1941,7 +1944,9 @@ const startServer = async () => {
     }
 
     // Initialize WebSocket for the active exchange
-    initExchangeWebSocket(availableTickers, broadcastToFrontend);
+    const FALLBACK_TICKERS = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
+    const wsTickers = availableTickers.length > 0 ? availableTickers : FALLBACK_TICKERS;
+    initExchangeWebSocket(wsTickers, broadcastToFrontend);
 
     setInterval(updateAvailableTickers, CONFIG.TICKER_REFRESH_MS);
 
