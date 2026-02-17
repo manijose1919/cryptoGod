@@ -888,15 +888,11 @@ const handleBuy = async (ticker, price, strategy, reason, notional) => {
     addLog(`Triggering BUY for ${ticker} @ ${price}. Reason: [${strategy}] ${reason}`, 'BUY');
 
     try {
-        const orderResult = await makeSignedRequest('private/create-order', {
-            instrument_name: toInstrumentName(ticker),
-            side: 'BUY',
-            type: 'MARKET',
-            notional: notional.toFixed(2)
-        }, botState.sessionId);
+        const adapter = getExchangeAdapter();
+        const orderResult = await adapter.placeBuyOrder(ticker, notional, botState.sessionId);
 
-        const quantity = orderResult.order_info?.filled_quantity || (notional / price);
-        const avgPrice = orderResult.order_info?.avg_price || price;
+        const quantity = orderResult.quantity || (notional / price);
+        const avgPrice = orderResult.avgPrice || price;
 
         portfolio.positions[ticker] = {
             quantity: parseFloat(quantity),
@@ -922,33 +918,23 @@ const handleSell = async (position, price, reason) => {
     addLog(`Triggering SELL for ${position.ticker} @ ${price}. Reason: ${reason}`, 'SELL');
 
     try {
-        const instrument = toInstrumentName(position.ticker);
-        const specs = instrumentSpecs.get(instrument);
-        let decimals = specs ? specs.quantity_decimals : 2;
-        const factor = Math.pow(10, decimals);
-        const sellQty = (Math.floor(position.quantity * factor) / factor).toString();
+        const adapter = getExchangeAdapter();
+        const orderResult = await adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs);
 
-        const orderResult = await makeSignedRequest('private/create-order', {
-            instrument_name: instrument,
-            side: 'SELL',
-            type: 'MARKET',
-            quantity: sellQty
-        }, botState.sessionId);
+        const avgPrice = parseFloat(orderResult.avgPrice) || price;
+        const sellFee = avgPrice * position.quantity * getActiveFees().perSide;
+        const pnl = (avgPrice - position.openPrice) * position.quantity - sellFee;
 
-        const avgPrice = orderResult.order_info?.avg_price || price;
-        const sellFee = parseFloat(avgPrice) * position.quantity * getActiveFees().perSide;
-        const pnl = (parseFloat(avgPrice) - position.openPrice) * position.quantity - sellFee;
-
-        portfolio.cash += (position.quantity * parseFloat(avgPrice)) - sellFee;
+        portfolio.cash += (position.quantity * avgPrice) - sellFee;
         delete portfolio.positions[position.ticker];
 
         cbRecordTrade(pnl, position.entryStrategy, position.ticker);
         recordStrategyResult(position.entryStrategy, pnl);
         beastRecordTrade(pnl, position.ticker, position.entryStrategy);
-        recordTradeForJournal({ ticker: position.ticker, strategy: position.entryStrategy, pnl, price: parseFloat(avgPrice), quantity: position.quantity, type: 'SELL' });
+        recordTradeForJournal({ ticker: position.ticker, strategy: position.entryStrategy, pnl, price: avgPrice, quantity: position.quantity, type: 'SELL' });
         autoJournal();
         recordSessionTrade(pnl);
-        if (telegramEnabled()) alertTradeExecution({ type: 'SELL', ticker: position.ticker, price: parseFloat(avgPrice), strategy: position.entryStrategy, pnl });
+        if (telegramEnabled()) alertTradeExecution({ type: 'SELL', ticker: position.ticker, price: avgPrice, strategy: position.entryStrategy, pnl });
         saveSessionState();
     } catch (error) {
         addLog(`SELL order failed: ${error.message}`, 'ERROR');
@@ -965,14 +951,15 @@ app.get('/api/market-data', async (req, res, next) => {
             return res.status(400).json({ message: 'instrument_name and timeframe are required' });
         }
 
-        // If a specific exchange is requested, use its adapter; otherwise use default
-        if (exchange && exchange !== 'crypto.com') {
-            const adapter = getExchangeAdapter(exchange);
+        // Use specified exchange, or fall back to active exchange
+        const activeExchange = exchange || getActiveExchangeId();
+        if (activeExchange !== 'crypto.com') {
+            const adapter = getExchangeAdapter(activeExchange);
             const candles = await adapter.getCandles(instrument_name, timeframe, 200);
             return res.status(200).json({ data: candles });
         }
 
-        // Default: use existing getMarketData (Crypto.com with SQLite caching)
+        // Crypto.com: use existing getMarketData with SQLite caching
         const data = await getMarketData(instrument_name, timeframe, 200);
         res.status(200).json({ data });
     } catch (error) {
