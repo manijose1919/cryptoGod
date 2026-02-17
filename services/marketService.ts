@@ -2,6 +2,17 @@
 import type { Candle } from '../types';
 import { FALLBACK_TICKERS } from '../constants';
 
+// Current exchange — updated by App.tsx when user switches
+let _activeExchange: string = 'crypto.com';
+
+export function setActiveExchange(exchange: string) {
+    _activeExchange = exchange;
+}
+
+export function getActiveExchange(): string {
+    return _activeExchange;
+}
+
 /**
  * Fetches a list of the top 20 most active USD trading pairs from the backend.
  * If the fetch fails, it returns a hardcoded fallback list to ensure app functionality.
@@ -9,7 +20,8 @@ import { FALLBACK_TICKERS } from '../constants';
  */
 export async function fetchAvailableUsdPairs(): Promise<string[]> {
   try {
-    const url = '/api/instruments';
+    const exchangeParam = _activeExchange !== 'crypto.com' ? `?exchange=${_activeExchange}` : '';
+    const url = `/api/instruments${exchangeParam}`;
     const response = await fetch(url);
     if (!response.ok) {
        const errorText = await response.text();
@@ -24,7 +36,16 @@ export async function fetchAvailableUsdPairs(): Promise<string[]> {
         return FALLBACK_TICKERS;
     }
 
-    // Filter for active, tradable, non-beta, spot USD pairs.
+    // Filter for USD pairs — Kraken adapter already filters, Crypto.com needs filtering
+    if (_activeExchange === 'kraken') {
+        // Kraken adapter returns pre-filtered USD pairs with instrument_name like "BTCUSD"
+        const tickers = instruments
+            .map((inst: any) => inst.instrument_name || '')
+            .filter((name: string) => name.endsWith('USD'));
+        return tickers.length > 0 ? tickers : FALLBACK_TICKERS;
+    }
+
+    // Crypto.com: filter for active, tradable, non-beta, spot USD pairs.
     const dynamicTickers = instruments
         .filter((inst: any) => {
             const name = inst.instrument_name || inst.symbol || '';
@@ -62,9 +83,10 @@ export async function fetchHistoricalCandles(
   interval: string = '1m',
   limit: number = 200
 ): Promise<Candle[]> {
-  // Convert symbol to instrument_name format (BTCUSD -> BTC_USD, ETHUSDC -> ETH_USDC, BTCCAD -> BTC_CAD)
+  // For Kraken, pass the raw ticker — the backend adapter handles formatting
+  // For Crypto.com, convert to instrument_name format (BTCUSD -> BTC_USD)
   let instrument_name = symbol;
-  if (!symbol.includes('_')) {
+  if (_activeExchange === 'crypto.com' && !symbol.includes('_')) {
     if (symbol.endsWith('USDC')) {
       instrument_name = symbol.replace('USDC', '_USDC');
     } else if (symbol.endsWith('USDT')) {
@@ -75,22 +97,24 @@ export async function fetchHistoricalCandles(
       instrument_name = symbol.replace('USD', '_USD');
     }
   }
-  const url = `/api/market-data?instrument_name=${instrument_name}&timeframe=${interval}`;
-  
+
+  const exchangeParam = _activeExchange !== 'crypto.com' ? `&exchange=${_activeExchange}` : '';
+  const url = `/api/market-data?instrument_name=${instrument_name}&timeframe=${interval}${exchangeParam}`;
+
   const response = await fetch(url);
-  
+
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(`Request to backend for ${symbol} failed with status ${response.status}: ${errorText}`);
   }
-  
+
   const data = await response.json();
 
   if (!data || !data.data) {
       console.warn(`Backend returned no candle data for ${symbol}. It might be a new or delisted pair.`);
       return [];
   }
-  
+
   const candles: Candle[] = data.data.map((d: any) => ({
     time: d.t,
     open: Number(d.o),
@@ -99,7 +123,7 @@ export async function fetchHistoricalCandles(
     close: Number(d.c),
     volume: Number(d.v),
   }));
-  
+
   return candles;
 }
 

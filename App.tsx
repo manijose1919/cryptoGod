@@ -25,7 +25,7 @@ import { PredictiveDisplay } from './components/PredictiveDisplay';
 import { NewsDashboard } from './components/NewsDashboard';
 import { MLDashboard } from './components/MLDashboard';
 import StrategyOverview from './components/StrategyOverview';
-import { fetchHistoricalCandles, fetchAvailableUsdPairs } from './services/marketService';
+import { fetchHistoricalCandles, fetchAvailableUsdPairs, setActiveExchange as setMarketServiceExchange } from './services/marketService';
 import { tradingBotService } from './services/tradingBotService';
 import {
     calculateTCSeries,
@@ -289,7 +289,10 @@ const App: React.FC = () => {
         fetch('/api/exchange/current')
             .then(r => r.json())
             .then(data => {
-                if (data.exchange) setCurrentExchange(data.exchange);
+                if (data.exchange) {
+                    setCurrentExchange(data.exchange);
+                    setMarketServiceExchange(data.exchange);
+                }
                 if (data.feePercent) setCurrentExchangeFees({
                     takerFee: data.feePercent,
                     roundTripFee: data.roundTripFeePercent || data.feePercent * 2,
@@ -2388,6 +2391,7 @@ const App: React.FC = () => {
                         onExchangeChange={(exchange, fees) => {
                             setCurrentExchange(exchange);
                             setCurrentExchangeFees(fees);
+                            setMarketServiceExchange(exchange);
                         }}
                     />
                     <TradingControls
