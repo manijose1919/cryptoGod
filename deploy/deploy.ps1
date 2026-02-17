@@ -402,26 +402,26 @@ cat > ${BareRepoPath}/hooks/post-receive << 'HOOKEOF'
 set -e
 
 APP_DIR="/opt/trading-bot"
-VENV_DIR="\$APP_DIR/venv"
+VENV_DIR="`$APP_DIR/venv"
 LOG_FILE="/opt/trading-bot/logs/deploy.log"
 
 echo "========================================"
-echo "  Post-receive: deploying to \$APP_DIR"
+echo "  Post-receive: deploying to `$APP_DIR"
 echo "========================================"
 
 # Checkout working tree
-GIT_WORK_TREE=\$APP_DIR git checkout -f main 2>&1 | tee -a \$LOG_FILE
+GIT_WORK_TREE=`$APP_DIR git checkout -f main 2>&1 | tee -a `$LOG_FILE
 
 # Install Node.js dependencies
 echo "Installing Node.js dependencies..."
-cd \$APP_DIR
-npm install --production 2>&1 | tail -5 | tee -a \$LOG_FILE
+cd `$APP_DIR
+npm install --production 2>&1 | tail -5 | tee -a `$LOG_FILE
 
 # Install Python dependencies
-if [ -d "\$VENV_DIR" ]; then
+if [ -d "`$VENV_DIR" ]; then
     echo "Installing Python dependencies..."
-    source \$VENV_DIR/bin/activate
-    pip install -r canuck-trader-pro/backend/requirements.txt 2>&1 | tail -5 | tee -a \$LOG_FILE
+    source `$VENV_DIR/bin/activate
+    pip install -r canuck-trader-pro/backend/requirements.txt 2>&1 | tail -5 | tee -a `$LOG_FILE
     deactivate
 fi
 
@@ -436,8 +436,8 @@ else
     echo "WARNING: Could not find running bot process to restart"
 fi
 
-echo "Deploy complete at \$(date)"
-echo "========================================" | tee -a \$LOG_FILE
+echo "Deploy complete at `$(date)"
+echo "========================================" | tee -a `$LOG_FILE
 HOOKEOF
 chmod +x ${BareRepoPath}/hooks/post-receive
 echo 'Post-receive hook installed'
