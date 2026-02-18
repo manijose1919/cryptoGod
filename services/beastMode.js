@@ -331,6 +331,26 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
+  // --- TRAILING STOP ---
+  // Activates once position reached +0.5% profit after fees from peak
+  const trailActivation = 0.5;
+  const highestPrice = position.highestPrice || position.openPrice;
+  const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
+  const highFeeAdj = highPnl - roundTripFeePercent;
+
+  if (highFeeAdj >= trailActivation) {
+    // Trail distance = 40% of TP target, minimum 0.5%
+    const trailPct = Math.max(0.5, targets.takeProfitPct * 0.4);
+    const trailLevel = highestPrice * (1 - trailPct / 100);
+    if (currentPrice <= trailLevel) {
+      return {
+        shouldExit: true,
+        reason: `[BEAST-TRAIL] price ${currentPrice.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${highestPrice.toFixed(4)}, locked +${feeAdjustedPnl.toFixed(2)}%)`,
+        pnlPercent,
+      };
+    }
+  }
+
   // Stop loss (raw - stop loss is from entry, not fee-adjusted)
   if (pnlPercent <= -targets.stopLossPct) {
     return {
@@ -340,11 +360,11 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
-  // Time-based exit: 15min (was 30) with fee-adjusted check
-  if (holdMinutes > 15 && feeAdjustedPnl < 0) {
+  // Time-based exit: 30min and must be down >1.5% (was 15min/any loss — too aggressive in sideways)
+  if (holdMinutes > 30 && pnlPercent < -1.5) {
     return {
       shouldExit: true,
-      reason: `[BEAST-TIME] Stale position: ${feeAdjustedPnl.toFixed(2)}% after fees, ${holdMinutes.toFixed(0)}min`,
+      reason: `[BEAST-TIME] Stale position: ${pnlPercent.toFixed(2)}% raw, ${holdMinutes.toFixed(0)}min`,
       pnlPercent,
     };
   }

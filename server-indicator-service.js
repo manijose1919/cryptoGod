@@ -634,7 +634,7 @@ export function calculateOpportunityScore(candles, ticker) {
         factors: {}
     };
 
-    if (candles.length < 50) return defaultScore;
+    if (candles.length < 21) return defaultScore; // Was 50 — now matches indicator minimum (21 for ATR/EMA)
 
     // Get indicators
     const tcSeries = calculateTCSeries(candles);
@@ -648,17 +648,18 @@ export function calculateOpportunityScore(candles, ticker) {
     const regime = detectMarketRegime(candles);
     const gap = detectGap(candles);
 
-    // Factor 1: Trend Alignment
-    const trendAlignment = Math.max(0, 100 - tcValue);
+    // Factor 1: Trend Alignment (rescaled: tcValue 0=max bullish→100, 50=neutral→50, 100=bearish→0)
+    // Use amplified scaling so bullish readings (tcValue < 40) map strongly above 60
+    const trendAlignment = Math.max(0, Math.min(100, 50 + (50 - tcValue) * 1.5));
 
     // Factor 2: Momentum Strength
     const momentumStrength = momentumValue;
 
-    // Factor 3: Volume Confirmation
+    // Factor 3: Volume Confirmation (rescaled: avg volume ratio=1.0 → 65, ratio=2.0 → 100)
     const avgVolume = candles.slice(-20).reduce((sum, c) => sum + c.v, 0) / 20;
     const currentVolume = candles[candles.length - 1].v;
     const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
-    const volumeConfirmation = Math.min(100, volumeRatio * 50);
+    const volumeConfirmation = Math.min(100, 30 + volumeRatio * 35);
 
     // Factor 4: Gap Opportunity
     let gapOpportunity = 0;

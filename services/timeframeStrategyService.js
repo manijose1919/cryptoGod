@@ -26,7 +26,7 @@
  * @property {number}  stopLoss       - Base stop loss (percent)
  * @property {number}  positionSize   - Base position size as % of portfolio
  * @property {number}  minConfidence  - Minimum signal confidence (0-100)
- * @property {number}  minOppScore    - Minimum opportunity score (8-15 range)
+ * @property {number}  minOppScore    - Minimum opportunity score (20-35 range)
  * @property {number}  maxHoldMs      - Max hold duration in milliseconds (2x the timeframe)
  */
 
@@ -40,7 +40,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 0.30,
     positionSize: 20,
     minConfidence: 30,
-    minOppScore: 8,
+    minOppScore: 20,
     maxHoldMs: 15 * 60 * 1000 * 2,
   },
   {
@@ -51,7 +51,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 0.40,
     positionSize: 18,
     minConfidence: 33,
-    minOppScore: 8,
+    minOppScore: 20,
     maxHoldMs: 30 * 60 * 1000 * 2,
   },
   {
@@ -62,7 +62,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 0.50,
     positionSize: 16,
     minConfidence: 36,
-    minOppScore: 9,
+    minOppScore: 22,
     maxHoldMs: 60 * 60 * 1000 * 2,
   },
   {
@@ -73,7 +73,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 0.60,
     positionSize: 15,
     minConfidence: 40,
-    minOppScore: 9,
+    minOppScore: 22,
     maxHoldMs: 120 * 60 * 1000 * 2,
   },
   {
@@ -84,7 +84,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 0.75,
     positionSize: 14,
     minConfidence: 42,
-    minOppScore: 10,
+    minOppScore: 24,
     maxHoldMs: 180 * 60 * 1000 * 2,
   },
   {
@@ -95,7 +95,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 1.00,
     positionSize: 12,
     minConfidence: 45,
-    minOppScore: 10,
+    minOppScore: 24,
     maxHoldMs: 360 * 60 * 1000 * 2,
   },
   {
@@ -106,7 +106,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 1.25,
     positionSize: 10,
     minConfidence: 48,
-    minOppScore: 11,
+    minOppScore: 26,
     maxHoldMs: 720 * 60 * 1000 * 2,
   },
   {
@@ -117,7 +117,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 1.50,
     positionSize: 8,
     minConfidence: 52,
-    minOppScore: 12,
+    minOppScore: 28,
     maxHoldMs: 1440 * 60 * 1000 * 2,
   },
   {
@@ -128,7 +128,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 1.80,
     positionSize: 7,
     minConfidence: 55,
-    minOppScore: 12,
+    minOppScore: 28,
     maxHoldMs: 2880 * 60 * 1000 * 2,
   },
   {
@@ -139,7 +139,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 2.20,
     positionSize: 6,
     minConfidence: 58,
-    minOppScore: 13,
+    minOppScore: 30,
     maxHoldMs: 4320 * 60 * 1000 * 2,
   },
   {
@@ -150,7 +150,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 2.50,
     positionSize: 6,
     minConfidence: 60,
-    minOppScore: 14,
+    minOppScore: 32,
     maxHoldMs: 7200 * 60 * 1000 * 2,
   },
   {
@@ -161,7 +161,7 @@ export const TIMEFRAME_DEFINITIONS = [
     stopLoss: 3.00,
     positionSize: 5,
     minConfidence: 65,
-    minOppScore: 15,
+    minOppScore: 35,
     maxHoldMs: 10080 * 60 * 1000 * 2,
   },
 ];
@@ -232,9 +232,9 @@ const TF_PROFIT_METHOD_BIAS = {
  * Detect whether the market is currently SLOW or FAST.
  *
  * Criteria (all based on the most recent candle window):
- *   - ATR as percent of price (< 0.3% => SLOW)
- *   - Volume vs 20-period moving average (< 0.7x => SLOW)
- *   - Average candle body-to-range ratio (< 0.35 => SLOW, meaning indecisive candles)
+ *   - ATR as percent of price (< 0.8% => SLOW — crypto is inherently volatile)
+ *   - Volume vs 20-period moving average (< 0.9x => SLOW)
+ *   - Average candle body-to-range ratio (< 0.40 => SLOW, meaning indecisive candles)
  *
  * A majority-vote of the three metrics decides the final label.
  *
@@ -262,14 +262,14 @@ export function detectMarketSpeed(candles) {
   }
   const atr = atrSum / (recent.length - 1);
   const atrPercent = (atr / price) * 100;
-  const atrVote = atrPercent < 0.3 ? 'SLOW' : 'FAST';
+  const atrVote = atrPercent < 0.8 ? 'SLOW' : 'FAST';
 
   // --- 2. Volume vs 20-period average ---
   const volumes = recent.map(c => c.v || 0);
   const volAvg = volumes.reduce((s, v) => s + v, 0) / volumes.length;
   const latestVol = volumes[volumes.length - 1];
   const volRatio = volAvg > 0 ? latestVol / volAvg : 1;
-  const volVote = volRatio < 0.7 ? 'SLOW' : 'FAST';
+  const volVote = volRatio < 0.9 ? 'SLOW' : 'FAST';
 
   // --- 3. Body-to-range ratio ---
   let bodyRatioSum = 0;
@@ -282,7 +282,7 @@ export function detectMarketSpeed(candles) {
     }
   }
   const avgBodyRatio = counted > 0 ? bodyRatioSum / counted : 0.5;
-  const bodyVote = avgBodyRatio < 0.35 ? 'SLOW' : 'FAST';
+  const bodyVote = avgBodyRatio < 0.40 ? 'SLOW' : 'FAST';
 
   // Majority vote
   const slowVotes = [atrVote, volVote, bodyVote].filter(v => v === 'SLOW').length;
