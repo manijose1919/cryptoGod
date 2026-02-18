@@ -143,6 +143,8 @@ interface TradingControlsProps {
   setSessionDurationMinutes?: (minutes: number) => void;
   // Close all positions
   onCloseAll?: () => void;
+  // Stop session entirely
+  onStopSession?: () => Promise<void>;
 }
 
 export const TradingControls: React.FC<TradingControlsProps> = ({
@@ -157,13 +159,16 @@ export const TradingControls: React.FC<TradingControlsProps> = ({
   microTradingEnabled = false, setMicroTradingEnabled,
   unlimitedTrades = false, setUnlimitedTrades,
   sessionDurationMinutes = 0, setSessionDurationMinutes,
-  onCloseAll
+  onCloseAll,
+  onStopSession
 }) => {
   const [tickerInput, setTickerInput] = useState(activeTicker);
   const [budgetInput, setBudgetInput] = useState('10000');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isAutoOptimized, setIsAutoOptimized] = useState(false);
   const [closeAllConfirm, setCloseAllConfirm] = useState(false);
+  const [stopSessionConfirm, setStopSessionConfirm] = useState(false);
+  const [isStoppingSession, setIsStoppingSession] = useState(false);
   const [isClosingAll, setIsClosingAll] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -716,6 +721,47 @@ export const TradingControls: React.FC<TradingControlsProps> = ({
                         className="flex-1 py-2 px-3 rounded-lg text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
                       >
                         {isClosingAll ? 'Closing...' : 'Confirm Close All'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Stop Session Button */}
+            {onStopSession && (
+              <div className="mt-3">
+                {!stopSessionConfirm ? (
+                  <button
+                    onClick={() => setStopSessionConfirm(true)}
+                    className="w-full py-2 px-4 rounded-lg text-sm font-medium bg-orange-600/20 text-orange-400 border border-orange-600/40 hover:bg-orange-600/40 hover:text-orange-300 transition-colors"
+                  >
+                    Stop Session
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-orange-400 text-center">Close all positions, stop the bot, and end the session?</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setStopSessionConfirm(false)}
+                        className="flex-1 py-2 px-3 rounded-lg text-sm font-medium bg-gray-600 text-gray-300 hover:bg-gray-500 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={async () => {
+                          setIsStoppingSession(true);
+                          try {
+                            await onStopSession();
+                          } finally {
+                            setIsStoppingSession(false);
+                            setStopSessionConfirm(false);
+                          }
+                        }}
+                        disabled={isStoppingSession}
+                        className="flex-1 py-2 px-3 rounded-lg text-sm font-medium bg-orange-600 text-white hover:bg-orange-700 transition-colors disabled:opacity-50"
+                      >
+                        {isStoppingSession ? 'Stopping...' : 'Confirm Stop'}
                       </button>
                     </div>
                   </div>

@@ -274,6 +274,61 @@ export function initializeDatabase() {
       ON ml_predictions(ticker, timestamp);
   `);
 
+  // Phase 1: Backend Bot Engine tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS equity_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      total_value REAL NOT NULL,
+      cash REAL NOT NULL,
+      holdings_value REAL NOT NULL,
+      open_positions INTEGER DEFAULT 0,
+      pnl_percent REAL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_equity_snapshots_session
+      ON equity_snapshots(session_id, time);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      price REAL NOT NULL,
+      quantity REAL NOT NULL,
+      notional REAL DEFAULT 0,
+      strategy TEXT,
+      reason TEXT,
+      pnl REAL DEFAULT 0,
+      fee REAL DEFAULT 0,
+      balance_after REAL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_trades_session
+      ON session_trades(session_id, time);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ml_thoughts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT,
+      time INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      ticker TEXT,
+      action TEXT,
+      confidence REAL,
+      reason TEXT,
+      indicators TEXT,
+      feature_importance TEXT,
+      regime TEXT,
+      market_speed TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ml_thoughts_session
+      ON ml_thoughts(session_id, time);
+  `);
+
   console.log(`[Database] Initialized SQLite at ${dbPath}`);
   return db;
 }
@@ -708,6 +763,80 @@ export function cleanupOldData(daysToKeep = 30) {
   results.newsItems = getDb().prepare('DELETE FROM news_items WHERE created_at < ?').run(cutoff).changes;
   results.mlFeatures = getDb().prepare('DELETE FROM ml_features WHERE created_at < ?').run(cutoff).changes;
   results.mlPredictions = getDb().prepare('DELETE FROM ml_predictions WHERE timestamp < ?').run(cutoff).changes;
+  results.equitySnapshots = getDb().prepare('DELETE FROM equity_snapshots WHERE time < ?').run(cutoff).changes;
+  results.sessionTrades = getDb().prepare('DELETE FROM session_trades WHERE time < ?').run(cutoff).changes;
+  results.mlThoughts = getDb().prepare('DELETE FROM ml_thoughts WHERE time < ?').run(cutoff).changes;
   console.log(`[Database] Cleanup: removed old data older than ${daysToKeep} days`, results);
   return results;
+}
+
+// --- Equity Snapshots ---
+export function insertEquitySnapshot(snapshot) {
+  return getDb().prepare(`
+    INSERT INTO equity_snapshots (session_id, time, total_value, cash, holdings_value, open_positions, pnl_percent)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(snapshot.session_id, snapshot.time, snapshot.total_value, snapshot.cash,
+         snapshot.holdings_value, snapshot.open_positions, snapshot.pnl_percent);
+}
+
+export function getEquitySnapshots(sessionId, limit = 500) {
+  return getDb().prepare(`
+    SELECT * FROM equity_snapshots WHERE session_id = ? ORDER BY time ASC LIMIT ?
+  `).all(sessionId, limit);
+}
+
+export function getLatestEquitySnapshot(sessionId) {
+  return getDb().prepare(`
+    SELECT * FROM equity_snapshots WHERE session_id = ? ORDER BY time DESC LIMIT 1
+  `).get(sessionId);
+}
+
+// --- Session Trades ---
+export function insertSessionTrade(trade) {
+  return getDb().prepare(`
+    INSERT INTO session_trades (session_id, time, type, ticker, price, quantity, notional, strategy, reason, pnl, fee, balance_after)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(trade.session_id, trade.time, trade.type, trade.ticker, trade.price, trade.quantity,
+         trade.notional || 0, trade.strategy || '', trade.reason || '', trade.pnl || 0,
+         trade.fee || 0, trade.balance_after || 0);
+}
+
+export function getSessionTrades(sessionId, limit = 500) {
+  return getDb().prepare(`
+    SELECT * FROM session_trades WHERE session_id = ? ORDER BY time DESC LIMIT ?
+  `).all(sessionId, limit);
+}
+
+export function getSessionTradeStats(sessionId) {
+  return getDb().prepare(`
+    SELECT
+      COUNT(*) as total_trades,
+      SUM(CASE WHEN type = 'BUY' THEN 1 ELSE 0 END) as buys,
+      SUM(CASE WHEN type = 'SELL' THEN 1 ELSE 0 END) as sells,
+      SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses,
+      SUM(pnl) as total_pnl,
+      AVG(CASE WHEN pnl != 0 THEN pnl ELSE NULL END) as avg_pnl,
+      MAX(pnl) as best_trade,
+      MIN(pnl) as worst_trade,
+      SUM(fee) as total_fees
+    FROM session_trades WHERE session_id = ? AND type = 'SELL'
+  `).get(sessionId);
+}
+
+// --- ML Thoughts ---
+export function insertMLThought(thought) {
+  return getDb().prepare(`
+    INSERT INTO ml_thoughts (session_id, time, type, ticker, action, confidence, reason, indicators, feature_importance, regime, market_speed)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(thought.session_id || '', thought.time || Date.now(), thought.type, thought.ticker || '',
+         thought.action || '', thought.confidence || 0, thought.reason || '',
+         JSON.stringify(thought.indicators || {}), JSON.stringify(thought.feature_importance || {}),
+         thought.regime || '', thought.market_speed || '');
+}
+
+export function getMLThoughts(sessionId, limit = 200) {
+  return getDb().prepare(`
+    SELECT * FROM ml_thoughts WHERE session_id = ? ORDER BY time DESC LIMIT ?
+  `).all(sessionId || '', limit);
 }

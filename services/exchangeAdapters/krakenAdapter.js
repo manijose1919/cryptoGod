@@ -238,7 +238,124 @@ export class KrakenAdapter extends BaseExchangeAdapter {
     }
 
     getFeePercent() {
-        return 0.0026; // 0.26% per side (Kraken base tier)
+        return 0.0026; // 0.26% taker fee per side (Kraken base tier)
+    }
+
+    getMakerFeePercent() {
+        return 0.0016; // 0.16% maker fee per side (Kraken base tier)
+    }
+
+    /**
+     * Place a limit buy order at a specific price.
+     * Maker fee (0.16%) vs taker (0.26%) = significant savings.
+     */
+    async placeLimitBuyOrder(ticker, price, volume, sessionId) {
+        const pair = toKrakenPair(ticker);
+
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'buy',
+            ordertype: 'limit',
+            price: price.toFixed(8),
+            volume: volume.toFixed(8),
+        });
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'buy',
+            price,
+            volume: parseFloat(volume),
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a limit sell order at a specific price.
+     */
+    async placeLimitSellOrder(ticker, price, volume, sessionId) {
+        const pair = toKrakenPair(ticker);
+
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'sell',
+            ordertype: 'limit',
+            price: price.toFixed(8),
+            volume: volume.toFixed(8),
+        });
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'sell',
+            price,
+            volume: parseFloat(volume),
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Get all open orders.
+     */
+    async getOpenOrders(sessionId) {
+        const result = await krakenPrivateRequest('OpenOrders');
+        const orders = [];
+
+        for (const [txid, order] of Object.entries(result.open || {})) {
+            const descr = order.descr || {};
+            orders.push({
+                orderId: txid,
+                ticker: fromKrakenPair(descr.pair || ''),
+                side: descr.type || '',
+                price: parseFloat(descr.price || '0'),
+                volume: parseFloat(order.vol || '0'),
+                filledVolume: parseFloat(order.vol_exec || '0'),
+                status: order.status || 'open',
+                openTime: order.opentm ? order.opentm * 1000 : 0,
+            });
+        }
+
+        return orders;
+    }
+
+    /**
+     * Cancel an open order by transaction ID.
+     */
+    async cancelOrder(orderId, sessionId) {
+        const result = await krakenPrivateRequest('CancelOrder', {
+            txid: orderId,
+        });
+
+        return {
+            success: true,
+            orderId,
+            count: result.count || 0,
+        };
+    }
+
+    /**
+     * Query a specific order's status.
+     */
+    async getOrderStatus(orderId, sessionId) {
+        const result = await krakenPrivateRequest('QueryOrders', {
+            txid: orderId,
+        });
+
+        const order = result[orderId];
+        if (!order) {
+            return { orderId, status: 'unknown', filledQty: 0, avgPrice: 0 };
+        }
+
+        return {
+            orderId,
+            status: order.status || 'unknown',
+            filledQty: parseFloat(order.vol_exec || '0'),
+            avgPrice: parseFloat(order.price || '0'),
+            cost: parseFloat(order.cost || '0'),
+            fee: parseFloat(order.fee || '0'),
+        };
     }
 }
 

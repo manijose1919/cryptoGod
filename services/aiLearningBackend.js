@@ -38,24 +38,25 @@ try {
 // DEFAULT VALUES
 // ============================================
 const DEFAULT_PARAMETERS = {
-  tcEntryThreshold: 50,
-  momentumEntryThreshold: 5,
-  whaleEntryThreshold: 48,
+  tcEntryThreshold: 55,           // Relaxed for more entries
+  momentumEntryThreshold: 3,      // Very low barrier
+  whaleEntryThreshold: 45,        // More sensitive
   confluenceEntryThreshold: 2,
   profitTargetPercent: 0.5,
   stopLossPercent: 1.0,
-  maxPositionPercent: 25,
-  confidenceThreshold: 15,
+  maxPositionPercent: 30,         // Aggressive (was 25)
+  confidenceThreshold: 10,        // Very low barrier in simulation (was 15)
   strategyWeights: {
-    TREND: 1.3,
-    BREAKOUT: 1.2,
-    WHALE: 1.0,
-    CONFLUENCE: 1.0,
-    MOMENTUM: 1.2,
-    DIVERGENCE: 0.9,
-    ADAPTIVE: 1.1,
+    TREND: 1.4,
+    BREAKOUT: 1.3,
+    WHALE: 1.1,
+    CONFLUENCE: 1.1,
+    MOMENTUM: 1.3,
+    DIVERGENCE: 1.0,
+    ADAPTIVE: 1.2,
   },
-  aggressiveness: 85,
+  aggressiveness: 95,             // Near-maximum (was 85)
+  retrainSampleThreshold: 10,     // Retrain every 10 samples in sim (was 25)
 };
 
 const STRATEGIES = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];

@@ -25,6 +25,9 @@ import { PredictiveDisplay } from './components/PredictiveDisplay';
 import { NewsDashboard } from './components/NewsDashboard';
 import { MLDashboard } from './components/MLDashboard';
 import StrategyOverview from './components/StrategyOverview';
+import SessionReconnect from './components/SessionReconnect';
+import MLThoughtProcess from './components/MLThoughtProcess';
+import VPSMonitor from './components/VPSMonitor';
 import { fetchHistoricalCandles, fetchAvailableUsdPairs, setActiveExchange as setMarketServiceExchange } from './services/marketService';
 import { tradingBotService } from './services/tradingBotService';
 import {
@@ -1012,1228 +1015,105 @@ const App: React.FC = () => {
     }, [isScannerActive, isTradingActive, ticker, strategy, addLog, scannerPaused]);
 
     // ============================================
-    // SIMULATION BOT LOOP (Fixed with refs and stop-loss)
+    // BACKEND POLLING LOOP (Phase 1: All trading runs on backend)
+    // Frontend is now read-only dashboard polling /api/session/full-status
     // ============================================
     useEffect(() => {
-        if (!isBotActive || !isTradingActive || tradingMode !== 'SIMULATION') return;
+        if (!isBotActive || !isTradingActive) return;
 
-        // Use fastest loop for surge trading, micro, or standard
-        const loopInterval = SURGE_TRADING.SURGE_BOT_LOOP_MS; // Always 1 second for maximum responsiveness
+        // Poll backend every 2 seconds for full status
+        const pollInterval = 2000;
 
-        const botInterval = setInterval(() => {
-            // Use refs to get current state (avoids stale closures)
-            if (!isBotActiveRef.current) return;
+        const pollBackend = async () => {
+            try {
+                const res = await fetch('/api/session/full-status');
+                if (!res.ok) return;
+                const data = await res.json();
 
-            let currentPortfolio = { ...portfolioRef.current };
-            const availableTickers = Object.keys(watchlistDataRef.current);
+                // Update portfolio from backend
+                if (data.portfolio) {
+                    setPortfolio({
+                        cash: data.portfolio.cash,
+                        initialBudget: data.portfolio.initialBudget,
+                        positions: data.portfolio.positions.reduce((acc: any, pos: any) => {
+                            acc[pos.ticker] = {
+                                quantity: pos.quantity,
+                                openPrice: pos.openPrice,
+                                currentPrice: pos.currentPrice,
+                                entryStrategy: pos.entryStrategy,
+                                entryTime: pos.entryTime,
+                                highestPrice: pos.highestPrice,
+                                lowestPrice: pos.lowestPrice,
+                                unrealizedPnl: pos.unrealizedPnl,
+                            };
+                            return acc;
+                        }, {}),
+                    });
+                }
 
-            // Wait for market data to load before running bot logic
-            if (availableTickers.length === 0) {
-                return;
-            }
+                // Update logs from backend
+                if (data.logs && data.logs.length > 0) {
+                    setSystemLog(prev => {
+                        const existingIds = new Set(prev.map((l: any) => l.id));
+                        const newLogs = data.logs.filter((l: any) => !existingIds.has(l.id));
+                        return newLogs.length > 0 ? [...newLogs, ...prev].slice(0, 200) : prev;
+                    });
+                }
 
-            // --- SESSION DURATION: Wind-down and force-close logic ---
-            const durationMins = sessionDurationRef.current;
-            if (durationMins > 0 && sessionStartTime > 0) {
-                const sessionEndTime = sessionStartTime + (durationMins * 60 * 1000);
-                const timeRemaining = sessionEndTime - Date.now();
-                const windDownMs = Math.min(5 * 60 * 1000, durationMins * 60 * 1000 * 0.1); // 5 min or 10% of session
-
-                // Force-close: session time expired
-                if (timeRemaining <= 0) {
-                    // Close ALL open positions at market price
-                    for (const positionTicker of Object.keys(currentPortfolio.positions)) {
-                        const position = currentPortfolio.positions[positionTicker];
-                        const currentData = watchlistDataRef.current[positionTicker];
-                        if (!currentData || currentData.candles.length === 0) continue;
-
-                        const currentPrice = Number(currentData.candles.at(-1)!.close) || 0;
-                        const pnl = (currentPrice - position.openPrice) * position.quantity;
-                        const saleValue = position.quantity * currentPrice;
-
-                        // Record trade via AI learning
-                        if (aiLearningEnabled) {
-                            const lastTcValue = currentData.indicatorData.at(-1)?.value ?? 50;
-                            const lastMomentumValue = currentData.momentumData.at(-1)?.value ?? 50;
-                            const lastWhaleValue = currentData.whaleData.at(-1)?.value ?? 50;
-                            const lastConfluenceScore = currentData.trendDashboardData.score;
-
-                            recordTrade({
-                                ticker: positionTicker,
-                                strategy: position.entryStrategy,
-                                entryPrice: position.openPrice,
-                                exitPrice: currentPrice,
-                                entryTime: position.entryTime,
-                                exitTime: Date.now(),
-                                quantity: position.quantity,
-                                indicators: {
-                                    tcValue: lastTcValue,
-                                    momentumValue: lastMomentumValue,
-                                    whaleValue: lastWhaleValue,
-                                    confluenceScore: lastConfluenceScore,
-                                },
-                                marketConditions: {
-                                    volatility: 'MEDIUM',
-                                    trend: 'SIDEWAYS',
-                                    volume: 'MEDIUM',
-                                }
-                            });
-                            setLearningStateData(getLearningState());
-                        }
-
-                        addLog(
-                            `SESSION END: SELL ${Number(position.quantity).toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${Number(currentPrice).toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)}. PnL: $${Number(pnl).toFixed(2)}. Reason: Session time expired`,
-                            'SELL'
-                        );
-
-                        addTrade({
-                            type: 'SELL',
-                            price: currentPrice,
-                            quantity: position.quantity,
-                            ticker: positionTicker,
-                            strategy: position.entryStrategy,
-                            reason: 'Session time expired',
-                            pnl
-                        });
-
-                        currentPortfolio = {
-                            ...currentPortfolio,
-                            cash: currentPortfolio.cash + saleValue,
-                            positions: {}
-                        };
-                    }
-
-                    addLog(`Session completed after ${durationMins} minutes - all positions closed`, 'SPECIAL');
-                    setPortfolio(currentPortfolio);
+                // Check if bot was stopped externally
+                if (!data.sessionActive && isBotActiveRef.current) {
                     setIsBotActive(false);
-                    return;
+                    addLog('Session ended on backend', 'WARN');
                 }
-
-                // Wind-down: approaching session end, stop opening new trades
-                if (timeRemaining <= windDownMs) {
-                    // Still process exits but skip entry logic
-                    // Let the exit logic below run, then skip entries by returning early after exits
-                }
+            } catch (e) {
+                // Silently handle polling errors
             }
-
-            // --- MICRO-TRADING: Detect slow market and apply micro parameters ---
-            let isMicroMode = microTradingEnabled;
-            let microStopLoss = MICRO_TRADING.MICRO_STOP_LOSS_PERCENT;
-            let microProfitTarget = MICRO_TRADING.MICRO_PROFIT_TARGET_PERCENT;
-            let microTrailingStop = MICRO_TRADING.MICRO_TRAILING_STOP_PERCENT;
-
-            // --- SMART TRADING: Calculate Dynamic Parameters First ---
-            let dynamicStopLossForExit = isMicroMode ? microStopLoss : stopLossPercent;
-
-            // Slow market detection (available to both exit and entry logic)
-            let isSlowMarket = false;
-            let slowMarketResult: SlowMarketResult = { isSlow: false, avgRange: 0, consecutiveSmallCandles: 0 };
-
-            if (smartTradingEnabled) {
-                const primaryTicker = availableTickers.find(t => t.includes('BTC')) || availableTickers[0];
-                const primaryData = watchlistDataRef.current[primaryTicker];
-
-                if (primaryData && primaryData.candles.length > 20) {
-                    const localRegime = detectMarketRegime(primaryData.candles);
-
-                    // Detect slow market
-                    if (SLOW_MARKET.ENABLED) {
-                        slowMarketResult = detectSlowMarket(primaryData.candles);
-                        isSlowMarket = slowMarketResult.isSlow;
-                    }
-
-                    // Auto-detect slow market and suggest micro-trading
-                    if (!microTradingEnabled && localRegime.volatility === 'LOW') {
-                        // Silently apply micro-trading logic in slow markets
-                        isMicroMode = true;
-                    }
-
-                    // Adjust stop loss based on volatility
-                    if (localRegime.volatility === 'HIGH' || localRegime.volatility === 'EXTREME') {
-                        dynamicStopLossForExit = (isMicroMode ? microStopLoss : stopLossPercent) * 1.5; // Wider stops in volatile markets
-                    } else if (localRegime.volatility === 'LOW') {
-                        dynamicStopLossForExit = (isMicroMode ? microStopLoss : stopLossPercent) * 0.75; // Tighter stops in calm markets
-                    }
-
-                    // Slow market overrides stop loss
-                    if (isSlowMarket) {
-                        dynamicStopLossForExit = SLOW_MARKET.STOP_LOSS_SLOW;
-                    }
-                }
-            }
-
-            // --- EXIT LOGIC ---
-            for (const positionTicker of Object.keys(currentPortfolio.positions)) {
-                const position = currentPortfolio.positions[positionTicker];
-                const currentData = watchlistDataRef.current[positionTicker];
-                if (!currentData || currentData.candles.length === 0) continue;
-
-                const currentPrice = Number(currentData.candles.at(-1)!.close) || 0;
-                const profitGoal = profitGoals[position.entryStrategy];
-                const rawProfit = (currentPrice - position.openPrice) * position.quantity;
-                const feesPaid = (position.openPrice * position.quantity * currentExchangeFees.takerFee / 100) +
-                                 (currentPrice * position.quantity * currentExchangeFees.takerFee / 100);
-                const currentProfit = rawProfit - feesPaid;
-                const profitPercent = ((currentPrice - position.openPrice) / position.openPrice) * 100;
-                const profitPercentAfterFees = profitPercent - currentExchangeFees.roundTripFee;
-
-                // Update highest price for trailing stop
-                const updatedPosition = {
-                    ...position,
-                    highestPrice: Math.max(position.highestPrice, currentPrice),
-                    lowestPrice: Math.min(position.lowestPrice, currentPrice)
-                };
-                currentPortfolio.positions[positionTicker] = updatedPosition;
-
-                let exitReason: string | null = null;
-
-                // ======== PARTIAL EXIT SYSTEM (3-stage) ========
-                if (PARTIAL_EXIT.ENABLED && (updatedPosition.exitStage ?? 0) < 3 && updatedPosition.originalQuantity > 0) {
-                    const stage = updatedPosition.exitStage ?? 0;
-                    const origQty = updatedPosition.originalQuantity;
-
-                    // Stage 1: Sell 30% at +0.50% after fees
-                    if (stage === 0 && profitPercentAfterFees >= PARTIAL_EXIT.STAGE_1_TARGET) {
-                        const sellQty = origQty * (PARTIAL_EXIT.STAGE_1_PERCENT / 100);
-                        if (sellQty > 0 && updatedPosition.quantity > sellQty) {
-                            const sellValue = sellQty * currentPrice;
-                            const sellFee = sellValue * currentExchangeFees.takerFee / 100;
-                            const partialPnl = (currentPrice - updatedPosition.openPrice) * sellQty -
-                                (updatedPosition.openPrice * sellQty * currentExchangeFees.takerFee / 100) - sellFee;
-
-                            updatedPosition.quantity -= sellQty;
-                            updatedPosition.exitStage = 1;
-                            currentPortfolio.cash += sellValue - sellFee;
-
-                            addLog(
-                                `[PARTIAL-1] SELL ${sellQty.toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${currentPrice.toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)} (30% of position). PnL: $${partialPnl.toFixed(2)} (+${profitPercentAfterFees.toFixed(2)}%)`,
-                                'SELL'
-                            );
-                            addTrade({
-                                type: 'SELL', price: currentPrice, quantity: sellQty,
-                                ticker: positionTicker, strategy: updatedPosition.entryStrategy,
-                                reason: `[PARTIAL-1] +${profitPercentAfterFees.toFixed(2)}% after fees`, pnl: partialPnl
-                            });
-                        }
-                    }
-
-                    // Stage 2: Sell 40% at +1.50% after fees
-                    if (stage === 1 && profitPercentAfterFees >= PARTIAL_EXIT.STAGE_2_TARGET) {
-                        const sellQty = origQty * (PARTIAL_EXIT.STAGE_2_PERCENT / 100);
-                        if (sellQty > 0 && updatedPosition.quantity > sellQty) {
-                            const sellValue = sellQty * currentPrice;
-                            const sellFee = sellValue * currentExchangeFees.takerFee / 100;
-                            const partialPnl = (currentPrice - updatedPosition.openPrice) * sellQty -
-                                (updatedPosition.openPrice * sellQty * currentExchangeFees.takerFee / 100) - sellFee;
-
-                            updatedPosition.quantity -= sellQty;
-                            updatedPosition.exitStage = 2;
-                            currentPortfolio.cash += sellValue - sellFee;
-
-                            addLog(
-                                `[PARTIAL-2] SELL ${sellQty.toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${currentPrice.toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)} (40% of position). PnL: $${partialPnl.toFixed(2)} (+${profitPercentAfterFees.toFixed(2)}%)`,
-                                'SELL'
-                            );
-                            addTrade({
-                                type: 'SELL', price: currentPrice, quantity: sellQty,
-                                ticker: positionTicker, strategy: updatedPosition.entryStrategy,
-                                reason: `[PARTIAL-2] +${profitPercentAfterFees.toFixed(2)}% after fees`, pnl: partialPnl
-                            });
-                        }
-                    }
-
-                    // Stage 3: Tightening trailing stop on remaining 30%
-                    if (stage === 2 && profitPercentAfterFees >= PARTIAL_EXIT.STAGE_3_TRAILING_START) {
-                        // Interpolate trailing stop: starts at STAGE_3_TRAILING_START, tightens to STAGE_3_TRAILING_TIGHT
-                        const profitAboveStart = profitPercentAfterFees - PARTIAL_EXIT.STAGE_3_TRAILING_START;
-                        const tightenFactor = Math.min(1, profitAboveStart / 3); // Fully tight at +4.5% profit
-                        const trailingPct = PARTIAL_EXIT.STAGE_3_TRAILING_START -
-                            tightenFactor * (PARTIAL_EXIT.STAGE_3_TRAILING_START - PARTIAL_EXIT.STAGE_3_TRAILING_TIGHT);
-
-                        const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
-                        if (dropFromHigh >= trailingPct) {
-                            exitReason = `[PARTIAL-3] Trailing stop on remaining 30%: dropped ${dropFromHigh.toFixed(2)}% from high (trail: ${trailingPct.toFixed(2)}%)`;
-                        }
-                    }
-
-                    // Update the position in the portfolio after partial sells
-                    currentPortfolio.positions[positionTicker] = updatedPosition;
-                }
-
-                // MICRO-TRADING: Quick profit exits
-                if (isMicroMode) {
-                    // Take quick profits in micro mode (fee-adjusted)
-                    if (profitPercentAfterFees >= microProfitTarget) {
-                        exitReason = `[MICRO] Quick profit: +${profitPercentAfterFees.toFixed(3)}% after fees (target: ${microProfitTarget}%)`;
-                    }
-                    // Quick stop loss in micro mode
-                    else if (profitPercent <= -microStopLoss) {
-                        exitReason = `[MICRO] Quick stop: ${profitPercent.toFixed(3)}% (limit: -${microStopLoss}%)`;
-                    }
-                    // Micro trailing stop - only trail after fee recovery
-                    else if (profitPercentAfterFees > 0) {
-                        const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
-                        if (dropFromHigh >= microTrailingStop) {
-                            exitReason = `[MICRO] Trailing stop: dropped ${dropFromHigh.toFixed(3)}% from high`;
-                        }
-                    }
-                }
-
-                // SLOW MARKET: Use adjusted targets/stops in slow markets
-                if (!exitReason && isSlowMarket && !isMicroMode) {
-                    // Fee-aware slow market target: must exceed round-trip fees + margin
-                    const slowTarget = Math.max(SLOW_MARKET.PROFIT_TARGET_SLOW, currentExchangeFees.roundTripFee + 0.20);
-                    if (profitPercentAfterFees >= slowTarget) {
-                        exitReason = `[SLOW-MKT] Profit target: +${profitPercentAfterFees.toFixed(3)}% (target: ${slowTarget.toFixed(2)}%)`;
-                    } else {
-                        const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
-                        if (profitPercentAfterFees > 0 && dropFromHigh >= SLOW_MARKET.TRAILING_STOP_SLOW) {
-                            exitReason = `[SLOW-MKT] Trailing stop: dropped ${dropFromHigh.toFixed(2)}% from high`;
-                        }
-                    }
-                }
-
-                // 1. Check profit goal (normal mode)
-                if (!exitReason && profitGoal > 0 && currentProfit >= profitGoal) {
-                    exitReason = `Profit goal of $${profitGoal.toFixed(2)} reached (+${profitPercent.toFixed(2)}%)`;
-                }
-
-                // 2. Check stop-loss (uses dynamic stop loss based on market volatility)
-                if (!exitReason && dynamicStopLossForExit > 0) {
-                    const lossPercent = ((position.openPrice - currentPrice) / position.openPrice) * 100;
-                    if (lossPercent >= dynamicStopLossForExit) {
-                        exitReason = `Stop-loss triggered at -${lossPercent.toFixed(2)}% (dynamic: ${dynamicStopLossForExit.toFixed(1)}%)`;
-                    }
-                }
-
-                // 3. Check trailing stop (NEW)
-                if (!exitReason && useTrailingStop && trailingStopPercent > 0) {
-                    const dropFromHigh = ((updatedPosition.highestPrice - currentPrice) / updatedPosition.highestPrice) * 100;
-                    if (dropFromHigh >= trailingStopPercent && currentPrice > position.openPrice) {
-                        exitReason = `Trailing stop triggered (-${dropFromHigh.toFixed(2)}% from high)`;
-                    }
-                }
-
-                // 4. Check indicator exit signals
-                if (!exitReason) {
-                    const lastTcValue = currentData.indicatorData.at(-1)?.value ?? 50;
-                    const lastBreakoutValue = currentData.breakoutData.at(-1)?.value ?? 50;
-                    const lastWhaleValue = currentData.whaleData.at(-1)?.value ?? 50;
-                    const confluenceScore = currentData.trendDashboardData.score;
-                    const momentumValue = currentData.momentumData.at(-1)?.value ?? 50;
-
-                    switch (position.entryStrategy) {
-                        case 'TREND':
-                            if (lastTcValue > SIGNAL_THRESHOLDS.TREND_BEARISH_EXIT)
-                                exitReason = "Trend Signal: Bearish exit";
-                            break;
-                        case 'BREAKOUT':
-                            if (lastBreakoutValue > SIGNAL_THRESHOLDS.BREAKOUT_EXPANSION_EXIT)
-                                exitReason = "Breakout Signal: Volatility Ended";
-                            break;
-                        case 'WHALE':
-                            if (lastWhaleValue < SIGNAL_THRESHOLDS.WHALE_SELLING_EXIT)
-                                exitReason = "Whale Signal: Whale Selling";
-                            break;
-                        case 'CONFLUENCE':
-                            if (confluenceScore <= SIGNAL_THRESHOLDS.CONFLUENCE_BEARISH_EXIT)
-                                exitReason = "Confluence Signal: Bearish Alignment";
-                            break;
-                        case 'MOMENTUM':
-                            if (momentumValue < 50 - SIGNAL_THRESHOLDS.MOMENTUM_BEARISH_EXIT)
-                                exitReason = "Momentum Signal: Bearish Momentum";
-                            break;
-                        case 'DIVERGENCE':
-                            if (currentData.divergenceData.type === 'bearish' &&
-                                currentData.divergenceData.confidence > SIGNAL_THRESHOLDS.DIVERGENCE_MIN_CONFIDENCE)
-                                exitReason = "Divergence Signal: Bearish Divergence Detected";
-                            break;
-                        case 'ADAPTIVE': {
-                            const adaptiveValue = currentData.adaptiveData?.at(-1)?.value ?? 50;
-                            if (adaptiveValue > SIGNAL_THRESHOLDS.ADAPTIVE_BEARISH_EXIT)
-                                exitReason = `Adaptive Signal: Bearish exit (${adaptiveValue.toFixed(0)}% drop probability)`;
-                            break;
-                        }
-                    }
-                }
-
-                // Time-based exit: cut losers after 15 minutes
-                if (!exitReason) {
-                    const holdMinutes = (Date.now() - position.entryTime) / 60000;
-                    if (holdMinutes > 15 && profitPercentAfterFees < 0) {
-                        exitReason = `Time exit: ${profitPercentAfterFees.toFixed(2)}% after fees, ${holdMinutes.toFixed(0)}min hold`;
-                    }
-                }
-
-                if (exitReason) {
-                    const sellFee = currentPrice * position.quantity * currentExchangeFees.takerFee / 100;
-                    const saleValue = position.quantity * currentPrice;
-                    const pnl = currentProfit;
-
-                    // AI LEARNING: Record this completed trade
-                    if (aiLearningEnabled) {
-                        const lastTcValue = currentData.indicatorData.at(-1)?.value ?? 50;
-                        const lastMomentumValue = currentData.momentumData.at(-1)?.value ?? 50;
-                        const lastWhaleValue = currentData.whaleData.at(-1)?.value ?? 50;
-                        const lastConfluenceScore = currentData.trendDashboardData.score;
-
-                        recordTrade({
-                            ticker: positionTicker,
-                            strategy: position.entryStrategy,
-                            entryPrice: position.openPrice,
-                            exitPrice: currentPrice,
-                            entryTime: position.entryTime,
-                            exitTime: Date.now(),
-                            quantity: position.quantity,
-                            indicators: {
-                                tcValue: lastTcValue,
-                                momentumValue: lastMomentumValue,
-                                whaleValue: lastWhaleValue,
-                                confluenceScore: lastConfluenceScore,
-                            },
-                            marketConditions: {
-                                volatility: marketRegime?.volatility as 'LOW' | 'MEDIUM' | 'HIGH' || 'MEDIUM',
-                                trend: marketRegime?.trend as 'UP' | 'DOWN' | 'SIDEWAYS' || 'SIDEWAYS',
-                                volume: 'MEDIUM', // TODO: Calculate from candles
-                            }
-                        });
-
-                        // Update learning state for UI
-                        setLearningStateData(getLearningState());
-                    }
-
-                    addLog(
-                        `SIM: SELL ${Number(position.quantity).toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${Number(currentPrice).toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)}. PnL: $${Number(pnl).toFixed(2)}. Reason: ${exitReason}`,
-                        'SELL'
-                    );
-
-                    addTrade({
-                        type: 'SELL',
-                        price: currentPrice,
-                        quantity: position.quantity,
-                        ticker: positionTicker,
-                        strategy: position.entryStrategy,
-                        reason: exitReason,
-                        pnl
-                    });
-
-                    const { [positionTicker]: _, ...remainingPositions } = currentPortfolio.positions;
-                    currentPortfolio = {
-                        ...currentPortfolio,
-                        cash: currentPortfolio.cash + saleValue - sellFee,
-                        positions: remainingPositions
-                    };
-                }
-            }
-
-            // Calculate total portfolio value
-            const totalValue = currentPortfolio.cash + Object.values(currentPortfolio.positions).reduce((sum, pos) => {
-                const price = watchlistDataRef.current[pos.ticker]?.candles?.at(-1)?.close ?? pos.openPrice;
-                return sum + (pos.quantity * price);
-            }, 0);
-
-            // Check session profit goal (compare total value against initial budget + goal amount)
-            const sessionProfit = totalValue - currentPortfolio.initialBudget;
-            if (sessionProfitGoal > 0 && totalValue >= sessionProfitGoal && sessionProfit > 0) {
-                addLog(`SESSION PROFIT GOAL of $${sessionProfitGoal.toFixed(2)} REACHED! Total value: $${totalValue.toFixed(2)} (Profit: $${sessionProfit.toFixed(2)})`, 'SPECIAL');
-                setIsBotActive(false);
-                setPortfolio(currentPortfolio);
-                return;
-            }
-
-            // --- SESSION WIND-DOWN: Skip entries if session is about to end ---
-            if (durationMins > 0 && sessionStartTime > 0) {
-                const sessionEndTime = sessionStartTime + (durationMins * 60 * 1000);
-                const timeRemaining = sessionEndTime - Date.now();
-                const windDownMs = Math.min(5 * 60 * 1000, durationMins * 60 * 1000 * 0.1);
-
-                if (timeRemaining <= windDownMs && timeRemaining > 0) {
-                    if (Math.random() < 0.05) {
-                        const minsLeft = Math.ceil(timeRemaining / 60000);
-                        addLog(`Session winding down (${minsLeft}m left) - no new trades, exits only`, 'INFO');
-                    }
-                    setPortfolio(currentPortfolio);
-                    return;
-                }
-            }
-
-            // --- SMART ENTRY LOGIC ---
-            // Calculate session analytics for dynamic adjustments
-            const sessionAnalytics = calculateSessionAnalytics(
-                trades,
-                sessionStartTime || Date.now(),
-                sessionProfitGoal,
-                totalValue,
-                currentPortfolio.initialBudget
-            );
-
-            // Get market regime from the most liquid asset (BTC or first available)
-            const primaryTicker = availableTickers.find(t => t.includes('BTC')) || availableTickers[0];
-            const primaryData = watchlistDataRef.current[primaryTicker];
-            let regime: MarketRegime | null = null;
-            // UNLIMITED TRADES: Set to very high number when enabled
-            let dynamicMaxTrades = unlimitedTrades ? 999999 : maxConcurrentTrades;
-            let dynamicRiskAmount = isMicroMode ? (MICRO_TRADING.MICRO_MIN_POSITION_PERCENT / 100) : riskAmount;
-            let dynamicStopLoss = isMicroMode ? microStopLoss : stopLossPercent;
-
-            if (smartTradingEnabled && primaryData && primaryData.candles.length > 20) {
-                // Detect market regime
-                regime = detectMarketRegime(primaryData.candles);
-
-                // Calculate dynamic parameters
-                const dynParams = calculateDynamicParams(
-                    primaryData.candles,
-                    sessionAnalytics,
-                    maxConcurrentTrades,
-                    riskAmount,
-                    stopLossPercent
-                );
-
-                dynamicMaxTrades = dynParams.adjustedMaxTrades;
-                dynamicRiskAmount = dynParams.adjustedRiskAmount;
-                dynamicStopLoss = dynParams.adjustedStopLoss;
-
-                // Update state for UI display (throttled)
-                if (Math.random() < 0.2) { // Update 20% of the time to reduce re-renders
-                    setDynamicParams(dynParams);
-                    setMarketRegime({
-                        trend: regime.trend,
-                        volatility: regime.volatility,
-                        tradingCondition: regime.tradingCondition,
-                        recommendedStrategy: regime.recommendedStrategy
-                    });
-                }
-
-                // In AVOID conditions, reduce position size but DON'T block trades entirely
-                // Surge trading can still find opportunities in volatile conditions
-                if (regime.tradingCondition === 'AVOID') {
-                    dynamicRiskAmount *= 0.5; // Halve position size in poor conditions
-                    if (Math.random() < 0.05) {
-                        addLog(`Smart Trading: Volatile conditions (${regime.volatility}, ${regime.trend}) - reduced position size, surge detection active`, 'INFO');
-                    }
-                }
-            }
-
-            // Rank opportunities across all assets - use low candle requirement for fast start
-            const watchlistForRanking: Record<string, { candles: Candle[]; srLevels: any }> = {};
-            for (const t of availableTickers) {
-                const data = watchlistDataRef.current[t];
-                if (data && data.candles.length > 10 && !currentPortfolio.positions[t]) {
-                    watchlistForRanking[t] = { candles: data.candles, srLevels: data.srLevels };
-                }
-            }
-
-            // Get ranked opportunities (best first)
-            const rankedOpportunities = smartTradingEnabled
-                ? rankOpportunities(watchlistForRanking)
-                : [];
-
-            const openPositionsCount = Object.keys(currentPortfolio.positions).length;
-            if (openPositionsCount < dynamicMaxTrades) {
-                // Use ranked opportunities if smart trading is enabled, otherwise use original order
-                const tickersToCheck = smartTradingEnabled && rankedOpportunities.length > 0
-                    ? rankedOpportunities.map(o => o.ticker)
-                    : availableTickers;
-
-                for (const entryTicker of tickersToCheck) {
-                    if (currentPortfolio.positions[entryTicker] ||
-                        Object.keys(currentPortfolio.positions).length >= dynamicMaxTrades) continue;
-
-                    const currentData = watchlistDataRef.current[entryTicker];
-                    if (!currentData || currentData.candles.length === 0) continue;
-
-                    const currentPrice = Number(currentData.candles.at(-1)!.close) || 0;
-                    const lastTcValue = currentData.indicatorData.at(-1)?.value ?? 50;
-                    const lastBreakoutValue = currentData.breakoutData.at(-1)?.value ?? 50;
-                    const lastWhaleValue = currentData.whaleData.at(-1)?.value ?? 50;
-                    const momentumValue = currentData.momentumData.at(-1)?.value ?? 50;
-                    const confluenceScore = currentData.trendDashboardData.score;
-                    const divergence = currentData.divergenceData;
-                    const signalScore = currentData.signalScore;
-
-                    // Check for gaps (quick opportunities)
-                    const gapData = smartTradingEnabled ? detectGap(currentData.candles) : null;
-
-                    let entryReason: string | null = null;
-                    let entryStrategy: TradingStrategy | null = null;
-                    let urgencyBoost = 0;
-                    let surgeDecision: ReturnType<typeof getSurgeTradingDecision> | null = null;
-
-                    // ======== SURGE DETECTION (HIGHEST PRIORITY) ========
-                    // Check for surges, dips, and trend rides FIRST - these are time-sensitive
-                    if (currentData.candles.length >= 10) {
-                        surgeDecision = getSurgeTradingDecision(currentData.candles);
-
-                        if (surgeDecision.shouldTrade && surgeDecision.action === 'BUY' &&
-                            surgeDecision.confidence >= SURGE_TRADING.MIN_SURGE_CONFIDENCE) {
-
-                            // Anti-FOMO: RSI proxy overbought check
-                            const recentUpCandles = currentData.candles.slice(-14).filter(c => c.close > c.open).length;
-                            const isOverbought = recentUpCandles >= 10;
-
-                            // Resistance check (top 5% of 50-candle range)
-                            const recentCloses = currentData.candles.slice(-50).map(c => c.close);
-                            const rangeHigh = Math.max(...recentCloses);
-                            const rangeLow = Math.min(...recentCloses);
-                            const pricePercentile = rangeHigh > rangeLow ? (currentPrice - rangeLow) / (rangeHigh - rangeLow) : 0.5;
-                            const atResistance = pricePercentile > 0.95;
-
-                            const isDipBuySignal = surgeDecision.strategy === 'DIP_BUY';
-
-                            // Slow market: only allow DIP_BUY surges
-                            const slowMarketBlocked = isSlowMarket && !isDipBuySignal;
-
-                            // Block non-dip entries at overbought/resistance or in slow markets
-                            if (((isOverbought || atResistance) && !isDipBuySignal) || slowMarketBlocked) {
-                                // Skip - FOMO protection / slow market filter
-                            } else {
-                                // Map surge strategy to trading strategy
-                                switch (surgeDecision.strategy) {
-                                    case 'DIP_BUY':
-                                        entryStrategy = 'TREND';
-                                        break;
-                                    case 'TREND_RIDE':
-                                        entryStrategy = 'TREND';
-                                        break;
-                                    case 'BREAKOUT_SURGE':
-                                        entryStrategy = 'BREAKOUT';
-                                        break;
-                                    case 'PATTERN':
-                                        entryStrategy = 'ADAPTIVE';
-                                        break;
-                                    default:
-                                        entryStrategy = 'MOMENTUM';
-                                        break;
-                                }
-                                entryReason = `[SURGE] ${surgeDecision.reason}`;
-                                urgencyBoost = surgeDecision.urgency === 'IMMEDIATE' ? 30 :
-                                              surgeDecision.urgency === 'SOON' ? 15 : 5;
-
-                                // Surge trades get extra confidence from the surge system
-                                urgencyBoost += Math.floor(surgeDecision.confidence / 5);
-                            }
-                        }
-                    }
-
-                    // Gap-based entry (high priority if breakaway gap)
-                    if (!entryStrategy && gapData && gapData.hasGap && !gapData.gapFilled && gapData.isBreakawayGap) {
-                        if (gapData.gapType === 'GAP_UP' && momentumValue > 55) {
-                            entryStrategy = 'MOMENTUM';
-                            entryReason = `Gap Up Breakaway: ${gapData.gapPercent.toFixed(2)}% gap with strong volume`;
-                            urgencyBoost = 20;
-                        }
-                    }
-
-                    // Check each strategy for entry signals (if no gap entry)
-                    const adaptiveEntryValue = currentData.adaptiveData?.at(-1)?.value ?? 50;
-
-                    if (!entryStrategy) {
-                        // MICRO-TRADING: Use more sensitive entry thresholds
-                        const microTcEntry = MICRO_TRADING.MICRO_TC_ENTRY_THRESHOLD;
-                        const microMomentumEntry = MICRO_TRADING.MICRO_MOMENTUM_ENTRY;
-                        const microWhaleEntry = MICRO_TRADING.MICRO_WHALE_ENTRY;
-
-                        // Prioritize recommended strategy from market regime
-                        const allStrategies: TradingStrategy[] = regime?.recommendedStrategy
-                            ? [regime.recommendedStrategy, ...Object.keys(DEFAULT_PROFIT_GOALS) as TradingStrategy[]]
-                            : [...Object.keys(DEFAULT_PROFIT_GOALS) as TradingStrategy[]];
-
-                        // Regime-aware strategy filtering using imported map
-                        // Slow market overrides regime filtering with its own allowed set
-                        const regimeTrend = regime?.trend || 'SIDEWAYS';
-                        const allowedForRegime: readonly string[] = isSlowMarket
-                            ? SLOW_MARKET.ALLOWED_STRATEGIES
-                            : (REGIME_STRATEGY_MAP[regimeTrend] || allStrategies);
-                        const prioritizedStrategies = allStrategies.filter(s => allowedForRegime.includes(s));
-
-                        for (const strat of prioritizedStrategies) {
-                            if (entryStrategy) break;
-
-                            switch (strat) {
-                                case 'TREND':
-                                    // Use more sensitive threshold in micro mode
-                                    const trendThreshold = isMicroMode ? microTcEntry : SIGNAL_THRESHOLDS.TREND_BULLISH_ENTRY;
-                                    if (lastTcValue < trendThreshold) {
-                                        entryStrategy = 'TREND';
-                                        entryReason = isMicroMode
-                                            ? `[MICRO] Trend entry (TC=${lastTcValue.toFixed(1)} < ${trendThreshold})`
-                                            : `Trend Signal: Bullish entry (TC=${lastTcValue.toFixed(1)})`;
-                                    }
-                                    break;
-                                case 'BREAKOUT':
-                                    if (lastBreakoutValue < SIGNAL_THRESHOLDS.BREAKOUT_SQUEEZE_ENTRY) {
-                                        entryStrategy = 'BREAKOUT';
-                                        entryReason = `Breakout Signal: Volatility Squeeze (V=${lastBreakoutValue.toFixed(1)})`;
-                                    }
-                                    break;
-                                case 'WHALE':
-                                    // Use more sensitive threshold in micro mode
-                                    const whaleThreshold = isMicroMode ? microWhaleEntry : SIGNAL_THRESHOLDS.WHALE_BUYING_ENTRY;
-                                    if (lastWhaleValue > whaleThreshold) {
-                                        entryStrategy = 'WHALE';
-                                        entryReason = isMicroMode
-                                            ? `[MICRO] Whale entry (WMF=${lastWhaleValue.toFixed(1)} > ${whaleThreshold})`
-                                            : `Whale Signal: Whale Buying (WMF=${lastWhaleValue.toFixed(1)})`;
-                                    }
-                                    break;
-                                case 'CONFLUENCE':
-                                    // In micro mode, accept lower confluence score
-                                    const confluenceThreshold = isMicroMode ? 3 : SIGNAL_THRESHOLDS.CONFLUENCE_BULLISH_ENTRY;
-                                    if (confluenceScore >= confluenceThreshold) {
-                                        entryStrategy = 'CONFLUENCE';
-                                        entryReason = isMicroMode
-                                            ? `[MICRO] Confluence entry (${confluenceScore}/6 indicators)`
-                                            : `Confluence Signal: Bullish Alignment (${confluenceScore}/6)`;
-                                    }
-                                    break;
-                                case 'MOMENTUM':
-                                    // Use more sensitive threshold in micro mode
-                                    const momentumThreshold = isMicroMode ? microMomentumEntry : SIGNAL_THRESHOLDS.MOMENTUM_BULLISH_ENTRY;
-                                    if (momentumValue > 50 + momentumThreshold) {
-                                        entryStrategy = 'MOMENTUM';
-                                        entryReason = isMicroMode
-                                            ? `[MICRO] Momentum entry (M=${momentumValue.toFixed(1)})`
-                                            : `Momentum Signal: Strong Upward Momentum (M=${momentumValue.toFixed(1)})`;
-                                    }
-                                    break;
-                                case 'DIVERGENCE':
-                                    // In micro mode, accept lower divergence confidence
-                                    const divThreshold = isMicroMode ? 45 : SIGNAL_THRESHOLDS.DIVERGENCE_MIN_CONFIDENCE;
-                                    if (divergence.type === 'bullish' && divergence.confidence >= divThreshold) {
-                                        entryStrategy = 'DIVERGENCE';
-                                        entryReason = isMicroMode
-                                            ? `[MICRO] Divergence entry (${divergence.confidence.toFixed(0)}% conf)`
-                                            : `Divergence Signal: Bullish RSI Divergence (${divergence.confidence.toFixed(0)}% confidence)`;
-                                    }
-                                    break;
-                                case 'ADAPTIVE':
-                                    // Use more sensitive threshold in micro mode
-                                    const adaptiveThreshold = isMicroMode ? 40 : SIGNAL_THRESHOLDS.ADAPTIVE_BULLISH_ENTRY;
-                                    if (adaptiveEntryValue < adaptiveThreshold) {
-                                        entryStrategy = 'ADAPTIVE';
-                                        entryReason = isMicroMode
-                                            ? `[MICRO] Adaptive entry (${Math.round(100 - adaptiveEntryValue)}% pump prob)`
-                                            : `Adaptive Signal: ${Math.round(100 - adaptiveEntryValue)}% pump probability (${entryTicker})`;
-                                    }
-                                    break;
-                            }
-                        }
-                    }
-
-                    // AI LEARNING + ASSET INTELLIGENCE + SENTIMENT + ON-CHAIN: Combined trading decision
-                    let shouldEnter = false;
-                    let aiDecisionReason = '';
-                    let assetRiskParams = { stopLossMultiplier: 1, profitTargetMultiplier: 1, positionSizeMultiplier: 1, confidenceBoost: 0 };
-                    let totalConfidenceBoost = 0;
-
-                    // Track if this is a surge-detected entry (bypasses some veto gates)
-                    const isSurgeEntry = entryReason?.startsWith('[SURGE]') ?? false;
-
-                    if (entryStrategy && entryReason) {
-                        // ASSET INTELLIGENCE: Get asset-specific parameters
-                        if (assetIntelligenceEnabled) {
-                            assetRiskParams = getRiskAdjustedParams(entryTicker);
-
-                            // Check if this asset is suitable for the strategy
-                            // Surge entries bypass tradeability check
-                            if (!isSurgeEntry) {
-                                const tradeability = isAssetTradeable(entryTicker, entryStrategy);
-                                if (!tradeability.tradeable) {
-                                    // Reduce confidence instead of hard block
-                                    totalConfidenceBoost -= 15;
-                                }
-                            }
-
-                            // Get volatility-based entry rules
-                            const volRules = getVolatilityBasedRules(entryTicker, '1h');
-                            totalConfidenceBoost += volRules.entryThresholdAdjustment + assetRiskParams.confidenceBoost;
-
-                            // Get best strategy suggestion for this asset
-                            const bestStrategy = getBestStrategyForAsset(entryTicker);
-                            if (bestStrategy && bestStrategy === entryStrategy) {
-                                totalConfidenceBoost += 10;
-                                aiDecisionReason = `Asset-strategy match: ${entryTicker} ideal for ${entryStrategy}`;
-                            }
-                        }
-
-                        // ENHANCED SENTIMENT: Apply sentiment filter and confidence adjustment
-                        if (enhancedSentimentEnabled && currentData.candles.length > 20) {
-                            const tickerSentiment = calculateSentimentFromMarketData(currentData.candles, entryTicker);
-
-                            // Sentiment veto: only block non-surge trades with VERY bad sentiment
-                            const sentimentFilter = applySentimentFilter(tickerSentiment, 'LONG', -40);
-                            if (!sentimentFilter.proceed && !isSurgeEntry) {
-                                // Reduce confidence instead of hard block
-                                totalConfidenceBoost -= 20;
-                            }
-
-                            // Get confidence adjustment from sentiment
-                            const sentimentAdjust = calculateSentimentConfidenceAdjustment(tickerSentiment, entryStrategy);
-                            totalConfidenceBoost += sentimentAdjust.adjustment;
-                            if (sentimentAdjust.adjustment !== 0) {
-                                aiDecisionReason += aiDecisionReason ? ` | ${sentimentAdjust.reason}` : sentimentAdjust.reason;
-                            }
-
-                            // Check for sentiment burst (micro-trade trigger)
-                            const burst = detectSentimentBurst(tickerSentiment, getCorrelatedMemeAssets(entryTicker));
-                            if (burst.detected && burst.recommendedAction === 'MICRO_TRADE_LONG') {
-                                totalConfidenceBoost += 15;
-                                aiDecisionReason += ' | Sentiment burst detected';
-                            }
-                        }
-
-                        // ON-CHAIN ANALYTICS: Apply on-chain adjustment
-                        if (onChainEnabled && currentData.candles.length > 20) {
-                            const onChainData = calculateOnChainSignals(currentData.candles, entryTicker);
-                            const onChainAdjust = getOnChainTradingAdjustment(onChainData);
-
-                            // Surge entries bypass on-chain veto
-                            if (!onChainAdjust.shouldTrade && !isSurgeEntry) {
-                                totalConfidenceBoost -= 15;
-                            }
-
-                            totalConfidenceBoost += onChainAdjust.confidenceBoost;
-                            assetRiskParams.positionSizeMultiplier *= onChainAdjust.positionSizeMultiplier;
-                            if (onChainAdjust.confidenceBoost !== 0) {
-                                aiDecisionReason += aiDecisionReason ? ` | ${onChainAdjust.reason}` : onChainAdjust.reason;
-                            }
-                        }
-
-                        // SURGE ENTRIES: High-confidence surge signals bypass AI gating
-                        if (isSurgeEntry && urgencyBoost >= 25) {
-                            shouldEnter = true;
-                            aiDecisionReason = `SURGE BYPASS: High-confidence surge entry (boost=${urgencyBoost})`;
-                        } else if (aiLearningEnabled) {
-                            // Get AI-powered trade decision with all boosts
-                            // Use actual signal confidence - no artificial floor
-                            const baseConfidence = signalScore.confidence;
-                            const aiDecision = shouldTakeTrade(
-                                entryStrategy,
-                                {
-                                    tcValue: lastTcValue,
-                                    momentumValue: momentumValue,
-                                    whaleValue: lastWhaleValue,
-                                    confluenceScore: confluenceScore,
-                                    confidence: baseConfidence + urgencyBoost + totalConfidenceBoost
-                                },
-                                {
-                                    volatility: regime?.volatility as 'LOW' | 'MEDIUM' | 'HIGH' || 'MEDIUM',
-                                    trend: regime?.trend as 'UP' | 'DOWN' | 'SIDEWAYS' || 'SIDEWAYS'
-                                }
-                            );
-
-                            shouldEnter = aiDecision.take;
-                            aiDecisionReason = aiDecision.reason + (aiDecisionReason ? ` | ${aiDecisionReason}` : '');
-
-                            // Update learning state periodically
-                            if (Math.random() < 0.1) {
-                                setLearningStateData(getLearningState());
-                            }
-                        } else {
-                            // Fallback to old logic with all boosts
-                            const opportunityScore = rankedOpportunities.find(o => o.ticker === entryTicker);
-                            let confidenceThreshold = RISK_DEFAULTS.MIN_SIGNAL_CONFIDENCE;
-                            if (opportunityScore && opportunityScore.urgency === 'IMMEDIATE') {
-                                confidenceThreshold = Math.max(15, confidenceThreshold - 15);
-                            }
-                            const effectiveConfidenceThreshold = isMicroMode ? Math.max(10, confidenceThreshold - 25) : confidenceThreshold;
-                            // Use actual signal confidence - no artificial floor
-                            const effectiveConfidence = signalScore.confidence + urgencyBoost + totalConfidenceBoost;
-                            shouldEnter = effectiveConfidence >= effectiveConfidenceThreshold;
-                            aiDecisionReason = `Confidence ${effectiveConfidence.toFixed(0)} >= ${effectiveConfidenceThreshold}`;
-                        }
-                    }
-
-                    if (shouldEnter) {
-                        const remainingSlots = unlimitedTrades ? 1 : Math.max(1, dynamicMaxTrades - Object.keys(currentPortfolio.positions).length);
-
-                        // ASSET INTELLIGENCE: Apply position size multiplier based on asset liquidity/risk
-                        const assetPositionMultiplier = assetIntelligenceEnabled ? assetRiskParams.positionSizeMultiplier : 1;
-
-                        // VOLATILITY METHODS: Get volatility-adjusted parameters
-                        let volAdjustedSize = 1;
-                        if (volatilityAnalysisEnabled && currentData.candles.length > 30) {
-                            const volParams = getVolatilityAdjustedParams(
-                                currentData.candles,
-                                dynamicStopLoss,
-                                profitGoals[entryStrategy] || 10,
-                                1 // Base position size multiplier
-                            );
-                            volAdjustedSize = volParams.positionSize;
-                        }
-
-                        // KELLY CRITERION: Dynamic Kelly-based position sizing (Feature 4)
-                        let kellyMultiplier = 1;
-                        if (riskMetricsEnabled && kellyResult && kellyResult.recommendedFraction > 0) {
-                            const tradeCount = kellyResult.stats?.trades || 0;
-                            if (tradeCount >= 20) {
-                                // Enough data: use Kelly fraction capped at 25%
-                                const kellyFraction = Math.min(0.25, kellyResult.recommendedFraction);
-                                kellyMultiplier = kellyFraction / 0.10; // Relative to 10% base
-                            } else {
-                                // Not enough data: conservative 10% base (multiplier = 1)
-                                kellyMultiplier = 1;
-                            }
-                        }
-
-                        // SURGE/TREND TRADING: Boost position size for high-conviction entries
-                        const surgeMultiplier = isSurgeEntry ? SURGE_TRADING.TREND_POSITION_MULTIPLIER : 1;
-
-                        // Combined multiplier from all systems
-                        const combinedMultiplier = assetPositionMultiplier * volAdjustedSize * kellyMultiplier * surgeMultiplier;
-
-                        let investmentAmount: number;
-                        if (isSurgeEntry) {
-                            // Scale position by surge confidence (higher confidence = larger position)
-                            const surgeConf = surgeDecision?.confidence ?? 50;
-                            const confFactor = Math.max(0, (surgeConf - 30) / 70);
-                            const surgePositionPercent = SURGE_TRADING.SURGE_MIN_POSITION_PERCENT +
-                                confFactor * (SURGE_TRADING.SURGE_MAX_POSITION_PERCENT - SURGE_TRADING.SURGE_MIN_POSITION_PERCENT);
-                            investmentAmount = currentPortfolio.cash * (surgePositionPercent / 100) * combinedMultiplier;
-                        } else if (isMicroMode) {
-                            // In micro mode, use smaller fixed percentage of cash
-                            const microPositionPercent = MICRO_TRADING.MICRO_MIN_POSITION_PERCENT +
-                                Math.random() * (MICRO_TRADING.MICRO_MAX_POSITION_PERCENT - MICRO_TRADING.MICRO_MIN_POSITION_PERCENT);
-                            investmentAmount = currentPortfolio.cash * (microPositionPercent / 100) * combinedMultiplier;
-                        } else if (unlimitedTrades) {
-                            // For unlimited trades, use a smaller fixed percentage
-                            investmentAmount = currentPortfolio.cash * 0.1 * dynamicRiskAmount * combinedMultiplier;
-                        } else {
-                            investmentAmount = (currentPortfolio.cash / remainingSlots) * dynamicRiskAmount * combinedMultiplier;
-                        }
-
-                        // Hard position cap: never exceed 20% of cash
-                        investmentAmount = Math.min(investmentAmount, currentPortfolio.cash * 0.20);
-
-                        // Ensure minimum trade size
-                        const minTradeSize = Math.max(1.0, RISK_DEFAULTS.MIN_TRADE_SIZE_USD);
-                        if (investmentAmount > minTradeSize) {
-                            const quantity = investmentAmount / currentPrice;
-
-                            // Enhanced log with smart trading, AI learning, and asset intelligence info
-                            const smartInfo = smartTradingEnabled && regime
-                                ? ` [${regime.tradingCondition} market]`
-                                : '';
-                            const aiInfo = aiLearningEnabled ? ` | AI: ${aiDecisionReason}` : '';
-                            const assetInfo = assetIntelligenceEnabled && assetRiskParams.positionSizeMultiplier !== 1
-                                ? ` | Size: ${(assetRiskParams.positionSizeMultiplier * 100).toFixed(0)}%`
-                                : '';
-
-                            addLog(
-                                `SIM: BUY ${Number(quantity).toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${entryTicker} @ ${Number(currentPrice).toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)}. [${entryStrategy}] ${entryReason}${smartInfo}${aiInfo}${assetInfo}`,
-                                'BUY'
-                            );
-
-                            addTrade({
-                                type: 'BUY',
-                                price: currentPrice,
-                                quantity,
-                                ticker: entryTicker,
-                                strategy: entryStrategy,
-                                reason: entryReason
-                            });
-
-                            const newPosition: Position = {
-                                quantity,
-                                openPrice: currentPrice,
-                                ticker: entryTicker,
-                                entryStrategy,
-                                entryTime: Date.now(),
-                                highestPrice: currentPrice,
-                                lowestPrice: currentPrice,
-                                exitStage: 0,
-                                originalQuantity: quantity
-                            };
-
-                            const buyFee = investmentAmount * currentExchangeFees.takerFee / 100;
-                            currentPortfolio = {
-                                ...currentPortfolio,
-                                cash: currentPortfolio.cash - investmentAmount - buyFee,
-                                positions: {
-                                    ...currentPortfolio.positions,
-                                    [entryTicker]: newPosition
-                                }
-                            };
-                        }
-                    }
-                }
-            }
-
-            // ============================================
-            // PROFIT METHODS: Grid, DCA, Arbitrage, Pairs, Swing, Market Making
-            // These run alongside the main trading strategies
-            // ============================================
-
-            // --- GRID TRADING ---
-            if (PROFIT_METHODS.GRID.ENABLED) {
-                for (const gridTicker of availableTickers) {
-                    const gridData = watchlistDataRef.current[gridTicker];
-                    if (!gridData || gridData.candles.length < 15) continue;
-
-                    const gridSignal = processGrid(gridTicker, gridData.candles, currentPortfolio.cash);
-                    if (gridSignal && gridSignal.shouldAct) {
-                        const gridPrice = Number(gridData.candles.at(-1)!.close);
-                        const gridAmount = Math.min(gridSignal.investmentAmount, currentPortfolio.cash * 0.1);
-
-                        if (gridSignal.action === 'BUY' && gridAmount > 1 && currentPortfolio.cash > gridAmount) {
-                            const qty = gridAmount / gridPrice;
-                            addLog(`GRID BUY: ${qty.toFixed(4)} ${gridTicker} @ ${gridPrice.toFixed(2)} | ${gridSignal.reason}`, 'BUY');
-                            addTrade({ type: 'BUY', price: gridPrice, quantity: qty, ticker: gridTicker, strategy: 'ADAPTIVE', reason: gridSignal.reason });
-
-                            if (!currentPortfolio.positions[gridTicker]) {
-                                currentPortfolio = {
-                                    ...currentPortfolio,
-                                    cash: currentPortfolio.cash - gridAmount,
-                                    positions: {
-                                        ...currentPortfolio.positions,
-                                        [gridTicker]: { quantity: qty, openPrice: gridPrice, ticker: gridTicker, entryStrategy: 'ADAPTIVE' as TradingStrategy, entryTime: Date.now(), highestPrice: gridPrice, lowestPrice: gridPrice, exitStage: 0, originalQuantity: qty }
-                                    }
-                                };
-                            }
-                        } else if (gridSignal.action === 'SELL' && currentPortfolio.positions[gridTicker]) {
-                            const pos = currentPortfolio.positions[gridTicker];
-                            const pnl = (gridPrice - pos.openPrice) * pos.quantity;
-                            addLog(`GRID SELL: ${Number(pos.quantity).toFixed(4)} ${gridTicker} @ ${Number(gridPrice).toFixed(2)} | PnL: $${Number(pnl).toFixed(2)} | ${gridSignal.reason}`, 'SELL');
-                            addTrade({ type: 'SELL', price: gridPrice, quantity: pos.quantity, ticker: gridTicker, strategy: 'ADAPTIVE', reason: gridSignal.reason, pnl });
-
-                            const { [gridTicker]: _, ...remaining } = currentPortfolio.positions;
-                            currentPortfolio = { ...currentPortfolio, cash: currentPortfolio.cash + pos.quantity * gridPrice, positions: remaining };
-                        }
-                    }
-                }
-            }
-
-            // --- SMART DCA ---
-            if (PROFIT_METHODS.DCA.ENABLED) {
-                for (const dcaTicker of availableTickers) {
-                    const dcaData = watchlistDataRef.current[dcaTicker];
-                    if (!dcaData || dcaData.candles.length < 10) continue;
-
-                    const dcaSignal = processDCA(dcaTicker, dcaData.candles, currentPortfolio.cash, currentPortfolio.initialBudget);
-                    if (dcaSignal && dcaSignal.shouldBuy && dcaSignal.amount > 0.50 && currentPortfolio.cash > dcaSignal.amount) {
-                        const dcaPrice = Number(dcaData.candles.at(-1)!.close) || 0;
-                        const dcaQty = dcaSignal.amount / dcaPrice;
-
-                        recordDCABuy(dcaTicker, dcaPrice, dcaQty, dcaSignal.amount);
-                        addLog(`DCA BUY: ${Number(dcaQty).toFixed(4)} ${dcaTicker} @ ${Number(dcaPrice).toFixed(2)} (${Number(dcaSignal.multiplier).toFixed(1)}x) | ${dcaSignal.reason}`, 'BUY');
-                        addTrade({ type: 'BUY', price: dcaPrice, quantity: dcaQty, ticker: dcaTicker, strategy: 'CONFLUENCE', reason: dcaSignal.reason });
-
-                        if (!currentPortfolio.positions[dcaTicker]) {
-                            currentPortfolio = {
-                                ...currentPortfolio,
-                                cash: currentPortfolio.cash - dcaSignal.amount,
-                                positions: {
-                                    ...currentPortfolio.positions,
-                                    [dcaTicker]: { quantity: dcaQty, openPrice: dcaPrice, ticker: dcaTicker, entryStrategy: 'CONFLUENCE' as TradingStrategy, entryTime: Date.now(), highestPrice: dcaPrice, lowestPrice: dcaPrice, exitStage: 0, originalQuantity: dcaQty }
-                                }
-                            };
-                        } else {
-                            // Add to existing position
-                            const existing = currentPortfolio.positions[dcaTicker];
-                            const newQty = existing.quantity + dcaQty;
-                            const newAvg = (existing.openPrice * existing.quantity + dcaPrice * dcaQty) / newQty;
-                            currentPortfolio = {
-                                ...currentPortfolio,
-                                cash: currentPortfolio.cash - dcaSignal.amount,
-                                positions: {
-                                    ...currentPortfolio.positions,
-                                    [dcaTicker]: { ...existing, quantity: newQty, openPrice: newAvg }
-                                }
-                            };
-                        }
-                    }
-
-                    // Check DCA take profit
-                    if (currentPortfolio.positions[dcaTicker]) {
-                        const dcaPrice = Number(dcaData.candles.at(-1)!.close) || 0;
-                        const dcaTP = checkDCATakeProfit(dcaTicker, dcaPrice, PROFIT_METHODS.DCA.TAKE_PROFIT_PERCENT);
-                        if (dcaTP.shouldSell) {
-                            const pos = currentPortfolio.positions[dcaTicker];
-                            const pnl = (dcaPrice - pos.openPrice) * pos.quantity;
-                            addLog(`DCA TAKE PROFIT: ${Number(pos.quantity).toFixed(4)} ${dcaTicker} @ ${Number(dcaPrice).toFixed(2)} | +${Number(dcaTP.pnlPercent).toFixed(2)}% | $${Number(pnl).toFixed(2)}`, 'SELL');
-                            addTrade({ type: 'SELL', price: dcaPrice, quantity: pos.quantity, ticker: dcaTicker, strategy: 'CONFLUENCE', reason: dcaTP.reason, pnl });
-
-                            clearDCAPosition(dcaTicker);
-                            const { [dcaTicker]: _, ...remaining } = currentPortfolio.positions;
-                            currentPortfolio = { ...currentPortfolio, cash: currentPortfolio.cash + pos.quantity * dcaPrice, positions: remaining };
-                        }
-                    }
-                }
-            }
-
-            // --- ARBITRAGE ---
-            if (PROFIT_METHODS.ARBITRAGE.ENABLED && availableTickers.length >= 2) {
-                const arbData: Record<string, { candles: Candle[] }> = {};
-                for (const t of availableTickers) {
-                    const d = watchlistDataRef.current[t];
-                    if (d && d.candles.length > 20) {
-                        arbData[t] = { candles: d.candles };
-                    }
-                }
-
-                const arbResult = detectArbitrage(arbData);
-                if (arbResult.bestOpportunity && arbResult.bestOpportunity.confidence >= PROFIT_METHODS.ARBITRAGE.MIN_CONFIDENCE) {
-                    const opp = arbResult.bestOpportunity;
-                    const buyData = watchlistDataRef.current[opp.buyTicker];
-
-                    if (buyData && !currentPortfolio.positions[opp.buyTicker]) {
-                        const buyPrice = Number(buyData.candles.at(-1)!.close) || 0;
-                        const arbAmount = Math.min(currentPortfolio.cash * PROFIT_METHODS.ARBITRAGE.PORTFOLIO_ALLOCATION, currentPortfolio.cash * 0.1);
-
-                        if (arbAmount > 1 && currentPortfolio.cash > arbAmount) {
-                            const arbQty = arbAmount / buyPrice;
-                            addLog(`ARB BUY: ${arbQty.toFixed(4)} ${opp.buyTicker} | ${opp.reason} | Expected: +${opp.expectedProfit.toFixed(2)}%`, 'BUY');
-                            addTrade({ type: 'BUY', price: buyPrice, quantity: arbQty, ticker: opp.buyTicker, strategy: 'MOMENTUM', reason: `[ARB] ${opp.reason}` });
-
-                            currentPortfolio = {
-                                ...currentPortfolio,
-                                cash: currentPortfolio.cash - arbAmount,
-                                positions: {
-                                    ...currentPortfolio.positions,
-                                    [opp.buyTicker]: { quantity: arbQty, openPrice: buyPrice, ticker: opp.buyTicker, entryStrategy: 'MOMENTUM' as TradingStrategy, entryTime: Date.now(), highestPrice: buyPrice, lowestPrice: buyPrice, exitStage: 0, originalQuantity: arbQty }
-                                }
-                            };
-                        }
-                    }
-                }
-            }
-
-            // --- PAIR TRADING ---
-            if (PROFIT_METHODS.PAIR_TRADING.ENABLED && availableTickers.length >= 2) {
-                const pairData: Record<string, { candles: Candle[] }> = {};
-                for (const t of availableTickers) {
-                    const d = watchlistDataRef.current[t];
-                    if (d && d.candles.length > 30) {
-                        pairData[t] = { candles: d.candles };
-                    }
-                }
-
-                const pairSignals = getPairSignals(pairData);
-                for (const signal of pairSignals.slice(0, 1)) { // Process best signal only
-                    if (!signal.shouldTrade || signal.confidence < 50) continue;
-
-                    if (signal.action === 'OPEN_PAIR' && !currentPortfolio.positions[signal.longTicker]) {
-                        const longData = watchlistDataRef.current[signal.longTicker];
-                        if (!longData) continue;
-
-                        const longPrice = Number(longData.candles.at(-1)!.close) || 0;
-                        const pairAmount = Math.min(currentPortfolio.cash * PROFIT_METHODS.PAIR_TRADING.PORTFOLIO_ALLOCATION, currentPortfolio.cash * 0.1);
-
-                        if (pairAmount > 1 && currentPortfolio.cash > pairAmount) {
-                            const pairQty = pairAmount / longPrice;
-                            openPairTrade(signal.longTicker, signal.shortTicker, longPrice, 0, pairQty, 0, 0, signal.zScore);
-
-                            addLog(`PAIR LONG: ${pairQty.toFixed(4)} ${signal.longTicker} vs ${signal.shortTicker} | z=${signal.zScore.toFixed(2)} | ${signal.reason}`, 'BUY');
-                            addTrade({ type: 'BUY', price: longPrice, quantity: pairQty, ticker: signal.longTicker, strategy: 'DIVERGENCE', reason: `[PAIR] ${signal.reason}` });
-
-                            currentPortfolio = {
-                                ...currentPortfolio,
-                                cash: currentPortfolio.cash - pairAmount,
-                                positions: {
-                                    ...currentPortfolio.positions,
-                                    [signal.longTicker]: { quantity: pairQty, openPrice: longPrice, ticker: signal.longTicker, entryStrategy: 'DIVERGENCE' as TradingStrategy, entryTime: Date.now(), highestPrice: longPrice, lowestPrice: longPrice, exitStage: 0, originalQuantity: pairQty }
-                                }
-                            };
-                        }
-                    } else if (signal.action === 'CLOSE_PAIR' && currentPortfolio.positions[signal.longTicker]) {
-                        const pos = currentPortfolio.positions[signal.longTicker];
-                        const closeData = watchlistDataRef.current[signal.longTicker];
-                        if (!closeData) continue;
-
-                        const closePrice = Number(closeData.candles.at(-1)!.close) || 0;
-                        const pnl = (closePrice - pos.openPrice) * pos.quantity;
-
-                        closePairTrade(`${signal.longTicker}:${signal.shortTicker}`);
-                        addLog(`PAIR CLOSE: ${Number(pos.quantity).toFixed(4)} ${signal.longTicker} @ ${Number(closePrice).toFixed(2)} | PnL: $${Number(pnl).toFixed(2)} | ${signal.reason}`, 'SELL');
-                        addTrade({ type: 'SELL', price: closePrice, quantity: pos.quantity, ticker: signal.longTicker, strategy: 'DIVERGENCE', reason: `[PAIR] ${signal.reason}`, pnl });
-
-                        const { [signal.longTicker]: _, ...remaining } = currentPortfolio.positions;
-                        currentPortfolio = { ...currentPortfolio, cash: currentPortfolio.cash + pos.quantity * closePrice, positions: remaining };
-                    }
-                }
-            }
-
-            // --- SWING TRADING ---
-            if (PROFIT_METHODS.SWING.ENABLED) {
-                for (const swingTicker of availableTickers) {
-                    const swingData = watchlistDataRef.current[swingTicker];
-                    if (!swingData || swingData.candles.length < 30) continue;
-
-                    const swingPrice = Number(swingData.candles.at(-1)!.close);
-
-                    // Check existing swing position exits
-                    const swingExit = checkSwingExit(swingTicker, swingPrice);
-                    if (swingExit.shouldExit && currentPortfolio.positions[swingTicker]) {
-                        const pos = currentPortfolio.positions[swingTicker];
-                        const pnl = (swingPrice - pos.openPrice) * pos.quantity;
-                        addLog(`SWING EXIT: ${Number(pos.quantity).toFixed(4)} ${swingTicker} @ ${Number(swingPrice).toFixed(2)} | PnL: $${Number(pnl).toFixed(2)} | ${swingExit.reason}`, 'SELL');
-                        addTrade({ type: 'SELL', price: swingPrice, quantity: pos.quantity, ticker: swingTicker, strategy: 'ADAPTIVE', reason: `[SWING] ${swingExit.reason}`, pnl });
-                        
-                        const { [swingTicker]: _, ...remaining } = currentPortfolio.positions;
-                        currentPortfolio = { ...currentPortfolio, cash: currentPortfolio.cash + pos.quantity * swingPrice, positions: remaining };
-                    
-                    } else if (!currentPortfolio.positions[swingTicker]) {
-                        // Check for new swing entries
-                        const swingAnalysis = analyzeSwingSetup(swingTicker, swingData.candles);
-                        if (swingAnalysis.hasSetup && swingAnalysis.setup && swingAnalysis.setup.confidence >= PROFIT_METHODS.SWING.MIN_CONFIDENCE && swingAnalysis.setup.riskReward >= PROFIT_METHODS.SWING.MIN_RISK_REWARD) {
-                            const swingAmount = Math.min(currentPortfolio.cash * PROFIT_METHODS.SWING.PORTFOLIO_ALLOCATION, currentPortfolio.cash * 0.15);
-                            if (swingAmount > 1) {
-                                const swingQty = swingAmount / swingPrice;
-                                openSwingPosition(swingAnalysis.setup, swingQty);
-                                addLog(`SWING LONG: ${swingQty.toFixed(4)} ${swingTicker} @ ${swingPrice.toFixed(2)} | TP: ${swingAnalysis.setup.targetPrice.toFixed(2)}, SL: ${swingAnalysis.setup.stopLoss.toFixed(2)} | R/R: ${swingAnalysis.setup.riskReward.toFixed(1)}`, 'BUY');
-                                addTrade({ type: 'BUY', price: swingPrice, quantity: swingQty, ticker: swingTicker, strategy: 'ADAPTIVE', reason: `[SWING] ${swingAnalysis.setup.reason}` });
-
-                                currentPortfolio = {
-                                    ...currentPortfolio,
-                                    cash: currentPortfolio.cash - swingAmount,
-                                    positions: {
-                                        ...currentPortfolio.positions,
-                                        [swingTicker]: { quantity: swingQty, openPrice: swingPrice, ticker: swingTicker, entryStrategy: 'ADAPTIVE' as TradingStrategy, entryTime: Date.now(), highestPrice: swingPrice, lowestPrice: swingPrice, exitStage: 0, originalQuantity: swingQty }
-                                    }
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-
-            // --- MARKET MAKING ---
-            if (PROFIT_METHODS.MARKET_MAKING.ENABLED) {
-                for (const mmTicker of availableTickers) {
-                    const mmData = watchlistDataRef.current[mmTicker];
-                    if (!mmData || mmData.candles.length < 10) continue;
-
-                    const mmSignal = processMarketMaking(mmTicker, mmData.candles, currentPortfolio.cash * PROFIT_METHODS.MARKET_MAKING.PORTFOLIO_ALLOCATION);
-                    if (mmSignal && mmSignal.shouldAct && mmSignal.action === 'PLACE_ORDERS' && currentPortfolio.cash > 2) {
-                        // Simulate placing bid/ask orders
-                        if (Math.random() < 0.1) { // Log occasionally
-                             addLog(`MM UPDATE: ${mmTicker} | Bid: ${mmSignal.bidPrice.toFixed(2)}, Ask: ${mmSignal.askPrice.toFixed(2)}`, 'INFO');
-                        }
-                    }
-                }
-            }
-
-
-            setPortfolio(currentPortfolio);
-
-        }, loopInterval);
+        };
+
+        // Initial poll
+        pollBackend();
+        const botInterval = setInterval(pollBackend, pollInterval);
 
         return () => clearInterval(botInterval);
-    }, [isBotActive, isTradingActive, tradingMode, addLog, addTrade, strategy, riskAmount, profitGoals, sessionProfitGoal, maxConcurrentTrades, useTrailingStop, trailingStopPercent, stopLossPercent, isScannerActive, ticker, aiLearningEnabled, assetIntelligenceEnabled, volatilityAnalysisEnabled, enhancedSentimentEnabled, onChainEnabled, riskMetricsEnabled, microTradingEnabled, unlimitedTrades, sessionStartTime]);
+    }, [isBotActive, isTradingActive, addLog]);
 
 
-    const handleStartSimulation = (budget: number, selectedTicker: string) => {
+
+    const handleStartSimulation = async (budget: number, selectedTicker: string) => {
         addLog(`Starting SIMULATION session with $${budget} for ${selectedTicker}`);
-        setPortfolio({
-            cash: budget,
-            initialBudget: budget,
-            positions: {},
-        });
-        setTicker(selectedTicker);
-        setTrades([]);
-        resetEquityTracking();
-        setSessionStartTime(Date.now());
-        setIsTradingActive(true);
+        try {
+            const res = await fetch('/api/session/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: 'SIMULATION', budget, tickers: [selectedTicker] }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setPortfolio({
+                    cash: data.budget,
+                    initialBudget: data.budget,
+                    positions: {},
+                });
+                setTicker(selectedTicker);
+                setTrades([]);
+                resetEquityTracking();
+                setSessionStartTime(Date.now());
+                setIsTradingActive(true);
+                setIsBotActive(true);
+                addLog(`Backend session started: ${data.sessionId}`, 'SPECIAL');
+            } else {
+                addLog(`Failed to start session: ${data.error}`, 'ERROR');
+            }
+        } catch (e: any) {
+            addLog(`Session start error: ${e.message}`, 'ERROR');
+            // Fallback: still start locally
+            setPortfolio({ cash: budget, initialBudget: budget, positions: {} });
+            setTicker(selectedTicker);
+            setTrades([]);
+            resetEquityTracking();
+            setSessionStartTime(Date.now());
+            setIsTradingActive(true);
+        }
     };
 
     const handleAuthenticate = async (creds: ApiCredentials) => {
@@ -2254,77 +1134,78 @@ const App: React.FC = () => {
     };
 
     const handleCloseAllPositions = async () => {
-        if (tradingMode !== 'SIMULATION') {
-            addLog('Close All is only available in Simulation mode for now.', 'WARN');
-            return;
+        addLog('Stopping session and closing all positions...', 'WARN');
+        try {
+            const res = await fetch('/api/session/stop', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                setPortfolio({
+                    cash: data.finalCash || 0,
+                    initialBudget: data.initialBudget || portfolio.initialBudget,
+                    positions: {},
+                });
+                setIsBotActive(false);
+                addLog(`Session stopped. Final: $${data.finalCash?.toFixed(2)} (${data.pnlPercent}%)`, 'SPECIAL');
+                if (data.closedPositions?.length > 0) {
+                    data.closedPositions.forEach((p: any) => {
+                        addLog(`Closed ${p.ticker}: PnL $${p.pnl?.toFixed(2)}`, 'SELL');
+                    });
+                }
+            }
+        } catch (e: any) {
+            addLog(`Stop session error: ${e.message}`, 'ERROR');
         }
-
-        let currentPortfolio = { ...portfolioRef.current };
-        const openPositions = Object.keys(currentPortfolio.positions);
-        if (openPositions.length === 0) {
-            addLog('No open positions to close.', 'INFO');
-            return;
-        }
-
-        addLog(`Closing all ${openPositions.length} positions at market price...`, 'WARN');
-
-        for (const positionTicker of openPositions) {
-            const position = currentPortfolio.positions[positionTicker];
-            const currentData = watchlistDataRef.current[positionTicker];
-            if (!currentData || currentData.candles.length === 0) {
-                addLog(`Could not find market data for ${positionTicker} to close position.`, 'ERROR');
-                continue;
-            };
-
-            const currentPrice = Number(currentData.candles.at(-1)!.close) || 0;
-            const pnl = (currentPrice - position.openPrice) * position.quantity;
-            const saleValue = position.quantity * currentPrice;
-            const sellFee = saleValue * currentExchangeFees.takerFee / 100;
-
-            addLog(
-                `FORCE SELL: ${Number(position.quantity).toFixed(SYSTEM_LIMITS.QUANTITY_DECIMAL_PLACES)} ${positionTicker} @ ${Number(currentPrice).toFixed(SYSTEM_LIMITS.PRICE_DECIMAL_PLACES)}. PnL: $${Number(pnl).toFixed(2)}.`,
-                'SELL'
-            );
-
-            addTrade({
-                type: 'SELL',
-                price: currentPrice,
-                quantity: position.quantity,
-                ticker: positionTicker,
-                strategy: position.entryStrategy,
-                reason: 'Manual Close All',
-                pnl
-            });
-
-            const { [positionTicker]: _, ...remainingPositions } = currentPortfolio.positions;
-            currentPortfolio = {
-                ...currentPortfolio,
-                cash: currentPortfolio.cash + saleValue - sellFee,
-                positions: remainingPositions
-            };
-        }
-
-        setPortfolio(currentPortfolio);
-        addLog('All positions have been closed.', 'SPECIAL');
     };
 
 
-    const toggleBot = (isActive: boolean) => {
+    const handleStopSession = async () => {
+        addLog('Stopping entire session...', 'WARN');
+        try {
+            const res = await fetch('/api/session/stop', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                setPortfolio({
+                    cash: 0,
+                    initialBudget: 0,
+                    positions: {},
+                });
+                setIsBotActive(false);
+                setIsTradingActive(false);
+                addLog(`Session ended. Final value: $${data.finalCash?.toFixed(2)} | PnL: ${data.pnlPercent}% | Trades: ${data.totalTrades || 0}`, 'SPECIAL');
+            }
+        } catch (e: any) {
+            addLog(`Stop session error: ${e.message}`, 'ERROR');
+        }
+    };
+
+    const toggleBot = async (isActive: boolean) => {
         if (isActive && tradingMode === 'REAL' && !isApiAuthenticated) {
             addLog('Cannot start real trading bot without API authentication.', 'ERROR');
             setIsAuthModalOpen(true);
             return;
         }
-        setIsBotActive(isActive);
-        if (isActive) {
-            addLog(`Auto-trading bot has been ACTIVATED. Mode: ${tradingMode}.`, 'SPECIAL');
-            // If starting bot, also start the session timer
-             if (!sessionStartTime) {
-                setSessionStartTime(Date.now());
-                resetEquityTracking();
-             }
-        } else {
-            addLog('Auto-trading bot has been DEACTIVATED.', 'WARN');
+
+        try {
+            if (isActive) {
+                // Resume if paused, or start new session
+                const res = await fetch('/api/session/resume', { method: 'POST' });
+                const data = await res.json();
+                setIsBotActive(data.botActive);
+                addLog(`Auto-trading bot has been ACTIVATED. Mode: ${tradingMode}.`, 'SPECIAL');
+                if (!sessionStartTime) {
+                    setSessionStartTime(Date.now());
+                    resetEquityTracking();
+                }
+            } else {
+                const res = await fetch('/api/session/pause', { method: 'POST' });
+                const data = await res.json();
+                setIsBotActive(data.botActive);
+                addLog('Auto-trading bot has been PAUSED.', 'WARN');
+            }
+        } catch (e: any) {
+            addLog(`Bot toggle error: ${e.message}`, 'ERROR');
+            // Fallback
+            setIsBotActive(isActive);
         }
     };
 
@@ -2432,6 +1313,7 @@ const App: React.FC = () => {
                         sessionDurationMinutes={sessionDurationMinutes}
                         setSessionDurationMinutes={setSessionDurationMinutes}
                         onCloseAll={handleCloseAllPositions}
+                        onStopSession={handleStopSession}
                     />
                     <PortfolioSummary portfolio={portfolio} watchlistData={watchlistDataRef.current} />
                     <SessionSummary trades={trades} initialBudget={portfolio.initialBudget} />
@@ -2528,10 +1410,12 @@ const App: React.FC = () => {
                         <NewsDashboard ticker={ticker} />
                     </div>
                     <MLDashboard ticker={ticker} />
+                    <MLThoughtProcess pollInterval={2000} />
                 </div>
 
                 {/* Right Column */}
                 <div className="lg:col-span-3 space-y-4">
+                    <VPSMonitor pollInterval={3000} />
                     <MultiTimeframeDashboard data={mtfData} isLoading={isMtfLoading} />
                     <StrategyOverview data={activeWatchlistData} />
                     <SignalHeatMap watchlistData={watchlistDataRef.current} />

@@ -5,12 +5,16 @@
 
 import {
   setSetting, getSetting,
+  insertEquitySnapshot, getEquitySnapshots,
+  insertSessionTrade, getSessionTrades, getSessionTradeStats,
 } from './database.js';
 
 let startTime = Date.now();
 let totalTradeCount = 0;
 let totalPnl = 0;
 let autoSaveInterval = null;
+let activeSessionId = null;
+let tradingMode = 'SIMULATION'; // 'SIMULATION' | 'REAL'
 
 /**
  * Save full trading state to database.
@@ -152,6 +156,125 @@ export function recordSessionTrade(pnl) {
 }
 
 /**
+ * Set active session ID and trading mode.
+ */
+export function setActiveSession(sessionId, mode = 'SIMULATION') {
+  activeSessionId = sessionId;
+  tradingMode = mode;
+  startTime = Date.now();
+  totalTradeCount = 0;
+  totalPnl = 0;
+}
+
+export function getActiveSessionId() {
+  return activeSessionId;
+}
+
+export function getTradingMode() {
+  return tradingMode;
+}
+
+/**
+ * Record an equity snapshot for the current session.
+ */
+export function recordEquitySnapshot(portfolio) {
+  if (!activeSessionId) return;
+  try {
+    const holdingsValue = Object.values(portfolio?.positions || {}).reduce(
+      (sum, pos) => sum + ((pos.quantity || 0) * (pos.currentPrice || pos.openPrice || 0)),
+      0
+    );
+    const totalValue = (portfolio?.cash || 0) + holdingsValue;
+    const pnlPercent = portfolio?.initialBudget > 0
+      ? ((totalValue - portfolio.initialBudget) / portfolio.initialBudget) * 100
+      : 0;
+
+    insertEquitySnapshot({
+      session_id: activeSessionId,
+      time: Date.now(),
+      total_value: totalValue,
+      cash: portfolio?.cash || 0,
+      holdings_value: holdingsValue,
+      open_positions: Object.keys(portfolio?.positions || {}).length,
+      pnl_percent: pnlPercent,
+    });
+  } catch (e) {
+    // Don't let snapshot errors affect trading
+  }
+}
+
+/**
+ * Record a trade in the session_trades table.
+ */
+export function recordSessionTradeDetail(trade) {
+  if (!activeSessionId) return;
+  try {
+    insertSessionTrade({
+      session_id: activeSessionId,
+      time: Date.now(),
+      type: trade.type, // 'BUY' or 'SELL'
+      ticker: trade.ticker,
+      price: trade.price,
+      quantity: trade.quantity,
+      notional: trade.notional || 0,
+      strategy: trade.strategy || '',
+      reason: trade.reason || '',
+      pnl: trade.pnl || 0,
+      fee: trade.fee || 0,
+      balance_after: trade.balance_after || 0,
+    });
+  } catch (e) {
+    // Don't let DB errors affect trading
+  }
+}
+
+/**
+ * Get equity curve data for the active session.
+ */
+export function getEquityCurve(sessionId) {
+  const sid = sessionId || activeSessionId;
+  if (!sid) return [];
+  try {
+    return getEquitySnapshots(sid, 1000).map(s => ({
+      time: s.time,
+      value: s.total_value,
+      cash: s.cash,
+      holdings: s.holdings_value,
+      positions: s.open_positions,
+      pnlPercent: s.pnl_percent,
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Get trade history for the active session.
+ */
+export function getTradeHistory(sessionId, limit = 500) {
+  const sid = sessionId || activeSessionId;
+  if (!sid) return [];
+  try {
+    return getSessionTrades(sid, limit);
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Get trade statistics for the active session.
+ */
+export function getTradeStats(sessionId) {
+  const sid = sessionId || activeSessionId;
+  if (!sid) return null;
+  try {
+    return getSessionTradeStats(sid);
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * Start auto-save interval.
  */
 export function startAutoSave(context, intervalMs = 60000) {
@@ -185,4 +308,7 @@ function formatUptime(ms) {
 export default {
   saveFullState, restoreFullState, getSessionStatus, recordSessionTrade,
   startAutoSave, stopAutoSave,
+  setActiveSession, getActiveSessionId, getTradingMode,
+  recordEquitySnapshot, recordSessionTradeDetail,
+  getEquityCurve, getTradeHistory, getTradeStats,
 };

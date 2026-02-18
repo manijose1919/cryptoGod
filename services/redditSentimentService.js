@@ -17,14 +17,31 @@ const TICKER_SEARCH_MAP = {
   BNBUSD: ["BNB", "binance coin"]
 };
 
-// Subreddits to monitor
+// Subreddits to monitor (expanded from 5 to 15)
 const CRYPTO_SUBREDDITS = [
   'CryptoCurrency',
   'Bitcoin',
   'ethereum',
   'CryptoMarkets',
-  'SatoshiStreetBets'
+  'SatoshiStreetBets',
+  'CryptoMoonShots',
+  'altcoin',
+  'defi',
+  'solana',
+  'cardano',
+  'Ripple',
+  'dogecoin',
+  'binance',
+  'kucoin',
+  'CryptoTechnology'
 ];
+
+// Sentiment keywords for enhanced analysis
+const BULLISH_KEYWORDS = ['buy', 'bullish', 'moon', 'rally', 'surge', 'pump', 'breakout', 'green',
+  'rocket', 'profit', 'gain', 'uptrend', 'ath', 'soaring', 'hodl', 'accumulate', 'undervalued'];
+const BEARISH_KEYWORDS = ['sell', 'bearish', 'crash', 'dump', 'collapse', 'plunge', 'red', 'scam',
+  'rug', 'fraud', 'loss', 'fear', 'panic', 'drop', 'falling', 'bottom', 'overvalued', 'bubble'];
+const NEGATION_WORDS = ['not', "don't", "won't", "isn't", "aren't", 'never', 'no', 'without'];
 
 // Cache configuration
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -388,11 +405,142 @@ export async function getRedditSnapshot(ticker) {
   return result;
 }
 
+/**
+ * Analyze text sentiment using keyword matching with negation awareness.
+ * @param {string} text - Text to analyze
+ * @returns {number} Score from -1 (very bearish) to +1 (very bullish)
+ */
+export function analyzeTextSentiment(text) {
+  if (!text) return 0;
+  const words = text.toLowerCase().split(/\s+/);
+  let score = 0;
+  let wordCount = 0;
+
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i].replace(/[^a-z]/g, '');
+    const isNegated = i > 0 && NEGATION_WORDS.includes(words[i - 1].replace(/[^a-z']/g, ''));
+
+    if (BULLISH_KEYWORDS.includes(word)) {
+      score += isNegated ? -0.5 : 1;
+      wordCount++;
+    } else if (BEARISH_KEYWORDS.includes(word)) {
+      score += isNegated ? 0.5 : -1;
+      wordCount++;
+    }
+  }
+
+  return wordCount > 0 ? Math.max(-1, Math.min(1, score / wordCount)) : 0;
+}
+
+/**
+ * Fetch top comments from a Reddit post for deeper analysis.
+ * @param {string} permalink - Reddit permalink path (e.g., /r/CryptoCurrency/comments/abc123/title/)
+ * @returns {Promise<Array>} Array of {body, score, sentiment}
+ */
+export async function getPostComments(permalink) {
+  const cacheKey = `comments:${permalink}`;
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.data;
+
+  try {
+    const url = `https://www.reddit.com${permalink}.json?limit=10&sort=top`;
+    const data = await fetchReddit(url);
+    if (!data || !Array.isArray(data) || data.length < 2) return [];
+
+    const comments = (data[1]?.data?.children || [])
+      .filter(c => c.kind === 't1' && c.data?.body)
+      .slice(0, 10)
+      .map(c => ({
+        body: c.data.body.slice(0, 500),
+        score: c.data.score || 0,
+        sentiment: analyzeTextSentiment(c.data.body),
+      }));
+
+    cache.set(cacheKey, { data: comments, timestamp: Date.now() });
+    return comments;
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * Enhanced ticker analysis with comment-level sentiment and volume tracking.
+ * @param {string} ticker - Trading pair (e.g., 'BTCUSD')
+ * @returns {Promise<Object>} Enhanced sentiment data
+ */
+export async function getEnhancedTickerSentiment(ticker) {
+  const cacheKey = `enhanced:${ticker}`;
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.data;
+
+  const mentions = await getTickerMentions(ticker);
+  if (!mentions || mentions.mentionCount === 0) {
+    const result = {
+      ticker,
+      postSentiment: 0,
+      commentSentiment: 0,
+      combinedSentiment: 0,
+      postVolume: 0,
+      postVolumeChange: 0,
+      signal: 'NEUTRAL',
+    };
+    cache.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
+  }
+
+  // Analyze title sentiment for all posts
+  const postSentiments = (mentions.topPosts || []).map(p => analyzeTextSentiment(p.title));
+  const avgPostSentiment = postSentiments.length > 0
+    ? postSentiments.reduce((s, v) => s + v, 0) / postSentiments.length
+    : 0;
+
+  // Fetch and analyze comments from top 3 posts
+  let commentSentiments = [];
+  for (const post of (mentions.topPosts || []).slice(0, 3)) {
+    if (post.url) {
+      const permalink = post.url.replace('https://www.reddit.com', '');
+      const comments = await getPostComments(permalink);
+      commentSentiments.push(...comments.map(c => c.sentiment));
+    }
+  }
+
+  const avgCommentSentiment = commentSentiments.length > 0
+    ? commentSentiments.reduce((s, v) => s + v, 0) / commentSentiments.length
+    : 0;
+
+  // Combined: 60% post sentiment, 40% comment sentiment
+  const combined = avgPostSentiment * 0.6 + avgCommentSentiment * 0.4;
+
+  // Determine signal
+  let signal = 'NEUTRAL';
+  if (combined > 0.3) signal = 'BULLISH';
+  else if (combined > 0.6) signal = 'VERY_BULLISH';
+  else if (combined < -0.3) signal = 'BEARISH';
+  else if (combined < -0.6) signal = 'VERY_BEARISH';
+
+  const result = {
+    ticker,
+    postSentiment: Math.round(avgPostSentiment * 100) / 100,
+    commentSentiment: Math.round(avgCommentSentiment * 100) / 100,
+    combinedSentiment: Math.round(combined * 100) / 100,
+    postVolume: mentions.mentionCount,
+    postVolumeChange: 0, // Would need historical data to calculate
+    commentCount: commentSentiments.length,
+    signal,
+  };
+
+  cache.set(cacheKey, { data: result, timestamp: Date.now() });
+  return result;
+}
+
 // Export all functions
 export default {
   getSubredditPosts,
   searchReddit,
   getTickerMentions,
   getCryptoSubredditActivity,
-  getRedditSnapshot
+  getRedditSnapshot,
+  analyzeTextSentiment,
+  getPostComments,
+  getEnhancedTickerSentiment,
 };
