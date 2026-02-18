@@ -39,7 +39,7 @@ import {
 import persistenceRoutes from './routes/persistence.js';
 import tradingviewRoutes, { injectSignal } from './routes/tradingview.js';
 import { SignalScanner } from './services/signalScanner.js';
-import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, exportState as pmExportState, importState as pmImportState } from './services/profitMethods.js';
+import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, exportState as pmExportState, importState as pmImportState, setSessionStart as pmSetSessionStart, cleanupProfitMethodState } from './services/profitMethods.js';
 
 // Phase 2-5 Services
 // WebSocket services are accessed dynamically via getWebSocketService()
@@ -291,7 +291,7 @@ const CONFIG = {
 
     // Signal thresholds (BEAST MODE - further relaxed ~10-15%)
     THRESHOLDS: {
-        TREND_BULLISH_ENTRY: 50,       // Beast Mode: was 45
+        TREND_BULLISH_ENTRY: 40,       // Tightened: was 50 (lower = more bullish required)
         TREND_BEARISH_EXIT: 75,        // Beast Mode: was 70 (hold longer)
         BREAKOUT_SQUEEZE_ENTRY: 40,    // Beast Mode: was 35
         BREAKOUT_EXPANSION_EXIT: 60,   // Beast Mode: was 55
@@ -316,6 +316,21 @@ const CONFIG = {
     MIN_AVG_CANDLE_USD_VOLUME: 5000,   // $5K avg per-candle USD volume (from recent 20 candles)
     MIN_PRICE: 0.01,                   // Skip sub-penny tokens
 };
+
+// ============================================
+// QUALITY TICKER WHITELIST (~50 established, liquid coins)
+// ============================================
+const QUALITY_TICKERS = [
+    'BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'BNBUSD', 'ADAUSD', 'DOGEUSD',
+    'AVAXUSD', 'LINKUSD', 'DOTUSD', 'MATICUSD', 'UNIUSD', 'ATOMUSD', 'LTCUSD',
+    'BCHUSD', 'NEARUSD', 'FILUSD', 'APTUSD', 'ARBUSD', 'OPUSD',
+    'AAVEUSD', 'MKRUSD', 'INJUSD', 'SUIUSD', 'SEIUSD', 'TIAUSD',
+    'RENDERUSD', 'FETUSD', 'GRTUSD', 'IMXUSD', 'SANDUSD', 'MANAUSD',
+    'AXSUSD', 'ALGOUSD', 'FTMUSD', 'RUNEUSD', 'ENSUSD', 'LDOUSD',
+    'SNXUSD', 'COMPUSD', 'CRVUSD', 'SUSHIUSD', 'YFIUSD',
+    'PEPEUSD', 'SHIBUSD', 'BONKUSD', 'WIFUSD', 'FLOKIUSD',
+    'ICPUSD', 'HBARUSD', 'VETUSD', 'XTZUSD', 'EGLDUSD',
+];
 
 // ============================================
 // Server Setup
@@ -742,11 +757,12 @@ async function tradingBotLoop() {
         // --- DYNAMIC MARKET SCANNING ---
         const positionTickers = Object.keys(portfolio.positions);
         
-        // Rotate through available tickers
-        const BATCH_SIZE = 20; 
-        const totalTickers = availableTickers.length;
-        const cycleIndex = Math.floor(Date.now() / 1000) % Math.ceil(totalTickers / BATCH_SIZE);
-        const scanBatch = availableTickers.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
+        // Filter to quality tickers only, fallback to first 50 if no matches
+        const qualityTickers = availableTickers.filter(t => QUALITY_TICKERS.includes(t));
+        const tickerPool = qualityTickers.length > 0 ? qualityTickers : availableTickers.slice(0, 50);
+        const BATCH_SIZE = 20;
+        const cycleIndex = Math.floor(Date.now() / 1000) % Math.max(1, Math.ceil(tickerPool.length / BATCH_SIZE));
+        const scanBatch = tickerPool.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
         
         const tickersToFetch = [...new Set([...positionTickers, ...scanBatch])];
         const allMarketData = await getMultipleMarketData(tickersToFetch);
@@ -841,6 +857,32 @@ async function tradingBotLoop() {
                     case 'MOMENTUM':
                         if (momentumValue < CONFIG.THRESHOLDS.MOMENTUM_BEARISH_EXIT) exitReason = 'Momentum Signal: Bearish Momentum';
                         break;
+                    case 'BREAKOUT': {
+                        const bkout = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
+                        if (bkout < CONFIG.THRESHOLDS.BREAKOUT_EXPANSION_EXIT) exitReason = 'Breakout Signal: Expansion faded';
+                        break;
+                    }
+                    case 'ADAPTIVE': {
+                        const adpValue = calculateAdaptiveTCSeries(candles).pop() ?? 50;
+                        if (adpValue > CONFIG.THRESHOLDS.ADAPTIVE_BEARISH_EXIT) exitReason = 'Adaptive Signal: Bearish exit';
+                        break;
+                    }
+                    case 'WHALE': {
+                        const whaleValue = calculateWhaleMoneyFlowSeries(candles).pop() ?? 50;
+                        if (whaleValue < CONFIG.THRESHOLDS.WHALE_SELLING_EXIT) exitReason = 'Whale Signal: Selling pressure';
+                        break;
+                    }
+                    case 'CONFLUENCE': {
+                        const trendDash = calculateTrendDashboard(candles);
+                        const bullishCount = trendDash ? Object.values(trendDash).filter(v => v === true || v === 'BULLISH' || v === 'UP').length : 0;
+                        if (bullishCount <= CONFIG.THRESHOLDS.CONFLUENCE_BEARISH_EXIT) exitReason = 'Confluence Signal: Bearish alignment';
+                        break;
+                    }
+                    case 'DIVERGENCE': {
+                        const div = calculateDivergence(candles);
+                        if (div && div.type === 'bearish' && div.confidence >= CONFIG.THRESHOLDS.DIVERGENCE_MIN_CONFIDENCE) exitReason = 'Divergence Signal: Bearish divergence';
+                        break;
+                    }
                 }
             }
 
@@ -922,7 +964,7 @@ async function tradingBotLoop() {
         });
 
         // Derive entry thresholds from timeframe profile (or use defaults)
-        const minOppScore = activeProfile?.entry?.minOpportunityScore ?? 8;
+        const minOppScore = activeProfile?.entry?.minOpportunityScore ?? 25;
         const profileStrategies = activeProfile?.activeStrategies || null;
         const profilePosSize = activeProfile?.positionSizePercent ?? null;
 
@@ -1000,13 +1042,13 @@ async function tradingBotLoop() {
                         entryStrategy = 'TREND';
                     } else if (profileStrategies.includes('MOMENTUM')) {
                         const momValue = calculateMomentumSeries(candles).pop() ?? 50;
-                        if (momValue > 60) entryStrategy = 'MOMENTUM';
+                        if (momValue > 70) entryStrategy = 'MOMENTUM';
                     } else if (profileStrategies.includes('BREAKOUT')) {
                         const bkout = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
-                        if (bkout > 65) entryStrategy = 'BREAKOUT';
+                        if (bkout > 75) entryStrategy = 'BREAKOUT';
                     } else if (profileStrategies.includes('ADAPTIVE')) {
                         const adpValue = calculateAdaptiveTCSeries(candles).pop() ?? 50;
-                        if (adpValue < 40) entryStrategy = 'ADAPTIVE';
+                        if (adpValue < 35) entryStrategy = 'ADAPTIVE';
                     }
                 } else {
                     // Fallback: original TREND-only entry
@@ -1019,6 +1061,18 @@ async function tradingBotLoop() {
                         type: 'SKIP', ticker, action: 'REGIME_FILTER',
                         confidence: score.compositeScore,
                         reason: `${entryStrategy} not allowed in ${currentRegime} regime`,
+                        regime: currentRegime,
+                        indicators: { tcValue, compositeScore: score.compositeScore },
+                    });
+                    entryStrategy = null;
+                }
+
+                // Adaptive weights: skip strategies that are throttled due to poor recent performance
+                if (entryStrategy && isStrategyThrottled(entryStrategy)) {
+                    logThought({
+                        type: 'SKIP', ticker, action: 'STRATEGY_THROTTLED',
+                        confidence: score.compositeScore,
+                        reason: `${entryStrategy} throttled by adaptive weights (poor recent performance)`,
                         regime: currentRegime,
                         indicators: { tcValue, compositeScore: score.compositeScore },
                     });
@@ -1047,6 +1101,18 @@ async function tradingBotLoop() {
                     sentimentAdj = Math.round(sentimentScore * 10); // -1..1 → -10..+10
                 }
 
+                // Hard floor: reject any entry with compositeScore < 25 regardless of profile
+                if (entryStrategy && score.compositeScore < 25) {
+                    logThought({
+                        type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
+                        confidence: score.compositeScore,
+                        reason: `compositeScore ${score.compositeScore} < 25 floor`,
+                        regime: currentRegime,
+                        indicators: { compositeScore: score.compositeScore, entryStrategy },
+                    });
+                    entryStrategy = null;
+                }
+
                 if (entryStrategy && CapitalTierManager.isStrategyAllowed(entryStrategy, totalValue)) {
                     // Feature 4: Dynamic Kelly position sizing
                     const kellySize = getKellyPositionSize(totalValue);
@@ -1067,6 +1133,8 @@ async function tradingBotLoop() {
                     } else if (sentimentAdj > 3) {
                         investmentAmount *= 1.10;
                     }
+                    // Re-cap after sentiment adjustment so boost can't exceed tier limits
+                    investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
 
                     if (investmentAmount > CONFIG.MIN_TRADE_SIZE) {
                         logThought({
@@ -1085,7 +1153,9 @@ async function tradingBotLoop() {
 
         // --- PROFIT METHOD ENTRIES ---
         if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && drawdown <= tier.maxDrawdownLimit) {
-            const pmEntries = runProfitMethods(marketDataMap, portfolio, availableTickers, CONFIG.MIN_TRADE_SIZE);
+            const qualityForPM = availableTickers.filter(t => QUALITY_TICKERS.includes(t));
+            const pmTickers = qualityForPM.length > 0 ? qualityForPM : availableTickers.slice(0, 50);
+            const pmEntries = runProfitMethods(marketDataMap, portfolio, pmTickers, CONFIG.MIN_TRADE_SIZE);
             for (const entry of pmEntries) {
                 if (portfolio.cash < CONFIG.MIN_TRADE_SIZE) break;
                 // Enforce position count limit for profit methods too
@@ -1209,10 +1279,13 @@ const handleBuy = async (ticker, price, strategy, reason, notional) => {
             const newQty = parseFloat(quantity);
             const totalQty = oldQty + newQty;
             const weightedAvg = (oldQty * existing.openPrice + newQty * parseFloat(avgPrice)) / totalQty;
+            // Update entryStrategy if the new addition is larger (dominant strategy)
+            const updatedStrategy = newQty > oldQty ? strategy : existing.entryStrategy;
             portfolio.positions[ticker] = {
                 ...existing,
                 quantity: totalQty,
                 openPrice: weightedAvg,
+                entryStrategy: updatedStrategy,
                 highestPrice: Math.max(existing.highestPrice || weightedAvg, parseFloat(avgPrice)),
                 lowestPrice: Math.min(existing.lowestPrice || weightedAvg, parseFloat(avgPrice)),
             };
@@ -1220,11 +1293,12 @@ const handleBuy = async (ticker, price, strategy, reason, notional) => {
             portfolio.positions[ticker] = {
                 quantity: parseFloat(quantity),
                 openPrice: parseFloat(avgPrice),
+                currentPrice: parseFloat(avgPrice),
                 ticker,
                 entryStrategy: strategy,
                 entryTime: Date.now(),
                 highestPrice: parseFloat(avgPrice),
-                lowestPrice: parseFloat(avgPrice)
+                lowestPrice: parseFloat(avgPrice),
             };
         }
         portfolio.cash -= (notional + buyFee);
@@ -1273,7 +1347,7 @@ const handleSell = async (position, price, reason) => {
             // Simulation: use current price, no exchange call
             avgPrice = price;
         } else {
-            // Real: route through exchange adapter
+            // Real: route through exchange adapter — must succeed before we update portfolio
             const adapter = getExchangeAdapter();
             const orderResult = await adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs);
             avgPrice = parseFloat(orderResult.avgPrice) || price;
@@ -1283,8 +1357,12 @@ const handleSell = async (position, price, reason) => {
         const buyFee = position.openPrice * position.quantity * fees.perSide;
         const pnl = (avgPrice - position.openPrice) * position.quantity - sellFee - buyFee;
 
+        // Update portfolio AFTER successful sell (not before, so failed sells don't orphan positions)
         portfolio.cash += (position.quantity * avgPrice) - sellFee;
         delete portfolio.positions[position.ticker];
+
+        // Clean up profit method internal state for this ticker
+        cleanupProfitMethodState(position.ticker, position.entryStrategy);
 
         cbRecordTrade(pnl, position.entryStrategy, position.ticker);
         recordStrategyResult(position.entryStrategy, pnl);
@@ -1320,7 +1398,7 @@ const handleSell = async (position, price, reason) => {
         if (telegramEnabled()) alertTradeExecution({ type: 'SELL', ticker: position.ticker, price: avgPrice, strategy: position.entryStrategy, pnl });
         saveSessionState();
     } catch (error) {
-        addLog(`SELL order failed: ${error.message}`, 'ERROR');
+        addLog(`SELL order failed for ${position.ticker}: ${error.message}`, 'ERROR');
     }
 };
 
@@ -2385,6 +2463,7 @@ app.post('/api/session/start', async (req, res) => {
         botState.isActive = true;
         botState.tradingMode = mode;
         botState.sessionStartTime = Date.now();
+        pmSetSessionStart(Date.now());
         botState.settings = {
             ...botState.settings,
             riskAmount: botState.settings.riskAmount || 0.15,
@@ -2707,6 +2786,10 @@ const startServer = async () => {
             portfolio.initialBudget = restoredState.portfolio.initialBudget ?? portfolio.initialBudget;
             portfolio.positions = restoredState.portfolio.positions ?? {};
             portfolio.holdings = restoredState.portfolio.holdings ?? {};
+            // Ensure restored positions have currentPrice initialized
+            for (const pos of Object.values(portfolio.positions)) {
+                if (!pos.currentPrice) pos.currentPrice = pos.openPrice;
+            }
         }
         if (restoredState.circuitBreaker) try { cbImportState(restoredState.circuitBreaker); } catch(e) {}
         if (restoredState.adaptiveWeights) try { awImportState(restoredState.adaptiveWeights); } catch(e) {}
@@ -2816,6 +2899,7 @@ const startServer = async () => {
         botState.isActive = true;
         botState.tradingMode = restoredState.botState?.tradingMode || 'SIMULATION';
         botState.sessionStartTime = restoredState.uptime?.startTime || Date.now();
+        pmSetSessionStart(Date.now());
         botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
         console.log('[Server] Bot auto-resumed from previous session');
         addLog('[SESSION] Bot auto-resumed after restart', 'INFO');

@@ -48,7 +48,7 @@ const PM_CONFIG = {
   },
   SWING: {
     ENABLED: true,
-    MIN_CONFIDENCE: 25,                  // Beast Mode: was 40
+    MIN_CONFIDENCE: 50,                  // Tightened: was 25 (require 4+ aligned signals)
     MIN_RISK_REWARD: 1.5,
     PORTFOLIO_ALLOCATION: 0.05,          // Reduced: was 0.20, caused $1300+ single trades
     TRAILING_STOP_TRIGGER: 2,
@@ -72,6 +72,14 @@ const mmStates = new Map();           // ticker -> MMState
 const pairRatios = new Map();         // "T1/T2" -> PairRatio
 const pairCorrelations = new Map();   // "T1:T2" -> PairCorrelation
 const openPairPositions = new Map();  // "T1:T2" -> PairPosition
+
+// DCA warmup: no DCA buys for first 5 minutes of a session
+let sessionStartTimestamp = 0;
+const DCA_WARMUP_MS = 5 * 60 * 1000; // 5 min warmup
+
+export function setSessionStart(timestamp) {
+    sessionStartTimestamp = timestamp || Date.now();
+}
 
 // Stats tracking
 const methodStats = {
@@ -344,9 +352,11 @@ function calculateDCAMultiplier(candles, position) {
     reason = `Slightly above avg -> 0.7x`;
   }
 
-  if (position && price < position.avgEntryPrice * 0.98) {
+  // Use initial entry price (not averaged-down price) so multiplier doesn't shrink on successive dips
+  const referencePrice = position?.initialEntryPrice || position?.avgEntryPrice;
+  if (position && referencePrice && price < referencePrice * 0.98) {
     multiplier = Math.min(cfg.MAX_DIP_MULTIPLIER, multiplier * 1.3);
-    reason += ' | below avg entry';
+    reason += ' | below initial entry';
   }
 
   return {
@@ -355,8 +365,12 @@ function calculateDCAMultiplier(candles, position) {
   };
 }
 
-function processDCA(ticker, candles, cashAvailable, portfolioBudget) {
+function processDCA(ticker, candles, cashAvailable, portfolioBudget, openPositions) {
   if (!PM_CONFIG.DCA.ENABLED || candles.length < 5) return null;
+  // No DCA for first 5 minutes of session (prevents carpet-bombing on start)
+  if (sessionStartTimestamp > 0 && Date.now() - sessionStartTimestamp < DCA_WARMUP_MS) return null;
+  // Only DCA into existing positions (don't open new ones)
+  if (!openPositions || !openPositions[ticker]) return null;
 
   const baseAmount = portfolioBudget * PM_CONFIG.DCA.BASE_ALLOCATION;
   if (baseAmount <= 0) return null;
@@ -390,7 +404,7 @@ function recordDCABuy(ticker, price, quantity, amount) {
   } else {
     dcaPositions.set(ticker, {
       ticker, totalInvested: amount, totalQuantity: quantity,
-      avgEntryPrice: price, buys: 1,
+      avgEntryPrice: price, initialEntryPrice: price, buys: 1,
       lastBuyTime: Date.now(), lastBuyPrice: price,
     });
   }
@@ -459,7 +473,7 @@ function processGrid(ticker, candles, cashAvailable) {
     state = gridStates.get(ticker);
   } else {
     const { upperBound, lowerBound } = state.config;
-    const buffer = (upperBound - lowerBound) * 0.1;
+    const buffer = (upperBound - lowerBound) * 0.2; // Widened: was 0.1 (10% nuked grid progress too easily)
     if (price > upperBound + buffer || price < lowerBound - buffer) {
       const budget = cashAvailable * PM_CONFIG.GRID.PORTFOLIO_ALLOCATION;
       if (budget < 0.10) return null;
@@ -957,10 +971,44 @@ export function checkProfitMethodExits(positions, marketDataMap) {
         break;
       }
       case 'ARB': {
-        // Arb positions exit when z-score normalizes (< 0.5) or after timeout (30 min)
         const elapsed = Date.now() - position.entryTime;
-        if (elapsed > 30 * 60 * 1000) {
-          exits.push({ ticker, reason: `[ARB] Timeout (30min)` });
+        const arbPnlPercent = ((price - position.openPrice) / position.openPrice) * 100;
+        let arbExitReason = null;
+
+        // 1. Stop loss: exit if down more than 1.5%
+        if (arbPnlPercent <= -1.5) {
+          arbExitReason = `[ARB] Stop loss: ${arbPnlPercent.toFixed(2)}%`;
+        }
+
+        // 2. Take profit: exit if up more than 1%
+        if (!arbExitReason && arbPnlPercent >= 1.0) {
+          arbExitReason = `[ARB] Take profit: +${arbPnlPercent.toFixed(2)}%`;
+        }
+
+        // 3. Z-score normalization: find the correlated pair and check if spread reverted
+        if (!arbExitReason) {
+          for (const [t1, t2] of CORRELATED_PAIRS) {
+            if (t1 === ticker || t2 === ticker) {
+              const c1 = marketDataMap.get(t1);
+              const c2 = marketDataMap.get(t2);
+              if (c1 && c2 && c1.length >= 20 && c2.length >= 20) {
+                const spread = calculateSpreadBetween(c1, c2);
+                if (Math.abs(spread.zScore) < 0.5) {
+                  arbExitReason = `[ARB] Spread reverted: z=${spread.zScore.toFixed(2)}`;
+                }
+              }
+              break;
+            }
+          }
+        }
+
+        // 4. Timeout: 30 min
+        if (!arbExitReason && elapsed > 30 * 60 * 1000) {
+          arbExitReason = `[ARB] Timeout (30min)`;
+        }
+
+        if (arbExitReason) {
+          exits.push({ ticker, reason: arbExitReason });
           methodStats.arb.trades++;
           methodStats.arb.pnl += (price - position.openPrice) * position.quantity;
         }
@@ -995,16 +1043,42 @@ export function checkProfitMethodExits(positions, marketDataMap) {
         break;
       }
       case 'MM': {
-        // MM positions: sell after spread is captured (short hold) or timeout
-        const elapsed = Date.now() - position.entryTime;
-        const pnlPercent = ((price - position.openPrice) / position.openPrice) * 100;
-        if (pnlPercent >= 0.1 || elapsed > 10 * 60 * 1000) {
-          exits.push({
-            ticker,
-            reason: `[MM] ${pnlPercent >= 0.1 ? 'Spread captured' : 'Timeout'}: ${pnlPercent.toFixed(3)}%`,
-          });
+        // MM positions: take profit above fees, stop loss, or timeout
+        const mmElapsed = Date.now() - position.entryTime;
+        const mmPnlPercent = ((price - position.openPrice) / position.openPrice) * 100;
+        let mmExitReason = null;
+
+        // Stop loss: exit if down more than 0.5%
+        if (mmPnlPercent <= -0.5) {
+          mmExitReason = `[MM] Stop loss: ${mmPnlPercent.toFixed(3)}%`;
+        }
+        // Take profit: must exceed round-trip fees (~0.15%) + margin
+        if (!mmExitReason && mmPnlPercent >= 0.5) {
+          mmExitReason = `[MM] Spread captured: +${mmPnlPercent.toFixed(3)}%`;
+        }
+        // Timeout: 10 min
+        if (!mmExitReason && mmElapsed > 10 * 60 * 1000) {
+          mmExitReason = `[MM] Timeout (10min): ${mmPnlPercent.toFixed(3)}%`;
+        }
+
+        if (mmExitReason) {
+          exits.push({ ticker, reason: mmExitReason });
+          mmStates.delete(ticker);
           methodStats.mm.trades++;
           methodStats.mm.pnl += (price - position.openPrice) * position.quantity;
+        }
+        break;
+      }
+      default: {
+        // Non-profit-method positions (TREND, MOMENTUM, BREAKOUT, etc.)
+        // Apply a universal stale-position timeout: if down after 30 min, exit
+        const defaultElapsed = Date.now() - position.entryTime;
+        const defaultPnl = ((price - position.openPrice) / position.openPrice) * 100;
+        if (defaultElapsed > 30 * 60 * 1000 && defaultPnl < -0.5) {
+          exits.push({
+            ticker,
+            reason: `[PM-TIMEOUT] Stale ${position.entryStrategy} position: ${defaultPnl.toFixed(2)}% after ${Math.round(defaultElapsed / 60000)}min`,
+          });
         }
         break;
       }
@@ -1068,7 +1142,7 @@ export function runProfitMethods(marketDataMap, portfolio, availableTickers, min
       const candles = marketDataMap.get(ticker);
       if (!candles || candles.length < 10) continue;
 
-      const dcaSignal = processDCA(ticker, candles, cash, budget);
+      const dcaSignal = processDCA(ticker, candles, cash, budget, portfolio.positions);
       if (dcaSignal) {
         const amount = dcaSignal.amount;
         if (amount >= minTradeSize && cash >= amount) {
@@ -1169,6 +1243,26 @@ export function runProfitMethods(marketDataMap, portfolio, availableTickers, min
   }
 
   return entries;
+}
+
+// ============================================
+// CLEANUP: Called from handleSell to clear internal state for a sold ticker
+// ============================================
+
+export function cleanupProfitMethodState(ticker, entryStrategy) {
+  // Always attempt cleanup for all PM state maps regardless of strategy,
+  // since a position might have been entered by one strategy and tracked by another
+  swingPositions.delete(ticker);
+  dcaPositions.delete(ticker);
+  gridStates.delete(ticker);
+  mmStates.delete(ticker);
+
+  // Pair positions: clean up any pair that includes this ticker
+  for (const [key, pp] of openPairPositions) {
+    if (pp.longTicker === ticker || pp.shortTicker === ticker) {
+      openPairPositions.delete(key);
+    }
+  }
 }
 
 // ============================================

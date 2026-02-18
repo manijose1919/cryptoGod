@@ -25,11 +25,11 @@ let pausedUntil = 0;
 let pauseReason = '';
 
 const CIRCUIT_BREAKER_CONFIG = {
-  MAX_CONSECUTIVE_LOSSES: 6,            // Beast Mode: was 3
-  MAX_DAILY_DRAWDOWN_PERCENT: 15,       // Beast Mode: was 5
-  MAX_HOURLY_LOSSES: 12,                // Beast Mode: was 5
-  PAUSE_DURATION_MS: 3 * 60 * 1000,     // Beast Mode: 3min cooldown (was 15min)
-  ESCALATING_PAUSE: false,              // Beast Mode: no escalation (was true)
+  MAX_CONSECUTIVE_LOSSES: 6,            // unchanged
+  MAX_DAILY_DRAWDOWN_PERCENT: 15,       // unchanged
+  MAX_HOURLY_LOSSES: 20,                // Raised: was 12 — fewer false trips with better entries
+  PAUSE_DURATION_MS: 5 * 60 * 1000,     // Longer recovery: was 3min
+  ESCALATING_PAUSE: true,               // Repeated trips = longer cooldowns
 };
 
 let pauseCount = 0;  // For escalating pauses
