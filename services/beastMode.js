@@ -31,6 +31,14 @@ const streakState = {
 // Dynamic round-trip fee (percentage, e.g. 0.15 for Crypto.com, 0.52 for Kraken)
 let roundTripFeePercent = 0.15;
 
+// Target overrides from Parameter Optimizer (Group B TP/SL values)
+let targetOverrides = null; // { HIGH_VOL: {tp, sl}, NORMAL: {tp, sl}, LOW_VOL: {tp, sl} }
+
+/** Set TP/SL overrides from the parameter optimizer */
+export function setTargetOverrides(overrides) {
+    targetOverrides = overrides;
+}
+
 /** Set the round-trip fee for the active exchange (called on exchange switch) */
 export function setRoundTripFee(fee) {
   roundTripFeePercent = fee;
@@ -296,16 +304,31 @@ export function getDynamicTargets(candles) {
   // Fee-aware minimum: target must exceed round-trip fee + margin
   const feeFloor = roundTripFeePercent + 0.30;
 
+  let regime, baseTp, baseSl;
   if (atrPercent > 1.5) {
-    // High volatility: wider targets
-    return { takeProfitPct: Math.max(2.0, feeFloor), stopLossPct: 1.5, regime: 'HIGH_VOL' };
+    regime = 'HIGH_VOL'; baseTp = 2.0; baseSl = 1.5;
   } else if (atrPercent > 0.5) {
-    // Normal volatility
-    return { takeProfitPct: Math.max(1.2, feeFloor), stopLossPct: 1.0, regime: 'NORMAL' };
+    regime = 'NORMAL'; baseTp = 1.2; baseSl = 1.0;
   } else {
-    // Low volatility: must still exceed fees
-    return { takeProfitPct: Math.max(0.75, feeFloor), stopLossPct: 1.0, regime: 'LOW_VOL' };
+    regime = 'LOW_VOL'; baseTp = 0.75; baseSl = 1.0;
   }
+
+  let tp = baseTp;
+  let sl = baseSl;
+  let optimized = false;
+
+  // Apply optimizer overrides only if they differ from the base defaults
+  if (targetOverrides && targetOverrides[regime]) {
+    const oTp = targetOverrides[regime].tp;
+    const oSl = targetOverrides[regime].sl;
+    if (Math.abs(oTp - baseTp) > 0.01 || Math.abs(oSl - baseSl) > 0.01) {
+      tp = oTp;
+      sl = oSl;
+      optimized = true;
+    }
+  }
+
+  return { takeProfitPct: Math.max(tp, feeFloor), stopLossPct: sl, regime, optimized };
 }
 
 /**

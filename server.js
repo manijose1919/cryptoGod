@@ -51,7 +51,8 @@ import { calculateAllIndicators } from './services/advancedIndicators.js';
 import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
 import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment } from './services/socialSentiment.js';
 import { setGeminiKey, getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
-import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee } from './services/beastMode.js';
+import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee, setTargetOverrides } from './services/beastMode.js';
+import { triggerOptimization, getOptimizedEntryParams, getOptimizedTargets, getOptimizerStatus, forceOptimize, recordPostOptTrade, resetToDefaults as resetOptimizer, setFeeForSimulation, exportState as optExportState, importState as optImportState } from './services/parameterOptimizer.js';
 
 // Phase 6: New Backend Services (SIM parity)
 import { getMasterSurgeDecision, detectSurge, detectCandlestickPatterns } from './services/surgeTradingBackend.js';
@@ -673,16 +674,20 @@ function saveSessionState() {
       cash: portfolio.cash,
       initialBudget: portfolio.initialBudget,
       positions: portfolio.positions,
+      holdings: portfolio.holdings || {},
+      tradeLog: (portfolio.tradeLog || []).slice(-500),
     }));
     setSetting('session_bot', JSON.stringify({
       isActive: botState.isActive,
       settings: botState.settings,
+      sessionId: botState.sessionId,
       tradingMode: botState.tradingMode,
       sessionStartTime: botState.sessionStartTime,
     }));
     setSetting('session_circuit_breaker', JSON.stringify(cbExportState()));
     setSetting('session_adaptive_weights', JSON.stringify(awExportState()));
     setSetting('session_beast_mode', JSON.stringify(beastExportState()));
+    setSetting('session_optimizer', JSON.stringify(optExportState()));
     setSetting('session_profit_methods', JSON.stringify(pmExportState()));
     setSetting('session_timestamp', JSON.stringify(Date.now()));
   } catch (e) {
@@ -730,8 +735,11 @@ function checkLiquidity(candles) {
 // ============================================
 // Trading Bot Loop (Optimized for Large Universes)
 // ============================================
+let botLoopRunning = false;
 async function tradingBotLoop() {
     if (!botState.isActive) return;
+    if (botLoopRunning) return; // prevent overlapping async iterations
+    botLoopRunning = true;
 
     try {
         const { sessionProfitGoal, riskAmount, profitGoals } = botState.settings;
@@ -742,6 +750,14 @@ async function tradingBotLoop() {
         );
         let totalValue = portfolio.cash + holdingsValue;
         if (totalValue > peakValue) peakValue = totalValue;
+
+        // Update circuit breaker daily balance on day change
+        const today = new Date().toDateString();
+        if (botState._lastCBDay !== today) {
+            setDailyBalance(totalValue);
+            botState._lastCBDay = today;
+        }
+
         const tier = CapitalTierManager.getTier(totalValue);
 
         // Enforce tier's maxConcurrentTrades as a hard cap
@@ -918,10 +934,12 @@ async function tradingBotLoop() {
         // Determine current market regime for strategy filtering
         const currentRegime = (() => {
             try {
-                const firstCandles = marketDataMap.values().next().value;
+                const firstTicker = marketDataMap.keys().next().value;
+                const firstCandles = firstTicker ? marketDataMap.get(firstTicker) : null;
                 if (firstCandles) {
-                    const regime = getMarketRegime(firstCandles);
-                    return regime?.regime || 'UNKNOWN';
+                    // Pass ticker to enable 30s regime cache + populate beastMode status
+                    const regime = getMarketRegime(firstCandles, firstTicker);
+                    return regime || 'UNKNOWN';
                 }
             } catch (e) {}
             return 'UNKNOWN';
@@ -963,8 +981,9 @@ async function tradingBotLoop() {
             },
         });
 
-        // Derive entry thresholds from timeframe profile (or use defaults)
-        const minOppScore = activeProfile?.entry?.minOpportunityScore ?? 25;
+        // Derive entry thresholds from timeframe profile, then overlay optimizer values
+        const optParams = getOptimizedEntryParams();
+        const minOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const profileStrategies = activeProfile?.activeStrategies || null;
         const profilePosSize = activeProfile?.positionSizePercent ?? null;
 
@@ -1034,49 +1053,73 @@ async function tradingBotLoop() {
                 const currentPrice = candles[candles.length - 1].c;
                 const tcValue = calculateTCSeries(candles).pop() ?? 50;
 
-                // Determine entry strategy — use timeframe profile's allowed strategies when available
+                // Determine entry strategy — evaluate ALL allowed strategies and pick strongest signal
                 let entryStrategy = null;
+                let triggerValue = tcValue; // default for TREND
                 if (profileStrategies) {
-                    // Try each profile-allowed strategy against its indicator signal
-                    if (profileStrategies.includes('TREND') && tcValue < CONFIG.THRESHOLDS.TREND_BULLISH_ENTRY) {
-                        entryStrategy = 'TREND';
-                    } else if (profileStrategies.includes('MOMENTUM')) {
+                    // Evaluate all profile-allowed strategies, pick the one with strongest signal
+                    // Signal strength = how far past threshold (normalized 0-1 range)
+                    const stratCandidates = [];
+
+                    if (profileStrategies.includes('TREND') && tcValue < optParams.TREND_BULLISH_ENTRY) {
+                        // TREND: lower = more bullish, strength = how far below threshold
+                        const strength = (optParams.TREND_BULLISH_ENTRY - tcValue) / optParams.TREND_BULLISH_ENTRY;
+                        stratCandidates.push({ strategy: 'TREND', value: tcValue, strength });
+                    }
+                    if (profileStrategies.includes('MOMENTUM')) {
                         const momValue = calculateMomentumSeries(candles).pop() ?? 50;
-                        if (momValue > 70) entryStrategy = 'MOMENTUM';
-                    } else if (profileStrategies.includes('BREAKOUT')) {
+                        if (momValue > optParams.MOMENTUM_BULLISH_ENTRY) {
+                            const strength = (momValue - optParams.MOMENTUM_BULLISH_ENTRY) / (100 - optParams.MOMENTUM_BULLISH_ENTRY);
+                            stratCandidates.push({ strategy: 'MOMENTUM', value: momValue, strength });
+                        }
+                    }
+                    if (profileStrategies.includes('BREAKOUT')) {
                         const bkout = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
-                        if (bkout > 75) entryStrategy = 'BREAKOUT';
-                    } else if (profileStrategies.includes('ADAPTIVE')) {
+                        if (bkout > optParams.BREAKOUT_SQUEEZE_ENTRY) {
+                            const strength = (bkout - optParams.BREAKOUT_SQUEEZE_ENTRY) / (100 - optParams.BREAKOUT_SQUEEZE_ENTRY);
+                            stratCandidates.push({ strategy: 'BREAKOUT', value: bkout, strength });
+                        }
+                    }
+                    if (profileStrategies.includes('ADAPTIVE')) {
                         const adpValue = calculateAdaptiveTCSeries(candles).pop() ?? 50;
-                        if (adpValue < 35) entryStrategy = 'ADAPTIVE';
+                        if (adpValue < optParams.ADAPTIVE_BULLISH_ENTRY) {
+                            const strength = (optParams.ADAPTIVE_BULLISH_ENTRY - adpValue) / optParams.ADAPTIVE_BULLISH_ENTRY;
+                            stratCandidates.push({ strategy: 'ADAPTIVE', value: adpValue, strength });
+                        }
+                    }
+
+                    // Pick the strongest signal that passes regime + throttle filters
+                    if (stratCandidates.length > 0) {
+                        stratCandidates.sort((a, b) => b.strength - a.strength);
+                        for (const cand of stratCandidates) {
+                            // Check regime filter
+                            if (!isStrategyEnabledForRegime(cand.strategy, currentRegime)) {
+                                logThought({ type: 'SKIP', ticker, action: 'REGIME_FILTER',
+                                    confidence: score.compositeScore,
+                                    reason: `${cand.strategy} not allowed in ${currentRegime} regime (trying next)`,
+                                    regime: currentRegime });
+                                continue;
+                            }
+                            // Check throttle
+                            if (isStrategyThrottled(cand.strategy)) {
+                                logThought({ type: 'SKIP', ticker, action: 'STRATEGY_THROTTLED',
+                                    confidence: score.compositeScore,
+                                    reason: `${cand.strategy} throttled (trying next)`,
+                                    regime: currentRegime });
+                                continue;
+                            }
+                            entryStrategy = cand.strategy;
+                            triggerValue = cand.value;
+                            break;
+                        }
                     }
                 } else {
-                    // Fallback: original TREND-only entry
-                    if (tcValue < CONFIG.THRESHOLDS.TREND_BULLISH_ENTRY) entryStrategy = 'TREND';
-                }
-
-                // Feature 6: Regime-aware strategy filtering
-                if (entryStrategy && !isStrategyEnabledForRegime(entryStrategy, currentRegime)) {
-                    logThought({
-                        type: 'SKIP', ticker, action: 'REGIME_FILTER',
-                        confidence: score.compositeScore,
-                        reason: `${entryStrategy} not allowed in ${currentRegime} regime`,
-                        regime: currentRegime,
-                        indicators: { tcValue, compositeScore: score.compositeScore },
-                    });
-                    entryStrategy = null;
-                }
-
-                // Adaptive weights: skip strategies that are throttled due to poor recent performance
-                if (entryStrategy && isStrategyThrottled(entryStrategy)) {
-                    logThought({
-                        type: 'SKIP', ticker, action: 'STRATEGY_THROTTLED',
-                        confidence: score.compositeScore,
-                        reason: `${entryStrategy} throttled by adaptive weights (poor recent performance)`,
-                        regime: currentRegime,
-                        indicators: { tcValue, compositeScore: score.compositeScore },
-                    });
-                    entryStrategy = null;
+                    // Fallback: original TREND-only entry (optimizer-tuned threshold)
+                    if (tcValue < optParams.TREND_BULLISH_ENTRY) {
+                        if (isStrategyEnabledForRegime('TREND', currentRegime) && !isStrategyThrottled('TREND')) {
+                            entryStrategy = 'TREND';
+                        }
+                    }
                 }
 
                 // Feature 3: MTF confluence confidence adjustment
@@ -1101,12 +1144,12 @@ async function tradingBotLoop() {
                     sentimentAdj = Math.round(sentimentScore * 10); // -1..1 → -10..+10
                 }
 
-                // Hard floor: reject any entry with compositeScore < 25 regardless of profile
-                if (entryStrategy && score.compositeScore < 25) {
+                // Hard floor: reject any entry with compositeScore below optimizer floor
+                if (entryStrategy && score.compositeScore < optParams.compositeScoreFloor) {
                     logThought({
                         type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
                         confidence: score.compositeScore,
-                        reason: `compositeScore ${score.compositeScore} < 25 floor`,
+                        reason: `compositeScore ${score.compositeScore} < ${optParams.compositeScoreFloor} floor`,
                         regime: currentRegime,
                         indicators: { compositeScore: score.compositeScore, entryStrategy },
                     });
@@ -1145,7 +1188,12 @@ async function tradingBotLoop() {
                             market_speed: marketSpeed,
                             indicators: { tcValue, compositeScore: score.compositeScore, kellyFraction, mtfConfidenceAdj, fundingAdj, sentimentAdj, investmentAmount, timeframeId: activeProfile?.timeframeId },
                         });
-                        await handleBuy(ticker, currentPrice, entryStrategy, `Batch scan [${marketSpeed}/${activeProfile?.timeframeId || 'default'}] (score=${score.compositeScore}, sentiment=${sentimentAdj})`, investmentAmount);
+                        const volTargets = getDynamicTargets(candles);
+                        await handleBuy(ticker, currentPrice, entryStrategy, `Batch scan [${marketSpeed}/${activeProfile?.timeframeId || 'default'}] (score=${score.compositeScore}, sentiment=${sentimentAdj})`, investmentAmount, {
+                            compositeScore: score.compositeScore,
+                            triggerValue,
+                            regime: volTargets.regime,
+                        });
                     }
                 }
             }
@@ -1171,7 +1219,8 @@ async function tradingBotLoop() {
 
                 let amount = CapitalTierManager.getRecommendedPositionSize(totalValue, Math.min(entry.amount, portfolio.cash * 0.9));
                 if (amount >= CONFIG.MIN_TRADE_SIZE) {
-                    await handleBuy(entry.ticker, entry.price, entry.strategy, entry.reason, amount);
+                    const pmRegime = pmCandles ? getDynamicTargets(pmCandles).regime : 'NORMAL';
+                    await handleBuy(entry.ticker, entry.price, entry.strategy, entry.reason, amount, { regime: pmRegime });
                 }
             }
         }
@@ -1191,12 +1240,14 @@ async function tradingBotLoop() {
         saveSessionState();
     } catch (error) {
         console.error(`Bot loop error: ${error.message}`);
+    } finally {
+        botLoopRunning = false;
     }
 }
 
 const MAX_TICKER_ALLOCATION = 0.10; // 10% max of portfolio in any single ticker
 
-const handleBuy = async (ticker, price, strategy, reason, notional) => {
+const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = {}) => {
     // Per-ticker cap: reject if this ticker already exceeds max allocation
     const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
         (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0);
@@ -1279,15 +1330,21 @@ const handleBuy = async (ticker, price, strategy, reason, notional) => {
             const newQty = parseFloat(quantity);
             const totalQty = oldQty + newQty;
             const weightedAvg = (oldQty * existing.openPrice + newQty * parseFloat(avgPrice)) / totalQty;
-            // Update entryStrategy if the new addition is larger (dominant strategy)
-            const updatedStrategy = newQty > oldQty ? strategy : existing.entryStrategy;
+            // Update entryStrategy + metadata if the new addition is larger (dominant strategy)
+            const newIsDominant = newQty > oldQty;
             portfolio.positions[ticker] = {
                 ...existing,
                 quantity: totalQty,
                 openPrice: weightedAvg,
-                entryStrategy: updatedStrategy,
+                entryStrategy: newIsDominant ? strategy : existing.entryStrategy,
                 highestPrice: Math.max(existing.highestPrice || weightedAvg, parseFloat(avgPrice)),
                 lowestPrice: Math.min(existing.lowestPrice || weightedAvg, parseFloat(avgPrice)),
+                // Keep metadata in sync with dominant strategy for optimizer accuracy
+                ...(newIsDominant ? {
+                    compositeScore: entryMeta.compositeScore || existing.compositeScore || 0,
+                    triggerValue: entryMeta.triggerValue || existing.triggerValue || 0,
+                    regime: entryMeta.regime || existing.regime || 'NORMAL',
+                } : {}),
             };
         } else {
             portfolio.positions[ticker] = {
@@ -1299,6 +1356,9 @@ const handleBuy = async (ticker, price, strategy, reason, notional) => {
                 entryTime: Date.now(),
                 highestPrice: parseFloat(avgPrice),
                 lowestPrice: parseFloat(avgPrice),
+                compositeScore: entryMeta.compositeScore || 0,
+                triggerValue: entryMeta.triggerValue || 0,
+                regime: entryMeta.regime || 'NORMAL',
             };
         }
         portfolio.cash -= (notional + buyFee);
@@ -1396,6 +1456,60 @@ const handleSell = async (position, price, reason) => {
         });
 
         if (telegramEnabled()) alertTradeExecution({ type: 'SELL', ticker: position.ticker, price: avgPrice, strategy: position.entryStrategy, pnl });
+
+        // Track trade for optimizer
+        const pnlPercent = ((avgPrice - position.openPrice) / position.openPrice) * 100;
+        if (!portfolio.tradeLog) portfolio.tradeLog = [];
+        portfolio.tradeLog.push({
+            ticker: position.ticker,
+            strategy: position.entryStrategy,
+            entryPrice: position.openPrice,
+            exitPrice: avgPrice,
+            highestPrice: position.highestPrice || avgPrice,
+            lowestPrice: position.lowestPrice || avgPrice,
+            pnl,
+            pnlPercent,
+            entryTime: position.entryTime,
+            exitTime: Date.now(),
+            compositeScore: position.compositeScore || 0,
+            triggerValue: position.triggerValue || 0,
+            regime: position.regime || 'NORMAL',
+        });
+        if (portfolio.tradeLog.length > 500) portfolio.tradeLog.splice(0, portfolio.tradeLog.length - 500);
+
+        // Trigger optimizer (internal gating: first at 30 trades, then every 50)
+        let optimizerJustRan = false;
+        try {
+            const result = triggerOptimization(portfolio.tradeLog);
+            if (result.profitFactorBefore !== undefined) optimizerJustRan = true;
+            if (result.changed) {
+                setTargetOverrides(result.targets);
+                logThought({ type: 'REGIME', ticker: 'OPTIMIZER', action: 'PARAMS_UPDATED',
+                    confidence: 0, reason: `Optimizer adjusted ${result.changedParams.join(', ')}` });
+                addLog(`[OPTIMIZER] Adjusted ${result.changedParams.length} params (PF: ${result.profitFactorBefore}, WR: ${result.winRateBefore}%) after ${portfolio.tradeLog.length} trades`, 'AI');
+            } else if (optimizerJustRan) {
+                // Optimizer ran but found no improvements — log for visibility
+                const rejMsg = result.rejectedParams?.length > 0 ? `, rejected: ${result.rejectedParams.join(', ')}` : '';
+                addLog(`[OPTIMIZER] Ran at ${portfolio.tradeLog.length} trades — no changes (PF: ${result.profitFactorBefore}, WR: ${result.winRateBefore}%${rejMsg})`, 'INFO');
+            }
+        } catch (e) {
+            console.error('[OPTIMIZER] Error:', e.message);
+        }
+
+        // Post-optimization rollback check — skip if optimizer just ran on this trade
+        // (this trade's outcome was determined by pre-optimization params)
+        if (!optimizerJustRan) {
+            try {
+                const rollback = recordPostOptTrade(pnl);
+                if (rollback.rolledBack) {
+                    setTargetOverrides(rollback.targets);
+                    logThought({ type: 'REGIME', ticker: 'OPTIMIZER', action: 'ROLLBACK',
+                        confidence: 0, reason: rollback.reason });
+                    addLog(`[OPTIMIZER] ROLLBACK: ${rollback.reason}`, 'WARN');
+                }
+            } catch (e) {}
+        }
+
         saveSessionState();
     } catch (error) {
         addLog(`SELL order failed for ${position.ticker}: ${error.message}`, 'ERROR');
@@ -1463,9 +1577,10 @@ app.post('/api/exchange/switch', (req, res) => {
         const newId = setActiveExchange(exchange);
         const adapter = getExchangeAdapter();
 
-        // Update beast mode fee awareness
+        // Update fee awareness for beast mode and optimizer simulation
         const fees = getActiveFees();
         beastSetRoundTripFee(fees.roundTrip * 100);
+        setFeeForSimulation(fees.roundTrip * 100);
 
         // Reconnect WebSocket to new exchange if changed
         if (prevExchange !== newId) {
@@ -1572,6 +1687,7 @@ app.get('/api/system/status', (req, res) => {
             profitMethods: getProfitMethodsStatus(),
             preTradeAI: getPreTradeAIStatus(),
             beastMode: getBeastModeStatus(),
+            optimizer: getOptimizerStatus(portfolio.tradeLog),
             aiLearning: getAILearningStatus(),
         });
     } catch (error) {
@@ -2410,7 +2526,7 @@ app.post('/api/session/pause', (req, res) => {
         addLog('[SESSION] Bot paused via API', 'WARN');
         saveFullState({
             portfolio, botState,
-            cbExportState, awExportState, beastExportState, pmExportState,
+            cbExportState, awExportState, beastExportState, pmExportState, optExportState,
             availableTickers,
         });
     }
@@ -2456,6 +2572,8 @@ app.post('/api/session/start', async (req, res) => {
             portfolio.initialBudget = budget;
             portfolio.positions = {};
             portfolio.holdings = {};
+            // Preserve tradeLog across sessions for optimizer continuity
+            if (!portfolio.tradeLog) portfolio.tradeLog = [];
         }
         // For REAL mode, portfolio was already set from /api/login
 
@@ -2482,8 +2600,9 @@ app.post('/api/session/start', async (req, res) => {
             await updateAvailableTickers();
         }
 
-        // Initialize beast mode
+        // Initialize beast mode + circuit breaker daily tracking
         beastSetSessionBalance(portfolio.cash);
+        setDailyBalance(portfolio.cash);
         beastUpdateBalance(portfolio.cash);
         peakValue = portfolio.cash;
 
@@ -2565,7 +2684,7 @@ app.post('/api/session/stop', async (req, res) => {
         // Save final state
         saveFullState({
             portfolio, botState,
-            cbExportState, awExportState, beastExportState, pmExportState,
+            cbExportState, awExportState, beastExportState, pmExportState, optExportState,
             availableTickers,
         });
 
@@ -2647,6 +2766,7 @@ app.get('/api/session/full-status', (req, res) => {
             circuitBreaker: getCircuitBreakerStatus(),
             beastMode: getBeastModeStatus(),
             adaptiveWeights: getAdaptiveWeightsStatus(),
+            optimizer: getOptimizerStatus(portfolio.tradeLog),
 
             // Session persistence
             session: getSessionStatus(portfolio, botState),
@@ -2765,6 +2885,33 @@ app.get('/api/funding-rate/:ticker', (req, res) => {
     }
 });
 
+// Parameter Optimizer Routes
+app.get('/api/optimizer/status', (req, res) => {
+    res.json(getOptimizerStatus(portfolio.tradeLog));
+});
+
+app.post('/api/optimizer/force-run', (req, res) => {
+    try {
+        const trades = portfolio.tradeLog || [];
+        const result = forceOptimize(trades);
+        if (result.changed) setTargetOverrides(result.targets);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/optimizer/reset', (req, res) => {
+    try {
+        const result = resetOptimizer();
+        setTargetOverrides(result.targets);
+        addLog('[OPTIMIZER] Reset to defaults via API', 'WARN');
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
@@ -2786,6 +2933,7 @@ const startServer = async () => {
             portfolio.initialBudget = restoredState.portfolio.initialBudget ?? portfolio.initialBudget;
             portfolio.positions = restoredState.portfolio.positions ?? {};
             portfolio.holdings = restoredState.portfolio.holdings ?? {};
+            portfolio.tradeLog = restoredState.portfolio.tradeLog ?? [];
             // Ensure restored positions have currentPrice initialized
             for (const pos of Object.values(portfolio.positions)) {
                 if (!pos.currentPrice) pos.currentPrice = pos.openPrice;
@@ -2795,10 +2943,27 @@ const startServer = async () => {
         if (restoredState.adaptiveWeights) try { awImportState(restoredState.adaptiveWeights); } catch(e) {}
         if (restoredState.beastMode) try { beastImportState(restoredState.beastMode); } catch(e) {}
         if (restoredState.profitMethods) try { pmImportState(restoredState.profitMethods); } catch(e) {}
+        if (restoredState.optimizer) try {
+            optImportState(restoredState.optimizer);
+            const optTargets = getOptimizedTargets();
+            if (optTargets) setTargetOverrides(optTargets);
+        } catch(e) {}
         if (restoredState.botState?.sessionId) botState.sessionId = restoredState.botState.sessionId;
         if (restoredState.botState?.settings) botState.settings = { ...botState.settings, ...restoredState.botState.settings };
+
+        // Initialize circuit breaker daily balance from restored portfolio
+        const restoredHoldings = Object.values(portfolio.positions).reduce(
+            (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0);
+        setDailyBalance(portfolio.cash + restoredHoldings);
+
         console.log(`[Server] Session restored: $${portfolio.cash?.toFixed(2)} cash, ${Object.keys(portfolio.positions).length} positions`);
     }
+
+    // Sync exchange fee to optimizer at startup
+    try {
+        const startupFees = getActiveFees();
+        setFeeForSimulation(startupFees.roundTrip * 100);
+    } catch(e) {}
 
     await logPublicIp();
     await updateAvailableTickers();
@@ -2909,7 +3074,7 @@ const startServer = async () => {
     startAutoSave({
         get portfolio() { return portfolio; },
         get botState() { return botState; },
-        cbExportState, awExportState, beastExportState, pmExportState,
+        cbExportState, awExportState, beastExportState, pmExportState, optExportState,
         get availableTickers() { return availableTickers; },
     }, 60000);
 
@@ -2924,7 +3089,7 @@ function gracefulShutdown(signal) {
         stopAutoSave();
         saveFullState({
             portfolio, botState,
-            cbExportState, awExportState, beastExportState, pmExportState,
+            cbExportState, awExportState, beastExportState, pmExportState, optExportState,
             availableTickers,
         });
         console.log('[Server] State saved successfully');
