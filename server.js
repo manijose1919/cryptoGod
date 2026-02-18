@@ -1127,7 +1127,26 @@ async function tradingBotLoop() {
     }
 }
 
+const MAX_TICKER_ALLOCATION = 0.10; // 10% max of portfolio in any single ticker
+
 const handleBuy = async (ticker, price, strategy, reason, notional) => {
+    // Per-ticker cap: reject if this ticker already exceeds max allocation
+    const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
+        (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0);
+    const existingPos = portfolio.positions[ticker];
+    if (existingPos) {
+        const existingValue = existingPos.quantity * (existingPos.currentPrice || existingPos.openPrice);
+        const newTotalValue = existingValue + notional;
+        if (newTotalValue > totalValue * MAX_TICKER_ALLOCATION) {
+            const maxAdd = Math.max(0, totalValue * MAX_TICKER_ALLOCATION - existingValue);
+            if (maxAdd < 1) {
+                addLog(`[CAP] Skipping ${ticker}: already ${((existingValue / totalValue) * 100).toFixed(1)}% of portfolio`, 'WARN');
+                return;
+            }
+            notional = maxAdd; // Reduce to fit within cap
+        }
+    }
+
     addLog(`Triggering BUY for ${ticker} @ ${price}. Reason: [${strategy}] ${reason}`, 'BUY');
 
     try {
@@ -1186,15 +1205,31 @@ const handleBuy = async (ticker, price, strategy, reason, notional) => {
             }
         }
 
-        portfolio.positions[ticker] = {
-            quantity: parseFloat(quantity),
-            openPrice: parseFloat(avgPrice),
-            ticker,
-            entryStrategy: strategy,
-            entryTime: Date.now(),
-            highestPrice: parseFloat(avgPrice),
-            lowestPrice: parseFloat(avgPrice)
-        };
+        // Aggregate into existing position (weighted avg) instead of overwriting
+        const existing = portfolio.positions[ticker];
+        if (existing) {
+            const oldQty = existing.quantity;
+            const newQty = parseFloat(quantity);
+            const totalQty = oldQty + newQty;
+            const weightedAvg = (oldQty * existing.openPrice + newQty * parseFloat(avgPrice)) / totalQty;
+            portfolio.positions[ticker] = {
+                ...existing,
+                quantity: totalQty,
+                openPrice: weightedAvg,
+                highestPrice: Math.max(existing.highestPrice || weightedAvg, parseFloat(avgPrice)),
+                lowestPrice: Math.min(existing.lowestPrice || weightedAvg, parseFloat(avgPrice)),
+            };
+        } else {
+            portfolio.positions[ticker] = {
+                quantity: parseFloat(quantity),
+                openPrice: parseFloat(avgPrice),
+                ticker,
+                entryStrategy: strategy,
+                entryTime: Date.now(),
+                highestPrice: parseFloat(avgPrice),
+                lowestPrice: parseFloat(avgPrice)
+            };
+        }
         portfolio.cash -= (notional + buyFee);
 
         // Log the thought

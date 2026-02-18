@@ -34,8 +34,8 @@ export const TIERS = {
     max: 10000,
     strategies: ['GRID', 'DCA', 'SWING', 'MM', 'PAIR_LONG', 'TREND', 'BREAKOUT', 'WHALE', 'MOMENTUM', 'ADAPTIVE', 'CONFLUENCE', 'DIVERGENCE'],
     maxConcurrentTrades: 10,
-    maxPositionSizePercent: 0.25, // 25% max
-    maxDrawdownLimit: 15,
+    maxPositionSizePercent: 0.15, // 15% max (was 25%, reduced to prevent oversized trades)
+    maxDrawdownLimit: 30,         // was 15%, too tight for simulation (halted trading at 15%)
     description: 'Market making, pair trading, 5-10 strategies'
   },
   LARGE: {
