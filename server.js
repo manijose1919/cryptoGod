@@ -1777,14 +1777,16 @@ const updateAvailableTickers = async () => {
         if (activeExchange !== 'crypto.com') {
             try {
                 const adapter = getExchangeAdapter(activeExchange);
-                instruments = await adapter.getInstruments();
+                const adapterResult = await adapter.getInstruments();
+                // Adapters may return { data: [...] } or a plain array
+                instruments = Array.isArray(adapterResult) ? adapterResult : (adapterResult?.data || adapterResult?.instruments || []);
             } catch (e) {
-                console.warn('[Tickers] Adapter getInstruments failed, falling back to Crypto.com');
+                console.warn('[Tickers] Adapter getInstruments failed, falling back to Crypto.com:', e.message);
             }
         }
 
         // Fallback to Crypto.com API
-        if (instruments.length === 0) {
+        if (!Array.isArray(instruments) || instruments.length === 0) {
             const result = await makePublicRequest('public/get-instruments');
             instruments = result.instruments || result.data || [];
         }
