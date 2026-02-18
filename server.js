@@ -311,6 +311,10 @@ const CONFIG = {
 
     MIN_TRADE_SIZE: 1.00,              // Practical minimum for Crypto.com
     MIN_CANDLES_REQUIRED: 10,          // Beast Mode: 10 (was 15)
+
+    // Liquidity filter: reject tickers with insufficient volume
+    MIN_24H_USD_VOLUME: 50000,         // $50K min 24h USD volume
+    MIN_AVG_CANDLE_USD_VOLUME: 500,    // $500 avg per-candle USD volume (from recent 20 candles)
 };
 
 // ============================================
@@ -672,6 +676,33 @@ function saveSessionState() {
 }
 
 // ============================================
+// Liquidity Filter
+// ============================================
+/**
+ * Check if a ticker has sufficient volume to trade.
+ * Computes avg USD volume per candle over the most recent 20 candles.
+ * @param {Array<{o,h,l,c,v}>} candles
+ * @returns {{ pass: boolean, avgUsdVol: number, reason?: string }}
+ */
+function checkLiquidity(candles) {
+    if (!candles || candles.length < 5) return { pass: false, avgUsdVol: 0, reason: 'insufficient candles' };
+
+    const recent = candles.slice(-20);
+    let totalUsdVol = 0;
+    for (const c of recent) {
+        // USD volume ≈ volume * typical price (midpoint of open/close)
+        const typicalPrice = (c.o + c.c) / 2;
+        totalUsdVol += (c.v || 0) * typicalPrice;
+    }
+    const avgUsdVol = totalUsdVol / recent.length;
+
+    if (avgUsdVol < CONFIG.MIN_AVG_CANDLE_USD_VOLUME) {
+        return { pass: false, avgUsdVol, reason: `avg candle vol $${avgUsdVol.toFixed(0)} < $${CONFIG.MIN_AVG_CANDLE_USD_VOLUME}` };
+    }
+    return { pass: true, avgUsdVol };
+}
+
+// ============================================
 // Trading Bot Loop (Optimized for Large Universes)
 // ============================================
 async function tradingBotLoop() {
@@ -893,12 +924,19 @@ async function tradingBotLoop() {
         const openSlots = maxConcurrentTrades - Object.keys(portfolio.positions).length;
         if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && drawdown <= tier.maxDrawdownLimit) {
 
-            // Calculate Opportunity Scores for current batch
+            // Calculate Opportunity Scores for current batch (with liquidity filter)
             const candidates = [];
             for (const ticker of scanBatch) {
                 if (portfolio.positions[ticker]) continue;
                 const candles = marketDataMap.get(ticker);
                 if (!candles) continue;
+
+                // Liquidity gate: skip low-volume garbage tokens
+                const liq = checkLiquidity(candles);
+                if (!liq.pass) {
+                    continue; // silently skip — too many low-vol tickers to log each one
+                }
+
                 const score = calculateOpportunityScore(candles, ticker);
                 if (score.compositeScore > minOppScore) candidates.push({ ticker, score, candles });
             }
@@ -1046,6 +1084,13 @@ async function tradingBotLoop() {
             for (const entry of pmEntries) {
                 if (portfolio.cash < CONFIG.MIN_TRADE_SIZE) break;
                 if (!CapitalTierManager.isStrategyAllowed(entry.strategy, totalValue)) continue;
+
+                // Liquidity gate for profit method entries too
+                const pmCandles = marketDataMap.get(entry.ticker);
+                if (pmCandles) {
+                    const liq = checkLiquidity(pmCandles);
+                    if (!liq.pass) continue;
+                }
 
                 let amount = CapitalTierManager.getRecommendedPositionSize(totalValue, Math.min(entry.amount, portfolio.cash * 0.9));
                 if (amount >= CONFIG.MIN_TRADE_SIZE) {
