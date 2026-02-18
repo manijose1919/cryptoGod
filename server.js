@@ -729,13 +729,8 @@ async function tradingBotLoop() {
         if (totalValue > peakValue) peakValue = totalValue;
         const tier = CapitalTierManager.getTier(totalValue);
 
-        // Auto-expand maxConcurrentTrades to at least cover existing positions + 2 new slots
-        // But also cap it by the tier's limit
-        const existingCount = Object.keys(portfolio.positions).length;
-        const maxConcurrentTrades = Math.min(
-            tier.maxConcurrentTrades,
-            Math.max(botState.settings.maxConcurrentTrades || 5, existingCount + 2)
-        );
+        // Enforce tier's maxConcurrentTrades as a hard cap
+        const maxConcurrentTrades = tier.maxConcurrentTrades;
 
         // Halt trading if drawdown exceeds tier limits
         const drawdown = peakValue > 0 ? ((peakValue - totalValue) / peakValue) * 100 : 0;
@@ -1093,6 +1088,8 @@ async function tradingBotLoop() {
             const pmEntries = runProfitMethods(marketDataMap, portfolio, availableTickers, CONFIG.MIN_TRADE_SIZE);
             for (const entry of pmEntries) {
                 if (portfolio.cash < CONFIG.MIN_TRADE_SIZE) break;
+                // Enforce position count limit for profit methods too
+                if (Object.keys(portfolio.positions).length >= maxConcurrentTrades && !portfolio.positions[entry.ticker]) break;
                 if (!CapitalTierManager.isStrategyAllowed(entry.strategy, totalValue)) continue;
 
                 // Liquidity gate for profit method entries too
