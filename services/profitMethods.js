@@ -20,7 +20,7 @@ const PM_CONFIG = {
   GRID: {
     ENABLED: true,
     GRID_COUNT: 10,
-    PORTFOLIO_ALLOCATION: 0.20,          // Beast Mode: was 0.15
+    PORTFOLIO_ALLOCATION: 0.05,          // Reduced: was 0.20, too aggressive
     MIN_RANGE_PERCENT: 1.0,
   },
   DCA: {
@@ -50,7 +50,7 @@ const PM_CONFIG = {
     ENABLED: true,
     MIN_CONFIDENCE: 25,                  // Beast Mode: was 40
     MIN_RISK_REWARD: 1.5,
-    PORTFOLIO_ALLOCATION: 0.20,
+    PORTFOLIO_ALLOCATION: 0.05,          // Reduced: was 0.20, caused $1300+ single trades
     TRAILING_STOP_TRIGGER: 2,
   },
   MARKET_MAKING: {
@@ -1041,8 +1041,8 @@ export function runProfitMethods(marketDataMap, portfolio, availableTickers, min
 
       const analysis = analyzeSwingSetup(ticker, candles);
       if (analysis.hasSetup && analysis.setup) {
-        const maxAmount = cash * PM_CONFIG.SWING.PORTFOLIO_ALLOCATION;
-        const amount = Math.min(maxAmount, cash * 0.15);
+        const maxAmount = budget * PM_CONFIG.SWING.PORTFOLIO_ALLOCATION;
+        const amount = Math.min(maxAmount, 300); // Hard cap $300 per swing entry
         if (amount >= minTradeSize) {
           const qty = amount / price;
           swingPositions.set(ticker, {
