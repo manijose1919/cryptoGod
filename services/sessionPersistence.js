@@ -33,6 +33,7 @@ export function saveFullState(context) {
       initialBudget: portfolio.initialBudget,
       positions: portfolio.positions,
       holdings: portfolio.holdings || {},
+      tradeLog: (portfolio.tradeLog || []).slice(-500),
     }));
 
     // Bot state
@@ -40,6 +41,8 @@ export function saveFullState(context) {
       isActive: botState.isActive,
       settings: botState.settings,
       sessionId: botState.sessionId,
+      tradingMode: botState.tradingMode,
+      sessionStartTime: botState.sessionStartTime,
     }));
 
     // Sub-system states
@@ -47,6 +50,7 @@ export function saveFullState(context) {
     if (awExportState) setSetting('session_adaptive_weights', JSON.stringify(awExportState()));
     if (beastExportState) setSetting('session_beast_mode', JSON.stringify(beastExportState()));
     if (pmExportState) setSetting('session_profit_methods', JSON.stringify(pmExportState()));
+    if (context.optExportState) setSetting('session_optimizer', JSON.stringify(context.optExportState()));
 
     // Active tickers
     if (availableTickers) {
@@ -79,6 +83,7 @@ export function restoreFullState() {
     const awRaw = getSetting('session_adaptive_weights');
     const beastRaw = getSetting('session_beast_mode');
     const pmRaw = getSetting('session_profit_methods');
+    const optRaw = getSetting('session_optimizer');
     const tickersRaw = getSetting('session_active_tickers');
     const uptimeRaw = getSetting('session_uptime');
     const timestampRaw = getSetting('session_timestamp');
@@ -91,6 +96,7 @@ export function restoreFullState() {
     const adaptiveWeights = awRaw ? JSON.parse(awRaw) : null;
     const beastMode = beastRaw ? JSON.parse(beastRaw) : null;
     const profitMethods = pmRaw ? JSON.parse(pmRaw) : null;
+    const optimizer = optRaw ? JSON.parse(optRaw) : null;
     const activeTickers = tickersRaw ? JSON.parse(tickersRaw) : null;
     const uptime = uptimeRaw ? JSON.parse(uptimeRaw) : null;
     const lastSaveTime = timestampRaw ? JSON.parse(timestampRaw) : null;
@@ -110,6 +116,7 @@ export function restoreFullState() {
       adaptiveWeights,
       beastMode,
       profitMethods,
+      optimizer,
       activeTickers,
       uptime,
       lastSaveTime,
