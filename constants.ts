@@ -128,8 +128,39 @@ export const TRADING_FEES = {
 // ============================================
 export const KRAKEN_FEES = {
     TAKER_FEE_PERCENT: 0.26,       // Kraken taker fee per side (base tier)
-    ROUND_TRIP_FEE_PERCENT: 0.52,  // Total buy + sell fees
+    MAKER_FEE_PERCENT: 0.16,       // Kraken maker fee per side (limit orders)
+    ROUND_TRIP_FEE_PERCENT: 0.52,  // Total buy + sell taker fees
+    ROUND_TRIP_MAKER_PERCENT: 0.32, // Total buy + sell maker fees
     FEE_BUFFER_PERCENT: 0.10,      // Slippage buffer
+} as const;
+
+// ============================================
+// KRAKEN-OPTIMIZED TRADING CONFIG
+// ============================================
+export const KRAKEN_OPTIMIZED = {
+    // Minimum profit targets (must exceed round-trip fees)
+    MIN_PROFIT_TARGET_TAKER: 0.92,   // 0.52% fees + 0.10% slippage + 0.30% min profit
+    MIN_PROFIT_TARGET_MAKER: 0.72,   // 0.32% fees + 0.10% slippage + 0.30% min profit
+
+    // Smart order routing
+    LIMIT_ORDER_SPREAD_THRESHOLD: 0.10, // Use limit orders when spread > 0.1%
+    LIMIT_ORDER_WAIT_MS: 10000,         // Wait 10s for limit fill
+    LIMIT_ORDER_PRICE_OFFSET: 0.01,     // Place at best bid/ask + 0.01%
+
+    // Small account optimizations ($20-$200)
+    MICRO_ACCOUNT_THRESHOLD: 200,       // Below this = micro account mode
+    MICRO_MAX_CONCURRENT: 3,            // Max 3 positions for micro accounts
+    MICRO_POSITION_PERCENT: 40,         // Up to 40% per trade (need concentration)
+    MICRO_MIN_TRADE_USD: 1.00,          // Kraken practical minimum
+
+    // Partial exit adjustments for higher fees
+    PARTIAL_EXIT_STAGE_1_TARGET: 0.92,  // First partial at fee floor
+    PARTIAL_EXIT_STAGE_2_TARGET: 2.00,  // Second partial at 2%
+    PARTIAL_EXIT_STAGE_3_TRAIL: 1.0,    // Start trailing at 1%
+
+    // Timeframe preferences for Kraken
+    PREFERRED_TIMEFRAMES: ['5m', '15m', '1h', '4h'],
+    SCALPING_TIMEFRAME: '5m',           // 5m for scalping (1m too noisy with higher fees)
 } as const;
 
 // ============================================
@@ -180,7 +211,7 @@ export const ML_CONFIG = {
     RETRAIN_SAMPLE_THRESHOLD: 200,
     ML_CONFIDENCE_THRESHOLD: 60,                 // ML must be this confident to override
     ANOMALY_POSITION_REDUCTION: 0.5,             // Reduce position by 50% on anomaly
-    FEATURE_COUNT: 62,
+    FEATURE_COUNT: 67,  // 62 base + 4 sentiment + 1 market_speed
     ENSEMBLE_MODELS: ['gradient_boosted', 'random_forest', 'logistic_regression'],
     MAX_TRAINING_SAMPLES: 5000,
     ADAPTIVE_THRESHOLD_SMOOTHING: 0.3,           // Apply 30% of computed adjustment

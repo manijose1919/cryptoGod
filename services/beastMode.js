@@ -352,6 +352,30 @@ export function checkDynamicExit(position, currentPrice, candles) {
   return { shouldExit: false, reason: '', pnlPercent };
 }
 
+/**
+ * Get Kraken-optimized dynamic targets with maker/taker awareness.
+ * @param {Array} candles - OHLCV data
+ * @param {boolean} isLimitOrder - Whether using limit order (maker fee)
+ * @returns {{ takeProfitPct: number, stopLossPct: number, regime: string, orderType: string }}
+ */
+export function getKrakenOptimizedTargets(candles, isLimitOrder = false) {
+  const baseTargets = getDynamicTargets(candles);
+
+  // Kraken-specific: use maker fee floor for limit orders
+  const makerRoundTrip = 0.32; // 0.16% * 2
+  const effectiveFee = isLimitOrder ? makerRoundTrip : roundTripFeePercent;
+  const feeFloor = effectiveFee + 0.30; // min profit above fees
+
+  return {
+    takeProfitPct: Math.max(baseTargets.takeProfitPct, feeFloor),
+    stopLossPct: baseTargets.stopLossPct,
+    regime: baseTargets.regime,
+    orderType: isLimitOrder ? 'LIMIT' : 'MARKET',
+    effectiveFee,
+    savingsVsTaker: isLimitOrder ? (roundTripFeePercent - makerRoundTrip).toFixed(3) : '0',
+  };
+}
+
 // ============================================
 // 6. STREAK TRACKER
 // ============================================

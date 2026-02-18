@@ -5,7 +5,11 @@
 
 import { getDb } from './database.js';
 
-export const FEATURE_COUNT = 63;
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+export const FEATURE_COUNT = 68;
 
 /**
  * Get all 62 feature names in order
@@ -82,7 +86,13 @@ export function getFeatureNames() {
     'minutes_since_last_trade',
     'candle_count_norm',
     // MTF Confluence (1) - Feature 3
-    'mtf_alignment_score'
+    'mtf_alignment_score',
+    // Enhanced Sentiment (5) - Phase 4
+    'youtube_sentiment',
+    'youtube_video_count_24h',
+    'reddit_comment_sentiment',
+    'reddit_post_volume_change',
+    'market_speed_indicator',
   ];
 }
 
@@ -121,6 +131,13 @@ export function buildFeatureVector(ticker, candles, options = {}) {
     contextFeatures.forEach(f => features[idx++] = f);
     features[idx++] = mtfScore;
 
+    // Enhanced Sentiment features (Phase 4)
+    features[idx++] = clamp(options.youtubeSentiment || 0, -1, 1);         // youtube_sentiment
+    features[idx++] = clamp((options.youtubeVideoCount || 0) / 50, 0, 1);  // youtube_video_count_24h (normalized)
+    features[idx++] = clamp(options.redditCommentSentiment || 0, -1, 1);   // reddit_comment_sentiment
+    features[idx++] = clamp((options.redditPostVolumeChange || 0) / 100, -1, 1); // reddit_post_volume_change
+    features[idx++] = options.marketSpeed === 'FAST' ? 1 : 0;              // market_speed_indicator
+
     return {
       features,
       featureNames,
@@ -131,7 +148,14 @@ export function buildFeatureVector(ticker, candles, options = {}) {
         derivatives: derivativesFeatures,
         sentiment: sentimentFeatures,
         defi: defiFeatures,
-        context: contextFeatures
+        context: contextFeatures,
+        enhancedSentiment: [
+          options.youtubeSentiment || 0,
+          options.youtubeVideoCount || 0,
+          options.redditCommentSentiment || 0,
+          options.redditPostVolumeChange || 0,
+          options.marketSpeed === 'FAST' ? 1 : 0,
+        ],
       }
     };
   } catch (err) {
