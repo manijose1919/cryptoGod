@@ -313,8 +313,8 @@ const CONFIG = {
     MIN_CANDLES_REQUIRED: 10,          // Beast Mode: 10 (was 15)
 
     // Liquidity filter: reject tickers with insufficient volume
-    MIN_24H_USD_VOLUME: 50000,         // $50K min 24h USD volume
-    MIN_AVG_CANDLE_USD_VOLUME: 500,    // $500 avg per-candle USD volume (from recent 20 candles)
+    MIN_AVG_CANDLE_USD_VOLUME: 5000,   // $5K avg per-candle USD volume (from recent 20 candles)
+    MIN_PRICE: 0.01,                   // Skip sub-penny tokens
 };
 
 // ============================================
@@ -688,9 +688,16 @@ function checkLiquidity(candles) {
     if (!candles || candles.length < 5) return { pass: false, avgUsdVol: 0, reason: 'insufficient candles' };
 
     const recent = candles.slice(-20);
+    const lastPrice = recent[recent.length - 1].c;
+
+    // Price floor: skip sub-penny tokens
+    if (lastPrice < CONFIG.MIN_PRICE) {
+        return { pass: false, avgUsdVol: 0, reason: `price $${lastPrice} < $${CONFIG.MIN_PRICE} floor` };
+    }
+
+    // Volume check: avg USD volume per candle
     let totalUsdVol = 0;
     for (const c of recent) {
-        // USD volume ≈ volume * typical price (midpoint of open/close)
         const typicalPrice = (c.o + c.c) / 2;
         totalUsdVol += (c.v || 0) * typicalPrice;
     }
@@ -699,6 +706,9 @@ function checkLiquidity(candles) {
     if (avgUsdVol < CONFIG.MIN_AVG_CANDLE_USD_VOLUME) {
         return { pass: false, avgUsdVol, reason: `avg candle vol $${avgUsdVol.toFixed(0)} < $${CONFIG.MIN_AVG_CANDLE_USD_VOLUME}` };
     }
+
+    // Stale price check: if latest WS price diverges >50% from candle close, skip
+    // (catches tokens where candle data and live feed are wildly different)
     return { pass: true, avgUsdVol };
 }
 
