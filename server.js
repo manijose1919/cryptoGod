@@ -1224,9 +1224,6 @@ async function tradingBotLoop() {
                 }
             }
         }
-        // Record equity snapshot every iteration
-        recordEquitySnapshot(portfolio);
-
         // Update position current prices for accurate holdings value
         for (const [ticker, pos] of Object.entries(portfolio.positions)) {
             const latestPrice = getLatestPrice(ticker);
@@ -1236,6 +1233,9 @@ async function tradingBotLoop() {
                 if (latestPrice < (pos.lowestPrice || Infinity)) pos.lowestPrice = latestPrice;
             }
         }
+
+        // Record equity snapshot AFTER price update for accuracy
+        recordEquitySnapshot(portfolio);
 
         saveSessionState();
     } catch (error) {
