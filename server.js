@@ -1270,7 +1270,6 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
     try {
         let quantity, avgPrice;
         const fees = getActiveFees();
-        const buyFee = notional * fees.perSide;
 
         if (botState.tradingMode === 'SIMULATION') {
             // Simulation: use current price + fee, no exchange call
@@ -1280,12 +1279,12 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
             // Real: smart order routing (limit vs market based on spread)
             const adapter = getExchangeAdapter();
             let usedLimit = false;
+            let partialFillQty = 0;
+            let partialFillCost = 0;
 
             // Try limit order if adapter supports it and spread is wide enough
             if (adapter.getMakerFeePercent && adapter.placeLimitBuyOrder) {
                 try {
-                    // Check spread: price is approx mid, if we can save fees with limit order
-                    const spreadThreshold = 0.001; // 0.1%
                     const limitPrice = price * (1 + 0.0001); // best bid + 0.01%
                     const vol = notional / limitPrice;
 
@@ -1305,10 +1304,33 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                         }
                     }
 
-                    // If not filled, cancel and fall through to market
+                    // If not fully filled, check for partial fill before cancelling
                     if (!filled) {
+                        const finalStatus = await adapter.getOrderStatus(limitOrder.orderId, botState.sessionId);
+                        partialFillQty = finalStatus.filledQty || 0;
+                        partialFillCost = partialFillQty * (finalStatus.avgPrice || limitPrice);
+
                         await adapter.cancelOrder(limitOrder.orderId, botState.sessionId);
-                        addLog(`[SMART-ORDER] Limit order not filled for ${ticker}, falling back to market`, 'INFO');
+
+                        if (partialFillQty > 0) {
+                            // Reduce notional by what was already filled
+                            notional -= partialFillCost;
+                            addLog(`[SMART-ORDER] Limit partially filled ${partialFillQty.toFixed(6)} for ${ticker}, market-ordering $${notional.toFixed(2)} remainder`, 'INFO');
+                        } else {
+                            addLog(`[SMART-ORDER] Limit order not filled for ${ticker}, falling back to market`, 'INFO');
+                        }
+
+                        // If remainder is too small, just use the partial fill
+                        if (notional < CONFIG.MIN_TRADE_SIZE) {
+                            if (partialFillQty > 0) {
+                                quantity = partialFillQty;
+                                avgPrice = finalStatus.avgPrice || limitPrice;
+                                usedLimit = true;
+                            } else {
+                                addLog(`[SMART-ORDER] Remaining notional $${notional.toFixed(2)} below min trade size, aborting`, 'WARN');
+                                return;
+                            }
+                        }
                     }
                 } catch (e) {
                     // Limit order failed, fall through to market
@@ -1318,10 +1340,24 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
 
             if (!usedLimit) {
                 const orderResult = await adapter.placeBuyOrder(ticker, notional, botState.sessionId);
-                quantity = orderResult.quantity || (notional / price);
-                avgPrice = orderResult.avgPrice || price;
+                const marketQty = orderResult.quantity || (notional / price);
+                const marketPrice = orderResult.avgPrice || price;
+
+                if (partialFillQty > 0) {
+                    // Aggregate partial limit fill + market fill
+                    const totalQty = partialFillQty + marketQty;
+                    avgPrice = (partialFillCost + marketQty * marketPrice) / totalQty;
+                    quantity = totalQty;
+                } else {
+                    quantity = marketQty;
+                    avgPrice = marketPrice;
+                }
             }
         }
+
+        // Use actual fill values for fee and cash deduction (not pre-fill estimate)
+        const actualCost = parseFloat(quantity) * parseFloat(avgPrice);
+        const buyFee = actualCost * fees.perSide;
 
         // Aggregate into existing position (weighted avg) instead of overwriting
         const existing = portfolio.positions[ticker];
@@ -1361,7 +1397,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 regime: entryMeta.regime || 'NORMAL',
             };
         }
-        portfolio.cash -= (notional + buyFee);
+        portfolio.cash -= (actualCost + buyFee);
 
         // Log the thought
         logThought({

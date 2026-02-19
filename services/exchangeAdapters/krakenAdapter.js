@@ -348,12 +348,17 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             return { orderId, status: 'unknown', filledQty: 0, avgPrice: 0 };
         }
 
+        const volExec = parseFloat(order.vol_exec || '0');
+        const cost = parseFloat(order.cost || '0');
+        // For filled orders, derive avgPrice from cost/volume (order.price is the limit price, not fill price)
+        const avgPrice = (volExec > 0 && cost > 0) ? cost / volExec : parseFloat(order.price || '0');
+
         return {
             orderId,
             status: order.status || 'unknown',
-            filledQty: parseFloat(order.vol_exec || '0'),
-            avgPrice: parseFloat(order.price || '0'),
-            cost: parseFloat(order.cost || '0'),
+            filledQty: volExec,
+            avgPrice,
+            cost,
             fee: parseFloat(order.fee || '0'),
         };
     }
