@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import LastUpdated from './LastUpdated';
+import AnimatedNumber from './AnimatedNumber';
+import SkeletonPanel from './SkeletonPanel';
 
 interface FullStatus {
   sessionActive: boolean;
@@ -64,6 +67,7 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
   const [status, setStatus] = useState<FullStatus | null>(null);
   const [equityCurve, setEquityCurve] = useState<EquityCurvePoint[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [lastFetched, setLastFetched] = useState<number | null>(null);
 
   useEffect(() => {
     const fetchStatus = async () => {
@@ -77,6 +81,7 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
         setStatus(statusData);
         setEquityCurve(curveData.curve || []);
         setError(null);
+        setLastFetched(Date.now());
       } catch (e) {
         setError('Failed to connect to backend');
       }
@@ -102,7 +107,8 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
   if (!status) {
     return (
       <div className="glass-card p-4">
-        <div className="animate-pulse text-gray-400">Loading VPS status...</div>
+        <div className="text-xs text-gray-500 mb-2">VPS Monitor</div>
+        <SkeletonPanel rows={4} />
       </div>
     );
   }
@@ -127,6 +133,7 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
         <div className="flex items-center gap-2">
           <div className={`w-3 h-3 rounded-full ${status.sessionActive ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
           <h3 className="text-lg font-bold text-white">VPS Monitor</h3>
+          <LastUpdated timestamp={lastFetched} />
         </div>
         <div className="flex items-center gap-2 text-xs">
           <span className={status.tradingMode === 'REAL' ? 'text-red-400 font-bold' : 'text-cyan-400'}>
@@ -150,9 +157,9 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">
           <div className="text-xs text-gray-400">Total P&L</div>
-          <div className={`text-sm font-bold ${status.portfolio.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {status.portfolio.pnl >= 0 ? '+' : ''}${status.portfolio.pnl.toFixed(2)}
-            <span className="text-xs ml-1">({status.portfolio.pnlPercent.toFixed(2)}%)</span>
+          <div className="text-sm font-bold">
+            <AnimatedNumber value={status.portfolio.pnl} showSign />
+            <span className="text-xs ml-1">(<AnimatedNumber value={status.portfolio.pnlPercent} format="percent" showSign />)</span>
           </div>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">

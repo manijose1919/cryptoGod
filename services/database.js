@@ -329,6 +329,13 @@ export function initializeDatabase() {
       ON ml_thoughts(session_id, time);
   `);
 
+  // Migrate sessions table: add session_id, status, trading_mode columns
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT`); } catch(e) { /* already exists */ }
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ACTIVE'`); } catch(e) {}
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN trading_mode TEXT DEFAULT 'SIMULATION'`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`); } catch(e) {}
+
   console.log(`[Database] Initialized SQLite at ${dbPath}`);
   return db;
 }
@@ -457,6 +464,81 @@ export function getSessions(limit = 50) {
   return getDb().prepare(
     'SELECT * FROM sessions ORDER BY start_time DESC LIMIT ?'
   ).all(limit);
+}
+
+// --- Session History (Phase 7: Session tracking) ---
+export function insertSessionRecord(sessionId, startTime, initialBudget, tradingMode, notes = '') {
+  const stmt = getDb().prepare(`
+    INSERT INTO sessions (session_id, start_time, initial_budget, trading_mode, status, notes)
+    VALUES (?, ?, ?, ?, 'ACTIVE', ?)
+  `);
+  return stmt.run(sessionId, startTime, initialBudget, tradingMode, notes);
+}
+
+export function completeSession(sessionId, endTime, finalValue, totalTrades, winRate, pnl) {
+  return getDb().prepare(`
+    UPDATE sessions SET end_time = ?, final_value = ?, total_trades = ?, win_rate = ?, pnl = ?, status = 'COMPLETED'
+    WHERE session_id = ?
+  `).run(endTime, finalValue, totalTrades, winRate, pnl, sessionId);
+}
+
+export function markAbandonedSessions() {
+  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+  // Mark any ACTIVE session whose last equity snapshot is older than 5 minutes
+  const activeSessions = getDb().prepare(
+    `SELECT s.id, s.session_id FROM sessions s WHERE s.status = 'ACTIVE'`
+  ).all();
+  let marked = 0;
+  for (const sess of activeSessions) {
+    const latest = getDb().prepare(
+      `SELECT MAX(time) as last_time FROM equity_snapshots WHERE session_id = ?`
+    ).get(sess.session_id);
+    if (!latest?.last_time || latest.last_time < fiveMinAgo) {
+      getDb().prepare(`UPDATE sessions SET status = 'ABANDONED' WHERE id = ?`).run(sess.id);
+      marked++;
+    }
+  }
+  if (marked > 0) console.log(`[Database] Marked ${marked} abandoned session(s)`);
+  return marked;
+}
+
+export function getSessionHistory(limit = 50) {
+  return getDb().prepare(`
+    SELECT s.*,
+      (SELECT COUNT(*) FROM session_trades st WHERE st.session_id = s.session_id) as trade_count,
+      (SELECT MAX(time) FROM equity_snapshots es WHERE es.session_id = s.session_id) as last_activity,
+      (SELECT total_value FROM equity_snapshots es WHERE es.session_id = s.session_id ORDER BY time DESC LIMIT 1) as last_value,
+      (SELECT cash FROM equity_snapshots es WHERE es.session_id = s.session_id ORDER BY time DESC LIMIT 1) as last_cash
+    FROM sessions s
+    WHERE s.session_id IS NOT NULL
+    ORDER BY s.start_time DESC
+    LIMIT ?
+  `).all(limit);
+}
+
+export function getSessionDetail(sessionId) {
+  const session = getDb().prepare(
+    `SELECT * FROM sessions WHERE session_id = ?`
+  ).get(sessionId);
+  if (!session) return null;
+  const equityCurve = getDb().prepare(
+    `SELECT time, total_value, cash, holdings_value, pnl_percent FROM equity_snapshots WHERE session_id = ? ORDER BY time ASC LIMIT 500`
+  ).all(sessionId);
+  const trades = getDb().prepare(
+    `SELECT * FROM session_trades WHERE session_id = ? ORDER BY time DESC LIMIT 100`
+  ).all(sessionId);
+  const stats = getDb().prepare(`
+    SELECT
+      COUNT(*) as total_trades,
+      SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses,
+      SUM(pnl) as total_pnl,
+      MAX(pnl) as best_trade,
+      MIN(pnl) as worst_trade,
+      SUM(fee) as total_fees
+    FROM session_trades WHERE session_id = ? AND type = 'SELL'
+  `).get(sessionId);
+  return { session, equityCurve, trades, stats };
 }
 
 // --- Candle History ---

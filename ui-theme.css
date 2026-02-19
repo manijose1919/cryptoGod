@@ -489,3 +489,84 @@
   stroke: url(#gauge-gradient);
   filter: drop-shadow(0 0 4px rgba(99, 102, 241, 0.4));
 }
+
+/* --- Toast Notifications --- */
+.toast-enter {
+  animation: toast-slide-in 0.3s ease-out forwards;
+}
+
+.toast-exit {
+  animation: toast-slide-out 0.3s ease-in forwards;
+}
+
+@keyframes toast-slide-in {
+  from { opacity: 0; transform: translateX(100%); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes toast-slide-out {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(100%); }
+}
+
+/* --- Trade Flash Effects --- */
+.trade-flash-buy {
+  animation: flash-green 0.8s ease-out;
+}
+
+.trade-flash-sell {
+  animation: flash-red 0.8s ease-out;
+}
+
+@keyframes flash-green {
+  0%   { background-color: rgba(34, 197, 94, 0.3); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flash-red {
+  0%   { background-color: rgba(239, 68, 68, 0.3); }
+  100% { background-color: transparent; }
+}
+
+/* --- Session Status Badges --- */
+.badge-session-active {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+.badge-session-active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+  animation: shine-sweep 2s ease-in-out infinite;
+}
+
+@keyframes shine-sweep {
+  0%   { left: -100%; }
+  100% { left: 200%; }
+}
+
+.badge-session-completed {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.badge-session-abandoned {
+  background: rgba(234, 179, 8, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(234, 179, 8, 0.3);
+}
+
+/* --- Dot Grid Background --- */
+.dot-grid-bg {
+  background-image: radial-gradient(rgba(99, 102, 241, 0.08) 1px, transparent 1px);
+  background-size: 24px 24px;
+}

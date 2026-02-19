@@ -105,7 +105,8 @@ import {
     insertMLFeatures, getUnlabeledFeatures, getLabeledFeatures, labelMLFeatures,
     insertMLModel, getLatestMLModel, getMLModelHistory,
     insertMLPrediction, resolveMLPrediction, getMLPredictions, getMLAccuracyStats,
-    cleanupOldData
+    cleanupOldData,
+    insertSessionRecord, completeSession, markAbandonedSessions, getSessionHistory, getSessionDetail
 } from './services/database.js';
 
 let multiExchangeService = null;
@@ -2607,6 +2608,9 @@ app.post('/api/session/start', async (req, res) => {
         // Generate a session ID
         const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
+        // Record session in database
+        try { insertSessionRecord(sessionId, Date.now(), budget, mode); } catch(e) { console.error('[SESSION] DB insert failed:', e.message); }
+
         // Initialize portfolio
         if (mode === 'SIMULATION') {
             portfolio.cash = budget;
@@ -2720,6 +2724,17 @@ app.post('/api/session/stop', async (req, res) => {
         };
 
         addLog(`[SESSION] Stopped. Final: $${portfolio.cash.toFixed(2)} (${summary.pnlPercent}%)`, 'WARN');
+
+        // Complete session record in database
+        try {
+            const activeSessionId = getActiveSessionId();
+            if (activeSessionId) {
+                const sellCount = stats?.sells || 0;
+                const winCount = stats?.wins || 0;
+                const wr = sellCount > 0 ? (winCount / sellCount * 100) : 0;
+                completeSession(activeSessionId, Date.now(), portfolio.cash, sellCount, wr, summary.totalPnl);
+            }
+        } catch(e) { console.error('[SESSION] DB complete failed:', e.message); }
 
         // Save final state
         saveFullState({
@@ -2878,6 +2893,72 @@ app.post('/api/session/settings', (req, res) => {
     }
 });
 
+// ============================================
+// Session History API (Phase 7: QoL)
+// ============================================
+
+app.get('/api/sessions/history', (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 50;
+        const sessions = getSessionHistory(limit);
+        res.json({ sessions });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/sessions/:sessionId/details', (req, res) => {
+    try {
+        const detail = getSessionDetail(req.params.sessionId);
+        if (!detail) return res.status(404).json({ error: 'Session not found' });
+        res.json(detail);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/sessions/:sessionId/restore', async (req, res) => {
+    try {
+        if (botState.isActive) {
+            return res.status(400).json({ error: 'A session is already active. Stop it first.' });
+        }
+        const detail = getSessionDetail(req.params.sessionId);
+        if (!detail?.session) return res.status(404).json({ error: 'Session not found' });
+        // Use the last equity snapshot's cash, or final_value, or initial_budget
+        const lastSnap = detail.equityCurve.length > 0 ? detail.equityCurve[detail.equityCurve.length - 1] : null;
+        const restoreBudget = lastSnap?.cash || detail.session.final_value || detail.session.initial_budget || 10000;
+        // Forward to session start with the restored budget
+        req.body = { mode: 'SIMULATION', budget: restoreBudget };
+        // Delegate to the start handler by calling the same logic inline
+        const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        try { insertSessionRecord(sessionId, Date.now(), restoreBudget, 'SIMULATION', `Restored from ${req.params.sessionId}`); } catch(e) {}
+        portfolio.cash = restoreBudget;
+        portfolio.initialBudget = restoreBudget;
+        portfolio.positions = {};
+        portfolio.holdings = {};
+        if (!portfolio.tradeLog) portfolio.tradeLog = [];
+        botState.isActive = true;
+        botState.tradingMode = 'SIMULATION';
+        botState.sessionStartTime = Date.now();
+        pmSetSessionStart(Date.now());
+        setActiveSession(sessionId, 'SIMULATION');
+        setThoughtSessionId(sessionId);
+        fullResetCircuitBreaker();
+        fullResetBeastMode(portfolio.cash);
+        fullResetWeights();
+        setDailyBalance(portfolio.cash);
+        peakValue = portfolio.cash;
+        if (botInterval) clearInterval(botInterval);
+        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
+        addLog(`[SESSION] Restored from abandoned session with $${restoreBudget.toFixed(2)} budget`, 'INFO');
+        saveSessionState();
+        recordEquitySnapshot(portfolio);
+        res.json({ success: true, sessionId, budget: restoreBudget, restoredFrom: req.params.sessionId });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Backtest Routes (Batch 4, Feature 1)
 app.post('/api/backtest/run', (req, res) => {
     try {
@@ -2962,6 +3043,7 @@ app.use((err, req, res, next) => {
 
 const startServer = async () => {
     initializeDatabase();
+    markAbandonedSessions();
     initJournalTable();
     initTelegram();
 

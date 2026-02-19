@@ -1,6 +1,7 @@
 
 import React from 'react';
 import type { PortfolioState, TradingMode, WatchlistData } from '../types';
+import AnimatedNumber from './AnimatedNumber';
 
 interface PortfolioSummaryProps {
   portfolio: PortfolioState;
@@ -30,8 +31,8 @@ export const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({ portfolio, w
         {isRealMode ? 'LIVE WALLET' : 'Portfolio Summary'}
       </h2>
       <div className="space-y-3">
-        <div className="flex justify-between items-baseline"><span className="text-gray-400">Total Value</span><span className="text-2xl font-bold text-white">{formatCurrency(totalValue)}</span></div>
-        <div className="flex justify-between items-baseline"><span className="text-gray-400">Session P/L</span><span className={`text-lg font-semibold ${pnlColor}`}>{formatCurrency(pnl)} ({pnlPercent.toFixed(2)}%)</span></div>
+        <div className="flex justify-between items-baseline"><span className="text-gray-400">Total Value</span><span className="text-2xl font-bold text-white"><AnimatedNumber value={totalValue} colorize={false} className="text-white" /></span></div>
+        <div className="flex justify-between items-baseline"><span className="text-gray-400">Session P/L</span><span className="text-lg font-semibold"><AnimatedNumber value={pnl} showSign /> <span className={`text-sm ${pnlColor}`}>(<AnimatedNumber value={pnlPercent} format="percent" showSign />)</span></span></div>
         <div className="pt-3 border-t border-gray-700 space-y-2">
           <div className="flex justify-between"><span className="text-gray-400">Cash</span><span className="font-mono text-white">{formatCurrency(cash)}</span></div>
           <div className="flex justify-between"><span className="text-gray-400">Holdings Value</span><span className="font-mono text-white">{formatCurrency(holdingsValue)}</span></div>
