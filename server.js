@@ -45,13 +45,13 @@ import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, expor
 // WebSocket services are accessed dynamically via getWebSocketService()
 import * as cryptoComWsService from './services/websocketService.js';
 import { analyzeMultiTimeframe, shouldEnterLong, getMultiTimeframeStatus } from './services/multiTimeframe.js';
-import { recordTradeResult as cbRecordTrade, setDailyBalance, shouldPauseTrading, resetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
-import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategyThrottled, getAdaptiveWeightsStatus, exportState as awExportState, importState as awImportState } from './services/adaptiveWeights.js';
+import { recordTradeResult as cbRecordTrade, setDailyBalance, shouldPauseTrading, resetCircuitBreaker, fullResetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
+import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategyThrottled, getAdaptiveWeightsStatus, fullResetWeights, exportState as awExportState, importState as awImportState } from './services/adaptiveWeights.js';
 import { calculateAllIndicators } from './services/advancedIndicators.js';
 import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
 import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment } from './services/socialSentiment.js';
 import { setGeminiKey, getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
-import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee, setTargetOverrides } from './services/beastMode.js';
+import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, fullResetBeastMode, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee, setTargetOverrides } from './services/beastMode.js';
 import { triggerOptimization, getOptimizedEntryParams, getOptimizedTargets, getOptimizerStatus, forceOptimize, recordPostOptTrade, resetToDefaults as resetOptimizer, setFeeForSimulation, exportState as optExportState, importState as optImportState } from './services/parameterOptimizer.js';
 
 // Phase 6: New Backend Services (SIM parity)
@@ -2641,14 +2641,13 @@ app.post('/api/session/start', async (req, res) => {
             await updateAvailableTickers();
         }
 
-        // Initialize beast mode + circuit breaker daily tracking
-        beastSetSessionBalance(portfolio.cash);
+        // Full reset: clear old trade history/streaks so Kelly, compound multiplier,
+        // and strategy weights start fresh (old data was from buggy code)
+        fullResetCircuitBreaker();
+        fullResetBeastMode(portfolio.cash);
+        fullResetWeights();
         setDailyBalance(portfolio.cash);
-        beastUpdateBalance(portfolio.cash);
         peakValue = portfolio.cash;
-
-        // Reset sub-systems
-        resetCircuitBreaker();
 
         // Start the bot loop
         if (botInterval) clearInterval(botInterval);

@@ -235,6 +235,21 @@ export function importState(state) {
 }
 
 /**
+ * Full reset: clear all strategy stats to equal weights.
+ * Called on new session start.
+ */
+export function fullResetWeights() {
+  for (const s of STRATEGIES) {
+    strategyStats.set(s, {
+      strategy: s,
+      trades: 0, wins: 0, losses: 0, totalPnl: 0,
+      recentPnls: [], weight: BASE_WEIGHT,
+      emaWinRate: 0.5, emaPnl: 0, lastUpdate: Date.now(),
+    });
+  }
+}
+
+/**
  * Get full status for the API endpoint
  */
 export function getAdaptiveWeightsStatus() {
