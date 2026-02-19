@@ -28,6 +28,8 @@ import StrategyOverview from './components/StrategyOverview';
 import SessionReconnect from './components/SessionReconnect';
 import MLThoughtProcess from './components/MLThoughtProcess';
 import VPSMonitor from './components/VPSMonitor';
+import SessionHistory from './components/SessionHistory';
+import { ToastProvider } from './components/ToastNotification';
 import { fetchHistoricalCandles, fetchAvailableUsdPairs, setActiveExchange as setMarketServiceExchange } from './services/marketService';
 import { tradingBotService } from './services/tradingBotService';
 import {
@@ -174,6 +176,7 @@ const App: React.FC = () => {
     const [isTradingActive, setIsTradingActive] = useState<boolean>(false);
     const [isApiAuthenticated, setIsApiAuthenticated] = useState<boolean>(false);
     const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+    const [isSessionHistoryOpen, setIsSessionHistoryOpen] = useState<boolean>(false);
     const [portfolio, setPortfolio] = useState<PortfolioState>({
         cash: 10000,
         initialBudget: 10000,
@@ -1178,6 +1181,21 @@ const App: React.FC = () => {
         }
     };
 
+    const handleRestoreSession = async (sessionId: string) => {
+        try {
+            const res = await fetch(`/api/sessions/${sessionId}/restore`, { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                setPortfolio({ cash: data.budget, initialBudget: data.budget, positions: {} });
+                setIsTradingActive(true);
+                setIsBotActive(true);
+                addLog(`Restored session from ${data.restoredFrom} with $${data.budget.toFixed(2)}`, 'SPECIAL');
+            }
+        } catch (e: any) {
+            addLog(`Restore failed: ${e.message}`, 'ERROR');
+        }
+    };
+
     const toggleBot = async (isActive: boolean) => {
         if (isActive && tradingMode === 'REAL' && !isApiAuthenticated) {
             addLog('Cannot start real trading bot without API authentication.', 'ERROR');
@@ -1235,13 +1253,20 @@ const App: React.FC = () => {
     }
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white font-sans">
+        <ToastProvider>
+        <div className="min-h-screen bg-gray-900 text-white font-sans dot-grid-bg">
             {isAuthModalOpen && (
                 <RealTradingModal
                     onClose={() => setIsAuthModalOpen(false)}
                     onAuthenticate={handleAuthenticate}
                 />
             )}
+            <SessionHistory
+                isOpen={isSessionHistoryOpen}
+                onClose={() => setIsSessionHistoryOpen(false)}
+                onRestore={handleRestoreSession}
+                isSessionActive={isBotActive}
+            />
 
             {/* Navigation Bar */}
             <nav className="flex items-center justify-between px-4 py-2 border-b border-gray-700/50 bg-gray-900/80">
@@ -1258,6 +1283,12 @@ const App: React.FC = () => {
                             {link.label}
                         </a>
                     ))}
+                    <button
+                        onClick={() => setIsSessionHistoryOpen(true)}
+                        className="text-xs px-2 py-1 rounded text-gray-400 hover:text-white hover:bg-gray-700/50 transition-colors"
+                    >
+                        History
+                    </button>
                 </div>
                 <div className="flex items-center gap-3 text-[10px] text-gray-500">
                     {isBotActive && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />Bot Active</span>}
@@ -1427,6 +1458,7 @@ const App: React.FC = () => {
                 </div>
             </main>
         </div>
+        </ToastProvider>
     );
 };
 
