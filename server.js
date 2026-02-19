@@ -1168,6 +1168,11 @@ async function tradingBotLoop() {
                     positionPercent = Math.min(positionPercent, kellyFraction * 2); // Don't exceed 2x Kelly
 
                     let investmentAmount = Math.min(portfolio.cash * 0.95, totalValue * positionPercent * riskAmount);
+
+                    // Apply beast mode compound multiplier (cold streak 0.5x, hot streak 1.5x)
+                    const compMult = getCompoundMultiplier();
+                    investmentAmount *= compMult.multiplier;
+
                     investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
 
                     // Apply sentiment penalty/boost: reduce size 20% for bearish, increase 10% for bullish
@@ -2995,10 +3000,12 @@ const startServer = async () => {
         console.log(`[Server] Session restored: $${portfolio.cash?.toFixed(2)} cash, ${Object.keys(portfolio.positions).length} positions`);
     }
 
-    // Sync exchange fee to optimizer at startup
+    // Sync exchange fee to beast mode + optimizer at startup
     try {
         const startupFees = getActiveFees();
+        beastSetRoundTripFee(startupFees.roundTrip * 100);   // Was missing! Beast mode defaulted to 0.15% (Crypto.com)
         setFeeForSimulation(startupFees.roundTrip * 100);
+        console.log(`[Server] Fee synced: ${(startupFees.roundTrip * 100).toFixed(2)}% round-trip (${getActiveExchangeId()})`);
     } catch(e) {}
 
     await logPublicIp();

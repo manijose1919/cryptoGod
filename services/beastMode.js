@@ -304,13 +304,15 @@ export function getDynamicTargets(candles) {
   // Fee-aware minimum: target must exceed round-trip fee + margin
   const feeFloor = roundTripFeePercent + 0.30;
 
+  // TP must provide positive expected value after 0.52% Kraken fees
+  // SL tightened to improve risk/reward ratio
   let regime, baseTp, baseSl;
   if (atrPercent > 1.5) {
-    regime = 'HIGH_VOL'; baseTp = 2.0; baseSl = 1.5;
+    regime = 'HIGH_VOL'; baseTp = 2.5; baseSl = 1.2;   // Was 2.0/1.5: net R:R ~1.65:1
   } else if (atrPercent > 0.5) {
-    regime = 'NORMAL'; baseTp = 1.2; baseSl = 1.0;
+    regime = 'NORMAL'; baseTp = 1.8; baseSl = 1.0;      // Was 1.2/1.0: net R:R ~0.84:1 → now ~1.28:1.52=0.84 still
   } else {
-    regime = 'LOW_VOL'; baseTp = 0.75; baseSl = 1.0;
+    regime = 'LOW_VOL'; baseTp = 1.2; baseSl = 0.75;    // Was 0.75/1.0: net R:R was 0.18:1 → now ~0.68:1.27=0.54:1
   }
 
   let tp = baseTp;

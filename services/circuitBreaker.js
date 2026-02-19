@@ -2,9 +2,9 @@
  * Circuit Breaker + Kelly Position Sizing Service
  *
  * Auto-pauses trading after:
- *   - 3 consecutive losses
- *   - 5% daily drawdown
- *   - 5 losses in 1 hour
+ *   - 4 consecutive losses
+ *   - 8% daily drawdown
+ *   - 8 losses in 1 hour
  *
  * Kelly Criterion:
  *   Calculates optimal position size from historical win rate & avg win/loss.
@@ -25,10 +25,10 @@ let pausedUntil = 0;
 let pauseReason = '';
 
 const CIRCUIT_BREAKER_CONFIG = {
-  MAX_CONSECUTIVE_LOSSES: 6,            // unchanged
-  MAX_DAILY_DRAWDOWN_PERCENT: 15,       // unchanged
-  MAX_HOURLY_LOSSES: 20,                // Raised: was 12 — fewer false trips with better entries
-  PAUSE_DURATION_MS: 5 * 60 * 1000,     // Longer recovery: was 3min
+  MAX_CONSECUTIVE_LOSSES: 4,            // Was 6: tighter protection (9.4% WR = frequent loss streaks)
+  MAX_DAILY_DRAWDOWN_PERCENT: 8,        // Was 15%: protect capital more aggressively
+  MAX_HOURLY_LOSSES: 8,                 // Was 20: 8 losses/hour is already excessive
+  PAUSE_DURATION_MS: 10 * 60 * 1000,    // Was 5min: longer cooldown to prevent overtrading
   ESCALATING_PAUSE: true,               // Repeated trips = longer cooldowns
 };
 
