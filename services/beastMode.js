@@ -471,6 +471,25 @@ export function setSessionBalance(balance) {
   streakState.peakBalance = balance;
 }
 
+/**
+ * Full reset: clear ALL streak/trade state.
+ * Called on new session start so streaks aren't poisoned by old data.
+ */
+export function fullResetBeastMode(balance) {
+  streakState.consecutiveWins = 0;
+  streakState.consecutiveLosses = 0;
+  streakState.totalWins = 0;
+  streakState.totalLosses = 0;
+  streakState.totalPnl = 0;
+  streakState.bestStreak = 0;
+  streakState.worstStreak = 0;
+  streakState.recentTrades = [];
+  streakState.sessionStartBalance = balance || 0;
+  streakState.currentBalance = balance || 0;
+  streakState.peakBalance = balance || 0;
+  regimeCache.clear();
+}
+
 // ============================================
 // STATUS
 // ============================================

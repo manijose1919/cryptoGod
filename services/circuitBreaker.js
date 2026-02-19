@@ -133,13 +133,29 @@ export function shouldPauseTrading() {
 }
 
 /**
- * Manually reset the circuit breaker
+ * Manually reset the circuit breaker (pause state only, preserves history)
  */
 export function resetCircuitBreaker() {
   pausedUntil = 0;
   pauseReason = '';
   consecutiveLosses = 0;
   pauseCount = 0;
+}
+
+/**
+ * Full reset: clear ALL state including trade history.
+ * Called on new session start so Kelly/streaks aren't poisoned by old (buggy) data.
+ */
+export function fullResetCircuitBreaker() {
+  pausedUntil = 0;
+  pauseReason = '';
+  consecutiveLosses = 0;
+  consecutiveWins = 0;
+  pauseCount = 0;
+  dailyPnl = 0;
+  dailyStartBalance = 0;
+  dailyDate = new Date().toDateString();
+  tradeHistory.length = 0;  // Clear all old trade history
 }
 
 // ============================================
