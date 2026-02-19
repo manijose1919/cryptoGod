@@ -311,54 +311,56 @@ export const PROFIT_METHODS = {
     // Grid Trading
     GRID: {
         ENABLED: true,
-        GRID_COUNT: 10,                    // Number of grid levels
-        PORTFOLIO_ALLOCATION: 0.15,        // 15% of cash for grid trading
-        MIN_RANGE_PERCENT: 1.0,           // Minimum range to create grid
-        RECALC_BUFFER_PERCENT: 10,        // Recalculate when price 10% outside range
+        GRID_COUNT: 5,                     // Was 10: wider spacing to exceed 0.52% RT fees
+        PORTFOLIO_ALLOCATION: 0.05,        // Was 0.15
+        MIN_RANGE_PERCENT: 3.0,            // Was 1.0: need 3%+ range for 5 profitable levels
+        RECALC_BUFFER_PERCENT: 20,         // Was 10
     },
 
     // Smart DCA
     DCA: {
         ENABLED: true,
-        INTERVAL_MS: 5 * 60 * 1000,      // Buy every 5 minutes
-        BASE_ALLOCATION: 0.02,            // 2% of portfolio per buy
-        MAX_DIP_MULTIPLIER: 3.0,          // 3x on big dips
-        MIN_PUMP_MULTIPLIER: 0.3,         // 0.3x on pumps
-        TAKE_PROFIT_PERCENT: 5,           // 5% DCA take profit
+        INTERVAL_MS: 5 * 60 * 1000,       // Buy every 5 minutes
+        BASE_ALLOCATION: 0.02,             // 2% of portfolio per buy
+        MAX_DIP_MULTIPLIER: 3.0,           // 3x on big dips
+        MIN_PUMP_MULTIPLIER: 0.3,          // 0.3x on pumps
+        TAKE_PROFIT_PERCENT: 1.5,          // Was 5%: unreachable. 1.5% = ~1% net after fees
+        MAX_DCA_BUYS: 3,                   // Max DCA adds per position
     },
 
     // Arbitrage
     ARBITRAGE: {
         ENABLED: true,
-        MIN_SPREAD_ZSCORE: 1.5,           // Min z-score for stat arb
-        MIN_CONFIDENCE: 50,               // Min confidence to act
-        PORTFOLIO_ALLOCATION: 0.10,       // 10% for arbitrage
+        MIN_SPREAD_ZSCORE: 1.5,            // Min z-score for stat arb
+        MIN_CONFIDENCE: 55,                // Was 50
+        PORTFOLIO_ALLOCATION: 0.10,        // 10% for arbitrage
     },
 
     // Pair Trading
     PAIR_TRADING: {
         ENABLED: true,
-        ENTRY_ZSCORE: 2.0,               // Z-score to open pair trade
-        EXIT_ZSCORE: 0.5,                // Z-score to close pair trade
-        MIN_CORRELATION: 0.6,            // Minimum pair correlation
-        PORTFOLIO_ALLOCATION: 0.10,       // 10% for pair trading
+        ENTRY_ZSCORE: 2.0,                // Z-score to open pair trade
+        EXIT_ZSCORE: 0.5,                 // Z-score to close pair trade
+        MIN_CORRELATION: 0.5,             // Minimum pair correlation
+        PORTFOLIO_ALLOCATION: 0.10,        // 10% for pair trading
     },
 
     // Swing Trading
     SWING: {
         ENABLED: true,
-        MIN_CONFIDENCE: 40,              // Min confidence for swing entry
-        MIN_RISK_REWARD: 1.5,            // Minimum R:R ratio
-        PORTFOLIO_ALLOCATION: 0.20,       // 20% for swing trades
-        TRAILING_STOP_TRIGGER: 2,        // Start trailing at 2% profit
+        MIN_CONFIDENCE: 55,               // Was 40: require 4+ strong signals
+        MIN_RISK_REWARD: 2.5,             // Was 1.5: fee-adjusted for 0.52% RT costs
+        PORTFOLIO_ALLOCATION: 0.05,        // Was 0.20
+        TRAILING_STOP_TRIGGER: 2,          // Start trailing at 2% profit
+        TRAILING_STOP_PCT: 1.5,            // Trail 1.5% below peak price
     },
 
-    // Market Making
+    // Market Making - DISABLED (virtual spread capture < Kraken fees)
     MARKET_MAKING: {
-        ENABLED: true,
-        PORTFOLIO_ALLOCATION: 0.05,       // 5% per side for MM
-        ORDER_EXPIRY_MS: 5 * 60 * 1000,  // Orders expire after 5 min
-        MIN_SPREAD_PERCENT: 0.02,        // Minimum spread to quote
+        ENABLED: false,                    // 0.06% spread vs 0.52% fees = guaranteed loss
+        PORTFOLIO_ALLOCATION: 0.05,
+        ORDER_EXPIRY_MS: 5 * 60 * 1000,
+        MIN_SPREAD_PERCENT: 0.02,
     },
 } as const;
 

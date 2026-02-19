@@ -16,48 +16,56 @@
 // CONFIGURATION (mirrors constants.ts PROFIT_METHODS)
 // ============================================
 
+// Kraken round-trip fees: 0.26% per side = 0.52% total
+// ALL profit targets must exceed this to be profitable
+const KRAKEN_RT_FEE = 0.52;
+
 const PM_CONFIG = {
   GRID: {
     ENABLED: true,
-    GRID_COUNT: 10,
-    PORTFOLIO_ALLOCATION: 0.05,          // Reduced: was 0.20, too aggressive
-    MIN_RANGE_PERCENT: 1.0,
+    GRID_COUNT: 5,                        // Was 10: wider spacing per level to exceed 0.52% fees
+    PORTFOLIO_ALLOCATION: 0.05,
+    MIN_RANGE_PERCENT: 3.0,               // Was 1.0: each of 5 levels = 0.6% spacing (above fees)
+    MIN_GRID_SPACING_PCT: 0.7,            // Min spacing between grid levels (must exceed RT fees)
   },
   DCA: {
     ENABLED: true,
-    INTERVAL_MS: 2 * 60 * 1000,          // Beast Mode: 2min (was 5min)
+    INTERVAL_MS: 5 * 60 * 1000,           // Was 2min: slower DCA to avoid fee drag
     BASE_ALLOCATION: 0.02,
     MAX_DIP_MULTIPLIER: 3.0,
     MIN_PUMP_MULTIPLIER: 0.3,
-    TAKE_PROFIT_PERCENT: 5,
-    DIP_THRESHOLD: 1.0,
-    PUMP_THRESHOLD: 1.0,
+    TAKE_PROFIT_PERCENT: 1.5,             // Was 5%: unreachable. 1.5% = ~1% net after 0.52% fees
+    DIP_THRESHOLD: 2.0,                   // Was 1.0: require real dips, not noise
+    PUMP_THRESHOLD: 1.5,                  // Was 1.0: don't reduce too aggressively
+    MAX_DCA_BUYS: 3,                      // Cap to prevent endless averaging down
   },
   ARBITRAGE: {
     ENABLED: true,
-    MIN_SPREAD_ZSCORE: 1.2,              // Beast Mode: was 1.5
-    MIN_CONFIDENCE: 50,
+    MIN_SPREAD_ZSCORE: 1.5,               // Was 1.2: tighter filter
+    MIN_CONFIDENCE: 55,                   // Was 50
     PORTFOLIO_ALLOCATION: 0.10,
   },
   PAIR_TRADING: {
     ENABLED: true,
     ENTRY_ZSCORE: 2.0,
     EXIT_ZSCORE: 0.5,
-    MIN_CORRELATION: 0.5,                // Beast Mode: was 0.6
+    MIN_CORRELATION: 0.5,
     PORTFOLIO_ALLOCATION: 0.10,
   },
   SWING: {
     ENABLED: true,
-    MIN_CONFIDENCE: 50,                  // Tightened: was 25 (require 4+ aligned signals)
-    MIN_RISK_REWARD: 1.5,
-    PORTFOLIO_ALLOCATION: 0.05,          // Reduced: was 0.20, caused $1300+ single trades
+    MIN_CONFIDENCE: 55,                   // Was 50: require 4+ strong signals
+    MIN_RISK_REWARD: 2.5,                 // Was 1.5: fee-adjusted (need wider edge)
+    PORTFOLIO_ALLOCATION: 0.05,
     TRAILING_STOP_TRIGGER: 2,
+    TRAILING_STOP_PCT: 1.5,              // Trail 1.5% below highest price (was 0.5% of pnl)
+    MIN_TARGET_PCT: 2.0,                  // Was 1%: min target must exceed fees meaningfully
   },
   MARKET_MAKING: {
-    ENABLED: true,
-    PORTFOLIO_ALLOCATION: 0.05,
+    ENABLED: false,                       // DISABLED: virtual spread capture is unrealistic
+    PORTFOLIO_ALLOCATION: 0.05,           // 0.06% spread capture vs 0.52% fees = guaranteed loss
     ORDER_EXPIRY_MS: 5 * 60 * 1000,
-    MIN_SPREAD_PERCENT: 0.01,            // Beast Mode: was 0.02
+    MIN_SPREAD_PERCENT: 0.01,
   },
 };
 
@@ -278,7 +286,9 @@ function analyzeSwingSetup(ticker, candles) {
   const riskPercent = ((price - stopLoss) / price) * 100;
   const riskReward = riskPercent > 0 ? targetPercent / riskPercent : 0;
 
-  if (riskReward < PM_CONFIG.SWING.MIN_RISK_REWARD || targetPercent < 1) {
+  // Target must exceed round-trip fees meaningfully
+  const feeAdjustedTarget = targetPercent - KRAKEN_RT_FEE;
+  if (riskReward < PM_CONFIG.SWING.MIN_RISK_REWARD || feeAdjustedTarget < PM_CONFIG.SWING.MIN_TARGET_PCT) {
     return { hasSetup: false, setup: null };
   }
 
@@ -307,9 +317,10 @@ function checkSwingExit(ticker, currentPrice) {
     return { shouldExit: true, reason: `Swing stop: ${pnlPercent.toFixed(2)}%`, pnlPercent };
   }
   if (pnlPercent > PM_CONFIG.SWING.TRAILING_STOP_TRIGGER) {
-    const trailingLevel = pos.entryPrice * (1 + pnlPercent * 0.005);
+    // Trail a fixed % below the highest price reached (not entry-based)
+    const trailingLevel = pos.highestPrice * (1 - PM_CONFIG.SWING.TRAILING_STOP_PCT / 100);
     if (currentPrice < trailingLevel) {
-      return { shouldExit: true, reason: `Swing trail: +${pnlPercent.toFixed(2)}%`, pnlPercent };
+      return { shouldExit: true, reason: `Swing trail: +${pnlPercent.toFixed(2)}% (peak: ${pos.highestPrice.toFixed(2)})`, pnlPercent };
     }
   }
   return { shouldExit: false, reason: '', pnlPercent };
@@ -379,8 +390,15 @@ function processDCA(ticker, candles, cashAvailable, portfolioBudget, openPositio
   const lastBuy = position?.lastBuyTime || 0;
   if (Date.now() - lastBuy < PM_CONFIG.DCA.INTERVAL_MS) return null;
 
+  // Cap maximum DCA buys per position to prevent endless averaging down
+  if (position && position.buys >= PM_CONFIG.DCA.MAX_DCA_BUYS) return null;
+
   const price = candles[candles.length - 1].c;
   const { multiplier, reason } = calculateDCAMultiplier(candles, position);
+
+  // Don't DCA when multiplier is reduced (price pumping) — only DCA into dips
+  if (multiplier < 1.0) return null;
+
   const buyAmount = Math.min(baseAmount * multiplier, cashAvailable * 0.1);
 
   if (buyAmount < 0.10) return null;
@@ -438,8 +456,17 @@ function detectGridRange(candles, gridCount = 10) {
   return { upperBound, lowerBound, gridCount, gridSpacing, investmentPerGrid: 0 };
 }
 
-function initGrid(ticker, candles, totalBudget, gridCount = 10) {
+function initGrid(ticker, candles, totalBudget, gridCount = 5) {
   const config = detectGridRange(candles, gridCount);
+
+  // Validate grid spacing exceeds fees — if too tight, reduce grid count
+  const rangePercent = ((config.upperBound - config.lowerBound) / config.lowerBound) * 100;
+  const spacingPercent = rangePercent / gridCount;
+  if (spacingPercent < PM_CONFIG.GRID.MIN_GRID_SPACING_PCT) {
+    // Range too narrow for profitable grid trading
+    return null;
+  }
+
   config.investmentPerGrid = totalBudget / gridCount;
   const price = candles[candles.length - 1].c;
 
@@ -459,25 +486,31 @@ function initGrid(ticker, candles, totalBudget, gridCount = 10) {
 }
 
 function processGrid(ticker, candles, cashAvailable) {
-  if (!PM_CONFIG.GRID.ENABLED || candles.length < 10) return null;
+  if (!PM_CONFIG.GRID.ENABLED || candles.length < 20) return null;
 
   const price = candles[candles.length - 1].c;
   const prevPrice = candles[candles.length - 2].c;
+
+  // Trend filter: only grid trade in sideways/range markets
+  const { structure } = analyzeMarketStructure(candles);
+  if (structure === 'UPTREND' || structure === 'DOWNTREND') return null;
 
   // Re-init grid if price moved out of range
   let state = gridStates.get(ticker);
   if (!state) {
     const budget = cashAvailable * PM_CONFIG.GRID.PORTFOLIO_ALLOCATION;
     if (budget < 0.10) return null;
-    initGrid(ticker, candles, budget, PM_CONFIG.GRID.GRID_COUNT);
+    const result = initGrid(ticker, candles, budget, PM_CONFIG.GRID.GRID_COUNT);
+    if (!result) return null; // Grid spacing too narrow for fees
     state = gridStates.get(ticker);
   } else {
     const { upperBound, lowerBound } = state.config;
-    const buffer = (upperBound - lowerBound) * 0.2; // Widened: was 0.1 (10% nuked grid progress too easily)
+    const buffer = (upperBound - lowerBound) * 0.2;
     if (price > upperBound + buffer || price < lowerBound - buffer) {
       const budget = cashAvailable * PM_CONFIG.GRID.PORTFOLIO_ALLOCATION;
       if (budget < 0.10) return null;
-      initGrid(ticker, candles, budget, PM_CONFIG.GRID.GRID_COUNT);
+      const result = initGrid(ticker, candles, budget, PM_CONFIG.GRID.GRID_COUNT);
+      if (!result) return null; // Grid spacing too narrow for fees
       state = gridStates.get(ticker);
     }
   }
@@ -976,13 +1009,13 @@ export function checkProfitMethodExits(positions, marketDataMap) {
         const arbPnlPercent = ((price - position.openPrice) / position.openPrice) * 100;
         let arbExitReason = null;
 
-        // 1. Stop loss: exit if down more than 1.5%
-        if (arbPnlPercent <= -1.5) {
+        // 1. Stop loss: exit if down more than 1.0%
+        if (arbPnlPercent <= -1.0) {
           arbExitReason = `[ARB] Stop loss: ${arbPnlPercent.toFixed(2)}%`;
         }
 
-        // 2. Take profit: exit if up more than 1%
-        if (!arbExitReason && arbPnlPercent >= 1.0) {
+        // 2. Take profit: exit if up more than 1.5% (net ~1% after 0.52% fees)
+        if (!arbExitReason && arbPnlPercent >= 1.5) {
           arbExitReason = `[ARB] Take profit: +${arbPnlPercent.toFixed(2)}%`;
         }
 
@@ -1049,12 +1082,12 @@ export function checkProfitMethodExits(positions, marketDataMap) {
         const mmPnlPercent = ((price - position.openPrice) / position.openPrice) * 100;
         let mmExitReason = null;
 
-        // Stop loss: exit if down more than 0.5%
-        if (mmPnlPercent <= -0.5) {
+        // Stop loss: exit if down more than 0.75%
+        if (mmPnlPercent <= -0.75) {
           mmExitReason = `[MM] Stop loss: ${mmPnlPercent.toFixed(3)}%`;
         }
-        // Take profit: must exceed round-trip fees (~0.15%) + margin
-        if (!mmExitReason && mmPnlPercent >= 0.5) {
+        // Take profit: must exceed round-trip fees (0.52%) + margin
+        if (!mmExitReason && mmPnlPercent >= 1.0) {
           mmExitReason = `[MM] Spread captured: +${mmPnlPercent.toFixed(3)}%`;
         }
         // Timeout: 10 min
