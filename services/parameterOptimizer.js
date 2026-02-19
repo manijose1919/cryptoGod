@@ -27,12 +27,12 @@ const PARAM_BOUNDS = {
     ADAPTIVE_BULLISH_ENTRY: { min: 25, max: 45, default: 35 },
 
     // Group B: TP/SL Targets per regime
-    TP_HIGH_VOL:  { min: 1.0, max: 4.0, default: 2.0 },
-    TP_NORMAL:    { min: 0.6, max: 2.5, default: 1.2 },
-    TP_LOW_VOL:   { min: 0.5, max: 1.5, default: 0.75 },
-    SL_HIGH_VOL:  { min: 0.8, max: 3.0, default: 1.5 },
-    SL_NORMAL:    { min: 0.5, max: 2.0, default: 1.0 },
-    SL_LOW_VOL:   { min: 0.5, max: 2.0, default: 1.0 },
+    TP_HIGH_VOL:  { min: 1.5, max: 4.0, default: 2.5 },   // Was 2.0: raised for Kraken fee R:R
+    TP_NORMAL:    { min: 1.0, max: 3.0, default: 1.8 },   // Was 1.2
+    TP_LOW_VOL:   { min: 0.8, max: 2.0, default: 1.2 },   // Was 0.75: was below Kraken fee floor
+    SL_HIGH_VOL:  { min: 0.5, max: 2.0, default: 1.2 },   // Was 1.5: tighter SL for better R:R
+    SL_NORMAL:    { min: 0.4, max: 1.5, default: 1.0 },
+    SL_LOW_VOL:   { min: 0.3, max: 1.5, default: 0.75 },  // Was 1.0: tighter to match lower TP
 };
 
 const MAX_CHANGE_PER_CYCLE = 0.15; // 15% max change per optimization
