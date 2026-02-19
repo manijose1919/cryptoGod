@@ -846,7 +846,8 @@ function analyzePair(t1, t2, candles1, candles2) {
   const currentSpread = spreadHistory.length > 0 ? spreadHistory[spreadHistory.length - 1] : 0;
   const currentZScore = stdDev > 0 ? (currentSpread - avgSpread) / stdDev : 0;
   const halfLife = estimateHalfLife(spreadHistory);
-  const cointegrated = Math.abs(correlation) > PM_CONFIG.PAIR_TRADING.MIN_CORRELATION && halfLife < 30;
+  // Only positive correlation for long-only pair trading (negative = doubling exposure, not hedging)
+  const cointegrated = correlation > PM_CONFIG.PAIR_TRADING.MIN_CORRELATION && halfLife < 30;
 
   const key = `${t1}:${t2}`;
   const data = { ticker1: t1, ticker2: t2, correlation, cointegrated, halfLife, currentZScore, spreadHistory: spreadHistory.slice(-100) };
@@ -882,7 +883,7 @@ function getPairSignals(marketDataMap) {
           });
         }
       } else {
-        if (Math.abs(pairData.currentZScore) > PM_CONFIG.PAIR_TRADING.ENTRY_ZSCORE) {
+        if (Math.abs(pairData.currentZScore) > PM_CONFIG.PAIR_TRADING.ENTRY_ZSCORE && Math.abs(pairData.currentZScore) < 10) {
           const longTicker = pairData.currentZScore < 0 ? t1 : t2;
           const shortTicker = pairData.currentZScore < 0 ? t2 : t1;
           const confidence = Math.min(90, Math.abs(pairData.currentZScore) * 20 + pairData.correlation * 20);
