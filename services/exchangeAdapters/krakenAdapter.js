@@ -206,10 +206,26 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             volume,
         });
 
+        const orderId = result.txid?.[0] || '';
+
+        // Query actual fill price (market orders fill immediately on Kraken)
+        let avgPrice = currentPrice;
+        let filledQty = parseFloat(volume);
+        if (orderId) {
+            try {
+                await new Promise(r => setTimeout(r, 500)); // Brief wait for fill to register
+                const status = await this.getOrderStatus(orderId, sessionId);
+                if (status.avgPrice > 0) avgPrice = status.avgPrice;
+                if (status.filledQty > 0) filledQty = status.filledQty;
+            } catch (e) {
+                // Fall back to estimated price
+            }
+        }
+
         return {
-            quantity: parseFloat(volume),
-            avgPrice: currentPrice,
-            orderId: result.txid?.[0] || '',
+            quantity: filledQty,
+            avgPrice,
+            orderId,
             raw: result,
         };
     }
@@ -225,14 +241,33 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             volume,
         });
 
-        const tickerResult = await krakenPublicRequest('Ticker', { pair });
-        const tickerKey = Object.keys(tickerResult)[0];
-        const currentPrice = parseFloat(tickerResult[tickerKey]?.b?.[0] || '0');
+        const orderId = result.txid?.[0] || '';
+
+        // Query actual fill price instead of using stale ticker price
+        let avgPrice = 0;
+        let filledQuantity = quantity;
+        if (orderId) {
+            try {
+                await new Promise(r => setTimeout(r, 500));
+                const status = await this.getOrderStatus(orderId, sessionId);
+                if (status.avgPrice > 0) avgPrice = status.avgPrice;
+                if (status.filledQty > 0) filledQuantity = status.filledQty;
+            } catch (e) {
+                // Fall back to ticker price
+            }
+        }
+
+        // Fallback: fetch current bid if order status didn't return a price
+        if (avgPrice <= 0) {
+            const tickerResult = await krakenPublicRequest('Ticker', { pair });
+            const tickerKey = Object.keys(tickerResult)[0];
+            avgPrice = parseFloat(tickerResult[tickerKey]?.b?.[0] || '0');
+        }
 
         return {
-            avgPrice: currentPrice,
-            filledQuantity: quantity,
-            orderId: result.txid?.[0] || '',
+            avgPrice,
+            filledQuantity,
+            orderId,
             raw: result,
         };
     }
