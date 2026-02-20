@@ -63,10 +63,13 @@ const THRESHOLDS = {
 };
 
 const MIN_CANDLES_REQUIRED = 21;
-const MIN_OPP_SCORE = 35;
-const MAX_CONCURRENT_POSITIONS = 5;
-const MAX_POSITION_PCT = 0.20; // 20% per position
-const CANDLE_WINDOW = 200; // Max candles to look back
+const MIN_OPP_SCORE = 20;       // Lower for training — want MORE trades for ML data
+const MAX_CONCURRENT_POSITIONS = 3;
+const MAX_POSITION_PCT = 0.25;   // 25% per position
+const CANDLE_WINDOW = 200;       // Max candles to look back
+
+// Training-specific: how often we try to enter (every N steps if no position)
+const ENTRY_COOLDOWN_STEPS = 4;  // Check entry every 4 hours minimum gap
 
 // Chunk size for yielding to event loop
 const CHUNK_SIZE = 200;
@@ -122,8 +125,10 @@ function createIsolatedState() {
 
 /**
  * Record a trade result into isolated state.
+ *
+ * @param {number} currentTime — simulated timestamp (NOT Date.now()!)
  */
-function recordTradeToState(state, pnl, strategy) {
+function recordTradeToState(state, pnl, strategy, currentTime) {
   const isWin = pnl > 0;
 
   // Adaptive weights
@@ -153,9 +158,11 @@ function recordTradeToState(state, pnl, strategy) {
     cb.maxConsecutiveLosses = Math.max(cb.maxConsecutiveLosses, cb.consecutiveLosses);
   }
 
-  // Pause after 5 consecutive losses (simulates circuit breaker)
-  if (cb.consecutiveLosses >= 5) {
-    cb.pausedUntil = Date.now() + 3600000; // 1 hour
+  // Pause after 8 consecutive losses — uses SIMULATED time, not Date.now()
+  // Shorter pause in training (6 hours simulated) to keep trades flowing
+  if (cb.consecutiveLosses >= 8) {
+    cb.pausedUntil = currentTime + 6 * 3600000; // 6 simulated hours
+    cb.consecutiveLosses = 0; // Reset so it doesn't keep pausing
   }
 
   // Beast mode
@@ -173,9 +180,10 @@ function recordTradeToState(state, pnl, strategy) {
     bm.maxColdStreak = Math.max(bm.maxColdStreak, bm.coldStreak);
   }
 
-  // Compound multiplier: hot streak = up to 1.5x, cold streak = down to 0.5x
+  // Compound multiplier: hot streak = up to 1.5x, cold streak = down to 0.7x
+  // Less punishing in training to maintain position sizes
   if (bm.streak >= 3) bm.compoundMultiplier = Math.min(1.5, 1.0 + bm.streak * 0.1);
-  else if (bm.coldStreak >= 3) bm.compoundMultiplier = Math.max(0.5, 1.0 - bm.coldStreak * 0.1);
+  else if (bm.coldStreak >= 5) bm.compoundMultiplier = Math.max(0.7, 1.0 - bm.coldStreak * 0.05);
   else bm.compoundMultiplier = 1.0;
 }
 
@@ -235,14 +243,14 @@ function evaluateStrategies(candles, regime, state) {
   const params = state.optimizer.optimizedParams;
   const candidates = [];
 
-  // TREND
+  // TREND: TC below threshold = bullish setup
   if (tcValue < params.TREND_BULLISH_ENTRY) {
     const strength = (params.TREND_BULLISH_ENTRY - tcValue) / params.TREND_BULLISH_ENTRY;
     const w = state.adaptiveWeights.TREND?.weight ?? 1;
     candidates.push({ strategy: 'TREND', value: tcValue, strength: strength * w });
   }
 
-  // MOMENTUM
+  // MOMENTUM: high momentum = bullish
   const momValue = calculateMomentumSeries(candles).pop() ?? 50;
   if (momValue > params.MOMENTUM_BULLISH_ENTRY) {
     const strength = (momValue - params.MOMENTUM_BULLISH_ENTRY) / (100 - params.MOMENTUM_BULLISH_ENTRY);
@@ -250,7 +258,7 @@ function evaluateStrategies(candles, regime, state) {
     candidates.push({ strategy: 'MOMENTUM', value: momValue, strength: strength * w });
   }
 
-  // BREAKOUT
+  // BREAKOUT: high breakout score = expansion
   const bkout = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
   if (bkout > params.BREAKOUT_SQUEEZE_ENTRY) {
     const strength = (bkout - params.BREAKOUT_SQUEEZE_ENTRY) / (100 - params.BREAKOUT_SQUEEZE_ENTRY);
@@ -258,12 +266,40 @@ function evaluateStrategies(candles, regime, state) {
     candidates.push({ strategy: 'BREAKOUT', value: bkout, strength: strength * w });
   }
 
-  // ADAPTIVE
+  // ADAPTIVE: low adaptive TC = bullish
   const adpValue = calculateAdaptiveTCSeries(candles).pop() ?? 50;
   if (adpValue < params.ADAPTIVE_BULLISH_ENTRY) {
     const strength = (params.ADAPTIVE_BULLISH_ENTRY - adpValue) / params.ADAPTIVE_BULLISH_ENTRY;
     const w = state.adaptiveWeights.ADAPTIVE?.weight ?? 1;
     candidates.push({ strategy: 'ADAPTIVE', value: adpValue, strength: strength * w });
+  }
+
+  // WHALE: whale money flow above threshold
+  try {
+    const whaleValue = calculateWhaleMoneyFlowSeries(candles).pop() ?? 50;
+    if (whaleValue > params.WHALE_BUYING_ENTRY) {
+      const strength = (whaleValue - params.WHALE_BUYING_ENTRY) / (100 - params.WHALE_BUYING_ENTRY);
+      const w = state.adaptiveWeights.WHALE?.weight ?? 1;
+      candidates.push({ strategy: 'WHALE', value: whaleValue, strength: strength * w });
+    }
+  } catch (e) {}
+
+  // DIVERGENCE: check for bullish divergence
+  try {
+    const div = calculateDivergence(candles);
+    if (div && div.confidence > params.DIVERGENCE_MIN_CONFIDENCE && div.type === 'bullish') {
+      const strength = div.confidence / 100;
+      const w = state.adaptiveWeights.DIVERGENCE?.weight ?? 1;
+      candidates.push({ strategy: 'DIVERGENCE', value: div.confidence, strength: strength * w });
+    }
+  } catch (e) {}
+
+  // CONFLUENCE: count how many indicators agree on bullish
+  const bullishCount = (tcValue < 45 ? 1 : 0) + (momValue > 55 ? 1 : 0) + (bkout > 50 ? 1 : 0);
+  if (bullishCount >= params.CONFLUENCE_BULLISH_ENTRY) {
+    const strength = bullishCount / 4;
+    const w = state.adaptiveWeights.CONFLUENCE?.weight ?? 1;
+    candidates.push({ strategy: 'CONFLUENCE', value: bullishCount, strength: strength * w });
   }
 
   if (candidates.length === 0) return null;
@@ -281,17 +317,17 @@ function checkExitConditions(position, candles) {
   const pnlPct = (currentPrice - position.entryPrice) / position.entryPrice;
   const holdHours = (candles[candles.length - 1].time - position.entryTime) / 3600000;
 
-  // Stop loss: -3%
-  if (pnlPct <= -0.03) return 'Stop loss: -3%';
+  // Stop loss: -5% (wider for hourly crypto volatility)
+  if (pnlPct <= -0.05) return 'Stop loss: -5%';
 
-  // Take profit: +5%
-  if (pnlPct >= 0.05) return 'Take profit: +5%';
+  // Take profit: +4% (realistic target that triggers more often)
+  if (pnlPct >= 0.04) return 'Take profit: +4%';
 
-  // Time exit: 72 hours max hold
-  if (holdHours >= 72) return 'Time exit: 72h max hold';
+  // Time exit: 48 hours max hold (faster turnover = more trades for ML)
+  if (holdHours >= 48) return 'Time exit: 48h max hold';
 
-  // Trailing stop: if position was up >2% and now gives back more than half
-  if (position.highestPnlPct >= 0.02 && pnlPct < position.highestPnlPct * 0.5) {
+  // Trailing stop: if position was up >3% and now gives back more than 60%
+  if (position.highestPnlPct >= 0.03 && pnlPct < position.highestPnlPct * 0.4) {
     return `Trailing stop: gave back ${((position.highestPnlPct - pnlPct) * 100).toFixed(1)}%`;
   }
 
@@ -556,6 +592,7 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
   const portfolio = training.portfolio;
   const state = training.isolatedState;
   const tickers = Object.keys(candleData);
+  let lastStepTime = timeline[timeline.length - 1] || Date.now(); // Track for end-of-loop cleanup
 
   // Build index maps for fast candle window lookups
   // For each ticker, create a sorted time->index map
@@ -570,6 +607,7 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
     if (training.status !== 'running') break;
 
     const currentTime = timeline[stepIdx];
+    lastStepTime = currentTime;
     const currentDate = new Date(currentTime).toISOString().split('T')[0];
 
     // Lookup auxiliary data for this date
@@ -618,7 +656,7 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
         delete portfolio.positions[ticker];
 
         // Record to state
-        recordTradeToState(state, pnl, position.strategy);
+        recordTradeToState(state, pnl, position.strategy, currentTime);
 
         // Stats
         training.stats.totalTrades++;
@@ -862,7 +900,7 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
     const pnl = (price - position.entryPrice) * position.quantity - sellFee - buyFee;
     portfolio.cash += (position.quantity * price) - sellFee;
 
-    recordTradeToState(state, pnl, position.strategy);
+    recordTradeToState(state, pnl, position.strategy, lastStepTime);
     training.stats.totalTrades++;
     training.stats.totalPnl += pnl;
     if (pnl > 0) training.stats.wins++;
