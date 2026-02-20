@@ -2,11 +2,17 @@
  * Historical Data Service — Downloads & caches historical data for ML training.
  *
  * Sources:
- *   - Binance Public API (primary): OHLCV candles, all timeframes, years of history
+ *   - CryptoCompare (primary): OHLCV candles, all timeframes, years of history, no geoblock
  *   - Alternative.me: Fear & Greed Index (Feb 2018+ daily)
  *   - DeFiLlama: Total DeFi TVL (2020+ daily)
  *
- * Supported timeframes: 5m, 15m, 1h, 4h, 1d, 1w
+ * Download strategy:
+ *   - 1h candles: CryptoCompare histohour (2000/request, ~22 pages per pair for 5yr)
+ *   - 1d candles: CryptoCompare histoday (2000/request, 1 page for 5yr)
+ *   - 4h candles: Aggregated from 1h data (no extra download)
+ *   - 1w candles: Aggregated from 1d data (no extra download)
+ *   - 5m/15m candles: CryptoCompare histominute + aggregation (optional, slow)
+ *
  * 9 pairs: BTC, ETH, XRP, SOL, ADA, DOGE, LINK, DOT, AVAX
  */
 
@@ -15,6 +21,7 @@ import {
   insertHistoricalCandlesBatch,
   getHistoricalCandleCount,
   getHistoricalCandleRange,
+  getHistoricalCandles,
   insertFearGreedBatch,
   getFearGreedCount,
   insertDefiTvlBatch,
@@ -23,27 +30,41 @@ import {
   getDownloadProgress,
 } from './database.js';
 
-// Binance symbol mapping: our ticker -> Binance USDT pair
-const BINANCE_SYMBOLS = {
-  'BTCUSD': 'BTCUSDT',
-  'ETHUSD': 'ETHUSDT',
-  'XRPUSD': 'XRPUSDT',
-  'SOLUSD': 'SOLUSDT',
-  'ADAUSD': 'ADAUSDT',
-  'DOGEUSD': 'DOGEUSDT',
-  'LINKUSD': 'LINKUSDT',
-  'DOTUSD': 'DOTUSDT',
-  'AVAXUSD': 'AVAXUSDT',
+// CryptoCompare symbol mapping: our ticker → {fsym, tsym}
+const CC_SYMBOLS = {
+  'BTCUSD': { fsym: 'BTC', tsym: 'USD' },
+  'ETHUSD': { fsym: 'ETH', tsym: 'USD' },
+  'XRPUSD': { fsym: 'XRP', tsym: 'USD' },
+  'SOLUSD': { fsym: 'SOL', tsym: 'USD' },
+  'ADAUSD': { fsym: 'ADA', tsym: 'USD' },
+  'DOGEUSD': { fsym: 'DOGE', tsym: 'USD' },
+  'LINKUSD': { fsym: 'LINK', tsym: 'USD' },
+  'DOTUSD': { fsym: 'DOT', tsym: 'USD' },
+  'AVAXUSD': { fsym: 'AVAX', tsym: 'USD' },
 };
 
-const BINANCE_API_BASE = 'https://api.binance.com/api/v3';
-const BINANCE_RATE_LIMIT_MS = 350; // ~3 req/sec (conservative, 2400 weight/min limit)
-const BINANCE_MAX_CANDLES = 1000;
+const CC_API_BASE = 'https://min-api.cryptocompare.com/data/v2';
+const CC_RATE_LIMIT_MS = 250;  // 4 req/sec (free tier allows ~50/sec but be safe)
+const CC_MAX_CANDLES = 2000;
 
 // Supported timeframes for download
 const SUPPORTED_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w'];
 
-// Approximate ms per candle for each timeframe (for ETA estimation)
+// Which timeframes need direct download vs aggregation
+const DOWNLOAD_TIMEFRAMES = {
+  '1h': { endpoint: 'histohour', limit: CC_MAX_CANDLES },
+  '1d': { endpoint: 'histoday', limit: CC_MAX_CANDLES },
+};
+const AGGREGATED_TIMEFRAMES = {
+  '4h': { source: '1h', factor: 4 },
+  '1w': { source: '1d', factor: 7 },
+};
+const MINUTE_TIMEFRAMES = {
+  '5m': { factor: 5 },
+  '15m': { factor: 15 },
+};
+
+// Approximate ms per candle
 const TIMEFRAME_MS = {
   '5m': 5 * 60 * 1000,
   '15m': 15 * 60 * 1000,
@@ -53,7 +74,7 @@ const TIMEFRAME_MS = {
   '1w': 7 * 24 * 60 * 60 * 1000,
 };
 
-// Download state — tracks active downloads for API status
+// Download state
 let downloadState = {
   active: false,
   aborted: false,
@@ -64,6 +85,9 @@ let downloadState = {
   startTime: null,
   currentTicker: null,
   currentTimeframe: null,
+  selectedTimeframes: SUPPORTED_TIMEFRAMES,
+  totalRequestsEstimate: 0,
+  completedRequests: 0,
 };
 
 function sleep(ms) {
@@ -71,130 +95,219 @@ function sleep(ms) {
 }
 
 /**
- * Fetch OHLCV candles from Binance public klines API.
- * Returns up to 1000 candles per request.
+ * Fetch OHLCV from CryptoCompare.
+ * Paginates backwards in time using `toTs`.
  *
- * @param {string} symbol - Binance symbol (e.g., 'BTCUSDT')
- * @param {string} interval - Binance interval (e.g., '1h', '5m', '1d')
- * @param {number} startTime - Start time in ms
- * @param {number} endTime - End time in ms
+ * @param {string} endpoint - 'histohour', 'histoday', or 'histominute'
+ * @param {string} fsym - From symbol (e.g., 'BTC')
+ * @param {string} tsym - To symbol (e.g., 'USD')
+ * @param {number} limit - Max candles (up to 2000)
+ * @param {number} toTs - End timestamp in seconds (pagination anchor)
  */
-async function fetchBinanceCandles(symbol, interval, startTime, endTime) {
-  const url = `${BINANCE_API_BASE}/klines?symbol=${symbol}&interval=${interval}&startTime=${startTime}&endTime=${endTime}&limit=${BINANCE_MAX_CANDLES}`;
+async function fetchCryptoCompare(endpoint, fsym, tsym, limit, toTs) {
+  let url = `${CC_API_BASE}/${endpoint}?fsym=${fsym}&tsym=${tsym}&limit=${limit}`;
+  if (toTs) url += `&toTs=${toTs}`;
+
   const res = await fetch(url);
-
-  if (res.status === 429) {
-    // Rate limited — back off and retry
-    console.warn('[HistoricalData] Binance rate limit hit, backing off 10s...');
-    await sleep(10000);
-    const retryRes = await fetch(url);
-    if (!retryRes.ok) throw new Error(`Binance HTTP ${retryRes.status} after retry`);
-    const retryData = await retryRes.json();
-    return parseBinanceKlines(retryData);
-  }
-
-  if (!res.ok) throw new Error(`Binance HTTP ${res.status}: ${res.statusText}`);
+  if (!res.ok) throw new Error(`CryptoCompare HTTP ${res.status}: ${res.statusText}`);
 
   const data = await res.json();
-  return parseBinanceKlines(data);
-}
-
-/**
- * Parse Binance kline array format.
- * Format: [openTime, open, high, low, close, volume, closeTime, quoteVolume, trades, buyBaseVol, buyQuoteVol, ignore]
- */
-function parseBinanceKlines(data) {
-  if (!Array.isArray(data)) return [];
-  return data.map(k => ({
-    time: Number(k[0]),            // Open time in ms
-    open: parseFloat(k[1]),
-    high: parseFloat(k[2]),
-    low: parseFloat(k[3]),
-    close: parseFloat(k[4]),
-    volume: parseFloat(k[5]),
-    closeTime: Number(k[6]),
-  }));
-}
-
-/**
- * Download all historical candles for a single pair and timeframe from Binance.
- * Paginates forward through time using startTime/endTime.
- */
-async function downloadPairTimeframe(ticker, timeframe, startTimeMs, endTimeMs, onProgress) {
-  const symbol = BINANCE_SYMBOLS[ticker];
-  if (!symbol) throw new Error(`Unknown ticker: ${ticker}`);
-
-  // Check existing data to resume from
-  const existingRange = getHistoricalCandleRange(ticker, timeframe);
-  let currentStart = startTimeMs;
-  if (existingRange?.latest) {
-    // Resume from after the last downloaded candle
-    currentStart = Math.max(currentStart, existingRange.latest + 1);
+  if (data.Response === 'Error') {
+    throw new Error(`CryptoCompare API error: ${data.Message}`);
   }
 
-  let totalDownloaded = getHistoricalCandleCount(ticker, timeframe);
-  let pageCount = 0;
-  let newCandles = 0;
+  const candles = (data.Data?.Data || []).map(c => ({
+    time: c.time * 1000,  // Convert to ms
+    open: c.open,
+    high: c.high,
+    low: c.low,
+    close: c.close,
+    volume: c.volumefrom || 0,
+  }));
 
-  while (!downloadState.aborted && currentStart < endTimeMs) {
-    const candles = await fetchBinanceCandles(symbol, timeframe, currentStart, endTimeMs);
+  return candles;
+}
+
+/**
+ * Download all historical candles for a single pair/timeframe from CryptoCompare.
+ * Paginates backwards by setting toTs to the earliest candle of the previous page.
+ */
+async function downloadDirect(ticker, timeframe, startTimeMs, endTimeMs, onProgress) {
+  const sym = CC_SYMBOLS[ticker];
+  if (!sym) throw new Error(`Unknown ticker: ${ticker}`);
+
+  const config = DOWNLOAD_TIMEFRAMES[timeframe];
+  if (!config) throw new Error(`No direct download for timeframe: ${timeframe}`);
+
+  // Check existing data to avoid re-downloading
+  const existingRange = getHistoricalCandleRange(ticker, timeframe);
+  const startTimeSec = Math.floor(startTimeMs / 1000);
+
+  // If we already have data going back far enough, skip
+  if (existingRange?.earliest && existingRange.earliest <= startTimeMs) {
+    const existing = getHistoricalCandleCount(ticker, timeframe);
+    if (onProgress) onProgress(ticker, timeframe, existing, 0);
+    return { total: existing, newCandles: 0 };
+  }
+
+  let toTs = Math.floor(endTimeMs / 1000);
+  let totalNew = 0;
+  let pageCount = 0;
+  let totalInDb = getHistoricalCandleCount(ticker, timeframe);
+
+  while (!downloadState.aborted) {
+    const candles = await fetchCryptoCompare(config.endpoint, sym.fsym, sym.tsym, config.limit, toTs);
 
     if (candles.length === 0) break;
 
-    // Store in DB
-    const dbCandles = candles.map(c => ({
-      ticker,
-      timeframe,
-      time: c.time,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-      volume: c.volume,
-    }));
+    // Filter: only keep candles within our target range
+    const filtered = candles.filter(c => c.time >= startTimeMs && c.time <= endTimeMs);
 
-    insertHistoricalCandlesBatch(dbCandles);
-    totalDownloaded = getHistoricalCandleCount(ticker, timeframe);
-    pageCount++;
-    newCandles += candles.length;
+    if (filtered.length > 0) {
+      const dbCandles = filtered.map(c => ({
+        ticker,
+        timeframe,
+        time: c.time,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+      }));
 
-    // Update per-timeframe progress
-    const progressKey = `${ticker}_${timeframe}`;
-    upsertDownloadProgress('binance', progressKey, 'downloading', 0, totalDownloaded, candles[candles.length - 1].time);
-
-    if (downloadState.pairs[ticker]) {
-      if (!downloadState.pairs[ticker].timeframes) downloadState.pairs[ticker].timeframes = {};
-      downloadState.pairs[ticker].timeframes[timeframe] = {
-        downloaded: totalDownloaded,
-        lastTime: candles[candles.length - 1].time,
-      };
+      insertHistoricalCandlesBatch(dbCandles);
+      totalNew += filtered.length;
     }
 
-    if (onProgress) onProgress(ticker, timeframe, totalDownloaded, pageCount);
+    totalInDb = getHistoricalCandleCount(ticker, timeframe);
+    pageCount++;
 
-    // If we got fewer than max, we've reached the end
-    if (candles.length < BINANCE_MAX_CANDLES) break;
+    if (onProgress) onProgress(ticker, timeframe, totalInDb, pageCount);
 
-    // Advance start time past the last candle
-    currentStart = candles[candles.length - 1].time + 1;
+    // Check if we've gone far enough back
+    const earliestInPage = candles[0]?.time || 0;
+    if (earliestInPage <= startTimeMs) break;
 
-    // Rate limit
-    await sleep(BINANCE_RATE_LIMIT_MS);
+    // If page is small, we've reached the beginning of the pair's history
+    if (candles.length < config.limit) break;
+
+    // Move backwards: set toTs to just before the earliest candle
+    toTs = Math.floor(earliestInPage / 1000) - 1;
+
+    await sleep(CC_RATE_LIMIT_MS);
   }
 
-  const progressKey = `${ticker}_${timeframe}`;
-  upsertDownloadProgress('binance', progressKey, downloadState.aborted ? 'aborted' : 'complete', 0, totalDownloaded, 0);
+  return { total: totalInDb, newCandles: totalNew };
+}
 
-  return { total: totalDownloaded, newCandles };
+/**
+ * Aggregate higher-timeframe candles from lower-timeframe data.
+ * E.g., aggregate 1h → 4h, or 1d → 1w.
+ */
+function aggregateCandles(ticker, targetTimeframe) {
+  const config = AGGREGATED_TIMEFRAMES[targetTimeframe];
+  if (!config) return 0;
+
+  const sourceTf = config.source;
+  const factor = config.factor;
+  const tfMs = TIMEFRAME_MS[sourceTf];
+
+  // Load all source candles
+  const range = getHistoricalCandleRange(ticker, sourceTf);
+  if (!range?.earliest) return 0;
+
+  const sourceCandles = getHistoricalCandles(ticker, sourceTf, range.earliest, range.latest, 500000);
+  if (sourceCandles.length < factor) return 0;
+
+  // Group into blocks of `factor` candles
+  const aggregated = [];
+  for (let i = 0; i <= sourceCandles.length - factor; i += factor) {
+    const block = sourceCandles.slice(i, i + factor);
+    aggregated.push({
+      ticker,
+      timeframe: targetTimeframe,
+      time: block[0].time,
+      open: block[0].open,
+      high: Math.max(...block.map(c => c.high)),
+      low: Math.min(...block.map(c => c.low)),
+      close: block[block.length - 1].close,
+      volume: block.reduce((sum, c) => sum + c.volume, 0),
+    });
+  }
+
+  if (aggregated.length > 0) {
+    // Insert in batches
+    for (let i = 0; i < aggregated.length; i += 500) {
+      insertHistoricalCandlesBatch(aggregated.slice(i, i + 500));
+    }
+  }
+
+  return getHistoricalCandleCount(ticker, targetTimeframe);
+}
+
+/**
+ * Download 1-minute data and aggregate to 5m/15m.
+ * This is slow — ~1300 pages per pair for 5 years.
+ */
+async function downloadMinuteAndAggregate(ticker, targetTimeframe, startTimeMs, endTimeMs, onProgress) {
+  const sym = CC_SYMBOLS[ticker];
+  if (!sym) throw new Error(`Unknown ticker: ${ticker}`);
+
+  const minuteConfig = MINUTE_TIMEFRAMES[targetTimeframe];
+  if (!minuteConfig) throw new Error(`Not a minute-based timeframe: ${targetTimeframe}`);
+
+  const factor = minuteConfig.factor;
+  let toTs = Math.floor(endTimeMs / 1000);
+  let totalNew = 0;
+  let pageCount = 0;
+  let buffer = [];
+
+  while (!downloadState.aborted) {
+    const candles = await fetchCryptoCompare('histominute', sym.fsym, sym.tsym, CC_MAX_CANDLES, toTs);
+
+    if (candles.length === 0) break;
+
+    const filtered = candles.filter(c => c.time >= startTimeMs && c.time <= endTimeMs);
+    buffer.push(...filtered);
+
+    // Aggregate buffer into target timeframe candles
+    while (buffer.length >= factor) {
+      const block = buffer.splice(0, factor);
+      const aggCandle = {
+        ticker,
+        timeframe: targetTimeframe,
+        time: block[0].time,
+        open: block[0].open,
+        high: Math.max(...block.map(c => c.high)),
+        low: Math.min(...block.map(c => c.low)),
+        close: block[block.length - 1].close,
+        volume: block.reduce((sum, c) => sum + c.volume, 0),
+      };
+      insertHistoricalCandlesBatch([aggCandle]);
+      totalNew++;
+    }
+
+    pageCount++;
+    const totalInDb = getHistoricalCandleCount(ticker, targetTimeframe);
+    if (onProgress) onProgress(ticker, targetTimeframe, totalInDb, pageCount);
+
+    const earliestInPage = candles[0]?.time || 0;
+    if (earliestInPage <= startTimeMs) break;
+    if (candles.length < CC_MAX_CANDLES) break;
+
+    toTs = Math.floor(earliestInPage / 1000) - 1;
+
+    await sleep(CC_RATE_LIMIT_MS);
+  }
+
+  return { total: getHistoricalCandleCount(ticker, targetTimeframe), newCandles: totalNew };
 }
 
 /**
  * Download Fear & Greed Index history from Alternative.me.
- * Single request returns all available history.
  */
 async function downloadFearGreed() {
   downloadState.fearGreed = { status: 'downloading', count: 0 };
-  upsertDownloadProgress('fear_greed', null, 'downloading', 0, 0, 0);
 
   try {
     const url = 'https://api.alternative.me/fng/?limit=0&format=json';
@@ -202,19 +315,13 @@ async function downloadFearGreed() {
     if (!res.ok) throw new Error(`Fear & Greed HTTP ${res.status}`);
 
     const data = await res.json();
-    if (!data.data || !Array.isArray(data.data)) {
-      throw new Error('Invalid Fear & Greed response');
-    }
+    if (!data.data || !Array.isArray(data.data)) throw new Error('Invalid Fear & Greed response');
 
-    const entries = data.data.map(d => {
-      const ts = parseInt(d.timestamp) * 1000;
-      const date = new Date(ts).toISOString().split('T')[0];
-      return {
-        date,
-        value: parseInt(d.value),
-        classification: d.value_classification || '',
-      };
-    });
+    const entries = data.data.map(d => ({
+      date: new Date(parseInt(d.timestamp) * 1000).toISOString().split('T')[0],
+      value: parseInt(d.value),
+      classification: d.value_classification || '',
+    }));
 
     for (let i = 0; i < entries.length; i += 500) {
       insertFearGreedBatch(entries.slice(i, i + 500));
@@ -222,22 +329,18 @@ async function downloadFearGreed() {
 
     const count = getFearGreedCount();
     downloadState.fearGreed = { status: 'complete', count };
-    upsertDownloadProgress('fear_greed', null, 'complete', entries.length, count, 0);
     return count;
   } catch (e) {
     downloadState.fearGreed = { status: 'error', count: 0, error: e.message };
-    upsertDownloadProgress('fear_greed', null, 'error', 0, 0, 0, e.message);
     throw e;
   }
 }
 
 /**
  * Download historical DeFi TVL from DeFiLlama.
- * Single request returns all available history.
  */
 async function downloadDefiTvl() {
   downloadState.defiTvl = { status: 'downloading', count: 0 };
-  upsertDownloadProgress('defi_tvl', null, 'downloading', 0, 0, 0);
 
   try {
     const url = 'https://api.llama.fi/v2/historicalChainTvl';
@@ -245,9 +348,7 @@ async function downloadDefiTvl() {
     if (!res.ok) throw new Error(`DeFiLlama HTTP ${res.status}`);
 
     const data = await res.json();
-    if (!Array.isArray(data)) {
-      throw new Error('Invalid DeFiLlama response');
-    }
+    if (!Array.isArray(data)) throw new Error('Invalid DeFiLlama response');
 
     const entries = data.map(d => ({
       date: new Date(d.date * 1000).toISOString().split('T')[0],
@@ -260,17 +361,15 @@ async function downloadDefiTvl() {
 
     const count = getDefiTvlCount();
     downloadState.defiTvl = { status: 'complete', count };
-    upsertDownloadProgress('defi_tvl', null, 'complete', entries.length, count, 0);
     return count;
   } catch (e) {
     downloadState.defiTvl = { status: 'error', count: 0, error: e.message };
-    upsertDownloadProgress('defi_tvl', null, 'error', 0, 0, 0, e.message);
     throw e;
   }
 }
 
 /**
- * Estimate total requests needed for a download configuration.
+ * Estimate total API requests needed.
  */
 function estimateDownloadSize(tickers, timeframes, yearsBack) {
   const msBack = yearsBack * 365.25 * 24 * 3600 * 1000;
@@ -278,14 +377,21 @@ function estimateDownloadSize(tickers, timeframes, yearsBack) {
 
   for (const ticker of tickers) {
     for (const tf of timeframes) {
-      const tfMs = TIMEFRAME_MS[tf] || 3600000;
-      const totalCandles = Math.floor(msBack / tfMs);
-      const pages = Math.ceil(totalCandles / BINANCE_MAX_CANDLES);
-      totalRequests += pages;
+      if (DOWNLOAD_TIMEFRAMES[tf]) {
+        const tfMs = TIMEFRAME_MS[tf];
+        const totalCandles = Math.floor(msBack / tfMs);
+        totalRequests += Math.ceil(totalCandles / CC_MAX_CANDLES);
+      } else if (AGGREGATED_TIMEFRAMES[tf]) {
+        // No extra requests needed — derived from existing data
+      } else if (MINUTE_TIMEFRAMES[tf]) {
+        // 1-minute data: very many requests
+        const totalMinutes = Math.floor(msBack / 60000);
+        totalRequests += Math.ceil(totalMinutes / CC_MAX_CANDLES);
+      }
     }
   }
 
-  const estimatedSeconds = totalRequests * (BINANCE_RATE_LIMIT_MS / 1000);
+  const estimatedSeconds = totalRequests * (CC_RATE_LIMIT_MS / 1000);
   return {
     totalRequests,
     estimatedMinutes: Math.ceil(estimatedSeconds / 60),
@@ -294,18 +400,18 @@ function estimateDownloadSize(tickers, timeframes, yearsBack) {
 }
 
 /**
- * Start a full historical data download for selected pairs and timeframes.
+ * Start a full historical data download.
  *
- * @param {string[]} tickers - Array of tickers (e.g., ['BTCUSD', 'ETHUSD'])
- * @param {number} yearsBack - How many years of history to fetch (default 5)
- * @param {string[]} timeframes - Timeframes to download (default: all supported)
+ * @param {string[]} tickers - Tickers to download
+ * @param {number} yearsBack - Years of history (default 5)
+ * @param {string[]} timeframes - Timeframes to download (default: all)
  */
-export async function startDownload(tickers = Object.keys(BINANCE_SYMBOLS), yearsBack = 5, timeframes = null) {
+export async function startDownload(tickers = Object.keys(CC_SYMBOLS), yearsBack = 5, timeframes = null) {
   if (downloadState.active) {
     throw new Error('Download already in progress');
   }
 
-  const selectedTimeframes = timeframes || [...SUPPORTED_TIMEFRAMES];
+  const selectedTimeframes = timeframes || ['1h', '4h', '1d'];
   const estimate = estimateDownloadSize(tickers, selectedTimeframes, yearsBack);
 
   downloadState = {
@@ -323,9 +429,9 @@ export async function startDownload(tickers = Object.keys(BINANCE_SYMBOLS), year
     completedRequests: 0,
   };
 
-  // Initialize pair tracking
+  // Init pair tracking
   for (const ticker of tickers) {
-    if (!BINANCE_SYMBOLS[ticker]) continue;
+    if (!CC_SYMBOLS[ticker]) continue;
     downloadState.pairs[ticker] = {
       status: 'pending',
       downloaded: 0,
@@ -339,7 +445,6 @@ export async function startDownload(tickers = Object.keys(BINANCE_SYMBOLS), year
     }
   }
 
-  // Initialize timeframe summary
   for (const tf of selectedTimeframes) {
     downloadState.timeframes[tf] = { status: 'pending', totalCandles: 0 };
   }
@@ -347,19 +452,20 @@ export async function startDownload(tickers = Object.keys(BINANCE_SYMBOLS), year
   const startTimeMs = Date.now() - (yearsBack * 365.25 * 24 * 3600 * 1000);
   const endTimeMs = Date.now();
 
-  // Run download in background (non-blocking)
+  // Run download in background
   (async () => {
     try {
-      // Download by timeframe, then by pair (allows progress tracking per TF)
-      for (const tf of selectedTimeframes) {
+      // Phase 1: Download base timeframes (1h, 1d) directly
+      const directTFs = selectedTimeframes.filter(tf => DOWNLOAD_TIMEFRAMES[tf]);
+      for (const tf of directTFs) {
         if (downloadState.aborted) break;
 
         downloadState.timeframes[tf].status = 'downloading';
-        console.log(`[HistoricalData] ===== Downloading timeframe ${tf} =====`);
+        console.log(`[HistoricalData] ===== Downloading ${tf} candles =====`);
 
         for (const ticker of tickers) {
           if (downloadState.aborted) break;
-          if (!BINANCE_SYMBOLS[ticker]) continue;
+          if (!CC_SYMBOLS[ticker]) continue;
 
           downloadState.currentTicker = ticker;
           downloadState.currentTimeframe = tf;
@@ -368,17 +474,18 @@ export async function startDownload(tickers = Object.keys(BINANCE_SYMBOLS), year
             downloadState.pairs[ticker].timeframes[tf].status = 'downloading';
           }
 
-          console.log(`[HistoricalData] ${ticker} ${tf}: starting...`);
-
           try {
-            const result = await downloadPairTimeframe(ticker, tf, startTimeMs, endTimeMs, (t, timeframe, n, p) => {
+            const result = await downloadDirect(ticker, tf, startTimeMs, endTimeMs, (t, timeframe, n, p) => {
               downloadState.completedRequests++;
-              if (p % 10 === 0 || p === 1) {
+              if (downloadState.pairs[ticker]?.timeframes[tf]) {
+                downloadState.pairs[ticker].timeframes[tf].downloaded = n;
+              }
+              if (p % 5 === 0 || p <= 2) {
                 console.log(`[HistoricalData] ${t} ${timeframe}: ${n.toLocaleString()} candles (page ${p})`);
               }
             });
 
-            console.log(`[HistoricalData] ${ticker} ${tf}: complete (${result.total.toLocaleString()} total, ${result.newCandles.toLocaleString()} new)`);
+            console.log(`[HistoricalData] ${ticker} ${tf}: done (${result.total.toLocaleString()} total, ${result.newCandles} new)`);
 
             if (downloadState.pairs[ticker].timeframes[tf]) {
               downloadState.pairs[ticker].timeframes[tf].status = 'complete';
@@ -393,33 +500,109 @@ export async function startDownload(tickers = Object.keys(BINANCE_SYMBOLS), year
           }
         }
 
-        // Mark timeframe complete
-        if (!downloadState.aborted) {
-          downloadState.timeframes[tf].status = 'complete';
-          let totalForTf = 0;
-          for (const ticker of tickers) {
-            totalForTf += getHistoricalCandleCount(ticker, tf);
-          }
-          downloadState.timeframes[tf].totalCandles = totalForTf;
-          console.log(`[HistoricalData] Timeframe ${tf} complete: ${totalForTf.toLocaleString()} total candles`);
-        }
+        // Sum candles for this TF
+        let total = 0;
+        for (const ticker of tickers) total += getHistoricalCandleCount(ticker, tf);
+        downloadState.timeframes[tf].status = 'complete';
+        downloadState.timeframes[tf].totalCandles = total;
+        console.log(`[HistoricalData] ${tf} complete: ${total.toLocaleString()} candles`);
       }
 
-      // Mark all pairs complete
+      // Phase 2: Aggregate derived timeframes (4h from 1h, 1w from 1d)
+      const aggTFs = selectedTimeframes.filter(tf => AGGREGATED_TIMEFRAMES[tf]);
+      for (const tf of aggTFs) {
+        if (downloadState.aborted) break;
+
+        downloadState.timeframes[tf] = { status: 'aggregating', totalCandles: 0 };
+        console.log(`[HistoricalData] ===== Aggregating ${tf} from ${AGGREGATED_TIMEFRAMES[tf].source} =====`);
+
+        for (const ticker of tickers) {
+          if (!CC_SYMBOLS[ticker]) continue;
+
+          downloadState.currentTicker = ticker;
+          downloadState.currentTimeframe = tf;
+
+          try {
+            const count = aggregateCandles(ticker, tf);
+            console.log(`[HistoricalData] ${ticker} ${tf}: ${count.toLocaleString()} aggregated candles`);
+
+            if (downloadState.pairs[ticker].timeframes[tf]) {
+              downloadState.pairs[ticker].timeframes[tf].status = 'complete';
+              downloadState.pairs[ticker].timeframes[tf].downloaded = count;
+            }
+          } catch (e) {
+            console.error(`[HistoricalData] ${ticker} ${tf} aggregation error: ${e.message}`);
+            if (downloadState.pairs[ticker].timeframes[tf]) {
+              downloadState.pairs[ticker].timeframes[tf].status = 'error';
+              downloadState.pairs[ticker].timeframes[tf].error = e.message;
+            }
+          }
+        }
+
+        let total = 0;
+        for (const ticker of tickers) total += getHistoricalCandleCount(ticker, tf);
+        downloadState.timeframes[tf].status = 'complete';
+        downloadState.timeframes[tf].totalCandles = total;
+      }
+
+      // Phase 3: Download minute-based timeframes if requested (5m, 15m) — SLOW
+      const minuteTFs = selectedTimeframes.filter(tf => MINUTE_TIMEFRAMES[tf]);
+      for (const tf of minuteTFs) {
+        if (downloadState.aborted) break;
+
+        downloadState.timeframes[tf] = { status: 'downloading', totalCandles: 0 };
+        console.log(`[HistoricalData] ===== Downloading ${tf} (minute-based, slow) =====`);
+
+        for (const ticker of tickers) {
+          if (downloadState.aborted) break;
+          if (!CC_SYMBOLS[ticker]) continue;
+
+          downloadState.currentTicker = ticker;
+          downloadState.currentTimeframe = tf;
+
+          try {
+            const result = await downloadMinuteAndAggregate(ticker, tf, startTimeMs, endTimeMs, (t, timeframe, n, p) => {
+              downloadState.completedRequests++;
+              if (downloadState.pairs[ticker]?.timeframes[tf]) {
+                downloadState.pairs[ticker].timeframes[tf].downloaded = n;
+              }
+              if (p % 50 === 0 || p <= 2) {
+                console.log(`[HistoricalData] ${t} ${timeframe}: ${n.toLocaleString()} candles (page ${p})`);
+              }
+            });
+
+            if (downloadState.pairs[ticker].timeframes[tf]) {
+              downloadState.pairs[ticker].timeframes[tf].status = 'complete';
+              downloadState.pairs[ticker].timeframes[tf].downloaded = result.total;
+            }
+          } catch (e) {
+            console.error(`[HistoricalData] ${ticker} ${tf} error: ${e.message}`);
+            if (downloadState.pairs[ticker].timeframes[tf]) {
+              downloadState.pairs[ticker].timeframes[tf].status = 'error';
+              downloadState.pairs[ticker].timeframes[tf].error = e.message;
+            }
+          }
+        }
+
+        let total = 0;
+        for (const ticker of tickers) total += getHistoricalCandleCount(ticker, tf);
+        downloadState.timeframes[tf].status = 'complete';
+        downloadState.timeframes[tf].totalCandles = total;
+      }
+
+      // Phase 4: Update pair statuses
       for (const ticker of tickers) {
         if (downloadState.pairs[ticker]) {
-          const hasError = Object.values(downloadState.pairs[ticker].timeframes || {}).some(t => t.status === 'error');
+          const tfStatuses = Object.values(downloadState.pairs[ticker].timeframes || {});
+          const hasError = tfStatuses.some(t => t.status === 'error');
           downloadState.pairs[ticker].status = downloadState.aborted ? 'aborted' : hasError ? 'partial' : 'complete';
-          // Sum up total downloads across all timeframes
           let total = 0;
-          for (const tf of selectedTimeframes) {
-            total += getHistoricalCandleCount(ticker, tf);
-          }
+          for (const tf of selectedTimeframes) total += getHistoricalCandleCount(ticker, tf);
           downloadState.pairs[ticker].downloaded = total;
         }
       }
 
-      // Download Fear & Greed + DeFi TVL in parallel
+      // Phase 5: Download Fear & Greed + DeFi TVL
       if (!downloadState.aborted) {
         console.log('[HistoricalData] Downloading Fear & Greed + DeFi TVL...');
         await Promise.allSettled([
@@ -473,7 +656,7 @@ export function getDownloadStatus() {
 }
 
 /**
- * Get summary of all downloaded data, grouped by pair and timeframe.
+ * Get summary of all downloaded data.
  */
 export function getDataSummary() {
   const summary = {
@@ -484,7 +667,7 @@ export function getDataSummary() {
     totalCandles: 0,
   };
 
-  for (const ticker of Object.keys(BINANCE_SYMBOLS)) {
+  for (const ticker of Object.keys(CC_SYMBOLS)) {
     summary.pairs[ticker] = { timeframes: {}, totalCount: 0 };
 
     for (const tf of SUPPORTED_TIMEFRAMES) {
@@ -503,7 +686,7 @@ export function getDataSummary() {
       if (count > 0) summary.timeframeSummary[tf].pairsWithData++;
     }
 
-    // For backward compatibility, include top-level count (sum of 1h)
+    // Backward compat
     const count1h = getHistoricalCandleCount(ticker, '1h');
     const range1h = getHistoricalCandleRange(ticker, '1h');
     summary.pairs[ticker].count = count1h;
@@ -517,5 +700,5 @@ export function getDataSummary() {
   return summary;
 }
 
-export const AVAILABLE_PAIRS = Object.keys(BINANCE_SYMBOLS);
+export const AVAILABLE_PAIRS = Object.keys(CC_SYMBOLS);
 export { SUPPORTED_TIMEFRAMES };
