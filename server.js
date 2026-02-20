@@ -1107,6 +1107,25 @@ async function tradingBotLoop() {
                             stratCandidates.push({ strategy: 'ADAPTIVE', value: adpValue, strength });
                         }
                     }
+                    // WHALE: high whale money flow = smart money buying
+                    if (profileStrategies.includes('WHALE')) {
+                        const whaleValue = calculateWhaleMoneyFlowSeries(candles).pop() ?? 50;
+                        const whaleThreshold = optParams.WHALE_BUYING_ENTRY || 48;
+                        if (whaleValue > whaleThreshold) {
+                            const strength = (whaleValue - whaleThreshold) / (100 - whaleThreshold);
+                            stratCandidates.push({ strategy: 'WHALE', value: whaleValue, strength });
+                        }
+                    }
+                    // CONFLUENCE: multiple bullish signals aligned
+                    if (profileStrategies.includes('CONFLUENCE')) {
+                        const trendDash = calculateTrendDashboard(candles);
+                        const bullishCount = trendDash ? Object.values(trendDash).filter(v => v === true || v === 'BULLISH' || v === 'UP').length : 0;
+                        const confluenceThreshold = optParams.CONFLUENCE_BULLISH_ENTRY || 2;
+                        if (bullishCount >= confluenceThreshold) {
+                            const strength = Math.min(1, bullishCount / 5);
+                            stratCandidates.push({ strategy: 'CONFLUENCE', value: bullishCount, strength });
+                        }
+                    }
 
                     // Pick the strongest signal that passes regime + throttle filters
                     if (stratCandidates.length > 0) {
