@@ -114,13 +114,277 @@ function createIsolatedState() {
       recentPnls: [],
       compoundMultiplier: 1.0,
     },
-    // Optimizer
+    // Optimizer — now includes REAL optimization
     optimizer: {
       tradeLog: [],
       optimizedParams: { ...THRESHOLDS },
       lastOptimizeAt: 0,
     },
+    // Trade memory — the key learning mechanism
+    tradeMemory: {
+      // Win rate per regime+strategy combo: "SIDEWAYS_TREND" → {wins, losses, totalPnl}
+      regimeStrategy: {},
+      // Win rate per strategy+indicator bin: "TREND_tc_20" → {wins, losses}
+      indicatorBins: {},
+      // PnL distribution for exit optimization
+      winPnls: [],      // winning trade PnL percentages
+      lossPnls: [],     // losing trade PnL percentages
+      winHoldHours: [],  // hours held for winning trades
+      lossHoldHours: [], // hours held for losing trades
+      // Learned exit parameters
+      exitParams: {
+        stopLoss: -0.05,
+        takeProfit: 0.04,
+        maxHold: 48,
+        trailingStart: 0.03,
+        trailingGiveBack: 0.4,
+      },
+      // How many trades since last optimization
+      tradesSinceOptimize: 0,
+    },
   };
+}
+
+// Optimization interval
+const OPTIMIZE_EVERY_N_TRADES = 300;
+const MIN_REGIME_STRATEGY_SAMPLES = 15;
+const REGIME_STRATEGY_MIN_WINRATE = 0.38;
+
+/**
+ * Bin an indicator value (0-100) into buckets of 10.
+ */
+function indicatorBin(value) {
+  return Math.floor(Math.min(99, Math.max(0, value)) / 10) * 10;
+}
+
+/**
+ * Record a completed trade into trade memory for learning.
+ */
+function recordToTradeMemory(memory, strategy, regime, indicatorValues, pnl, pnlPct, holdHours) {
+  const isWin = pnl > 0;
+
+  // 1. Regime+Strategy tracking
+  const rsKey = `${regime}_${strategy}`;
+  if (!memory.regimeStrategy[rsKey]) {
+    memory.regimeStrategy[rsKey] = { wins: 0, losses: 0, totalPnl: 0 };
+  }
+  const rs = memory.regimeStrategy[rsKey];
+  if (isWin) rs.wins++;
+  else rs.losses++;
+  rs.totalPnl += pnl;
+
+  // 2. Indicator bin tracking (for the primary indicator of this strategy)
+  if (indicatorValues) {
+    for (const [indName, value] of Object.entries(indicatorValues)) {
+      if (typeof value !== 'number') continue;
+      const bin = indicatorBin(value);
+      const binKey = `${strategy}_${indName}_${bin}`;
+      if (!memory.indicatorBins[binKey]) {
+        memory.indicatorBins[binKey] = { wins: 0, losses: 0 };
+      }
+      if (isWin) memory.indicatorBins[binKey].wins++;
+      else memory.indicatorBins[binKey].losses++;
+    }
+  }
+
+  // 3. PnL distribution
+  if (isWin) {
+    memory.winPnls.push(pnlPct);
+    memory.winHoldHours.push(holdHours);
+    // Keep last 2000 for memory efficiency
+    if (memory.winPnls.length > 2000) memory.winPnls.shift();
+    if (memory.winHoldHours.length > 2000) memory.winHoldHours.shift();
+  } else {
+    memory.lossPnls.push(pnlPct);
+    memory.lossHoldHours.push(holdHours);
+    if (memory.lossPnls.length > 2000) memory.lossPnls.shift();
+    if (memory.lossHoldHours.length > 2000) memory.lossHoldHours.shift();
+  }
+
+  memory.tradesSinceOptimize++;
+}
+
+/**
+ * Quality filter: should we enter this trade based on past outcomes?
+ * Returns { allow: boolean, reason: string, confidence: number }
+ */
+function evaluateTradeQuality(memory, strategy, regime, indicatorValues) {
+  const totalMemoryTrades = Object.values(memory.regimeStrategy)
+    .reduce((s, rs) => s + rs.wins + rs.losses, 0);
+
+  // Need minimum history before filtering
+  if (totalMemoryTrades < 100) {
+    return { allow: true, reason: 'insufficient_data', confidence: 0.5 };
+  }
+
+  // 1. Check regime+strategy combo
+  const rsKey = `${regime}_${strategy}`;
+  const rs = memory.regimeStrategy[rsKey];
+  if (rs) {
+    const total = rs.wins + rs.losses;
+    if (total >= MIN_REGIME_STRATEGY_SAMPLES) {
+      const winRate = rs.wins / total;
+      if (winRate < REGIME_STRATEGY_MIN_WINRATE) {
+        return {
+          allow: false,
+          reason: `${rsKey} winrate=${(winRate * 100).toFixed(0)}% < ${REGIME_STRATEGY_MIN_WINRATE * 100}% (${total} samples)`,
+          confidence: winRate,
+        };
+      }
+    }
+  }
+
+  // 2. Check indicator bins — reject if all relevant bins show poor win rate
+  if (indicatorValues) {
+    let binChecks = 0;
+    let binBad = 0;
+    for (const [indName, value] of Object.entries(indicatorValues)) {
+      if (typeof value !== 'number') continue;
+      const bin = indicatorBin(value);
+      const binKey = `${strategy}_${indName}_${bin}`;
+      const binData = memory.indicatorBins[binKey];
+      if (binData && binData.wins + binData.losses >= 10) {
+        binChecks++;
+        const binWR = binData.wins / (binData.wins + binData.losses);
+        if (binWR < 0.35) binBad++;
+      }
+    }
+    // If majority of checked bins are bad, skip
+    if (binChecks >= 2 && binBad > binChecks * 0.6) {
+      return {
+        allow: false,
+        reason: `${binBad}/${binChecks} indicator bins below 35% WR`,
+        confidence: 0.3,
+      };
+    }
+  }
+
+  // 3. Boost: check if this regime+strategy is above average
+  let confidence = 0.5;
+  if (rs) {
+    const total = rs.wins + rs.losses;
+    if (total >= 10) {
+      confidence = rs.wins / total;
+    }
+  }
+
+  return { allow: true, reason: 'passed', confidence };
+}
+
+/**
+ * Optimize parameters based on accumulated trade memory.
+ * Called every OPTIMIZE_EVERY_N_TRADES trades.
+ */
+function runOptimization(state) {
+  const memory = state.tradeMemory;
+  const params = state.optimizer.optimizedParams;
+
+  console.log(`[Training Optimizer] Running optimization after ${memory.tradesSinceOptimize} trades...`);
+
+  // --- 1. Optimize entry thresholds based on indicator bin win rates ---
+  // For each strategy, find which indicator level ranges have the best win rates
+  // and adjust thresholds to prefer those ranges
+
+  // TREND: lower TC values should be more bullish. Find the TC bin with best edge.
+  const trendBins = Object.entries(memory.indicatorBins)
+    .filter(([k]) => k.startsWith('TREND_tc_'))
+    .map(([k, v]) => ({ bin: parseInt(k.split('_')[2]), ...v, total: v.wins + v.losses }))
+    .filter(b => b.total >= 8)
+    .sort((a, b) => (b.wins / b.total) - (a.wins / a.total));
+
+  if (trendBins.length >= 3) {
+    // Set entry threshold to include the top winning bins
+    const bestBin = trendBins[0];
+    const bestWR = bestBin.wins / bestBin.total;
+    if (bestWR > 0.5) {
+      // Good bin found — set threshold just above it
+      params.TREND_BULLISH_ENTRY = Math.min(55, bestBin.bin + 15);
+    } else {
+      // No great bin — tighten the threshold
+      params.TREND_BULLISH_ENTRY = Math.max(25, bestBin.bin + 5);
+    }
+  }
+
+  // MOMENTUM: higher momentum should be bullish
+  const momBins = Object.entries(memory.indicatorBins)
+    .filter(([k]) => k.startsWith('MOMENTUM_momentum_'))
+    .map(([k, v]) => ({ bin: parseInt(k.split('_')[2]), ...v, total: v.wins + v.losses }))
+    .filter(b => b.total >= 8)
+    .sort((a, b) => (b.wins / b.total) - (a.wins / a.total));
+
+  if (momBins.length >= 3) {
+    const bestBin = momBins[0];
+    const bestWR = bestBin.wins / bestBin.total;
+    if (bestWR > 0.5) {
+      params.MOMENTUM_BULLISH_ENTRY = Math.max(30, bestBin.bin - 5);
+    } else {
+      params.MOMENTUM_BULLISH_ENTRY = Math.min(70, bestBin.bin + 5);
+    }
+  }
+
+  // BREAKOUT: higher breakout score = expansion
+  const bkoutBins = Object.entries(memory.indicatorBins)
+    .filter(([k]) => k.startsWith('BREAKOUT_breakout_'))
+    .map(([k, v]) => ({ bin: parseInt(k.split('_')[2]), ...v, total: v.wins + v.losses }))
+    .filter(b => b.total >= 8)
+    .sort((a, b) => (b.wins / b.total) - (a.wins / a.total));
+
+  if (bkoutBins.length >= 3) {
+    const bestBin = bkoutBins[0];
+    const bestWR = bestBin.wins / bestBin.total;
+    if (bestWR > 0.5) {
+      params.BREAKOUT_SQUEEZE_ENTRY = Math.max(25, bestBin.bin - 5);
+    } else {
+      params.BREAKOUT_SQUEEZE_ENTRY = Math.min(70, bestBin.bin + 5);
+    }
+  }
+
+  // --- 2. Optimize exit parameters based on PnL distribution ---
+  if (memory.winPnls.length >= 50 && memory.lossPnls.length >= 50) {
+    // Sort PnLs
+    const sortedWins = [...memory.winPnls].sort((a, b) => a - b);
+    const sortedLosses = [...memory.lossPnls].sort((a, b) => a - b);
+
+    // Median win → ideal take profit should be ~80% of median win (capture most wins)
+    const medianWin = sortedWins[Math.floor(sortedWins.length * 0.5)];
+    // 25th percentile loss → how deep do most losses go
+    const p25Loss = sortedLosses[Math.floor(sortedLosses.length * 0.25)];
+
+    // Optimal take profit: 70% of median win (hit more often)
+    const newTP = Math.max(0.015, Math.min(0.08, medianWin * 0.7));
+    // Optimal stop loss: slightly wider than 75th percentile of losses (avoid getting stopped)
+    const newSL = Math.min(-0.01, Math.max(-0.10, p25Loss * 1.2));
+
+    memory.exitParams.takeProfit = newTP;
+    memory.exitParams.stopLoss = newSL;
+
+    console.log(`[Training Optimizer] Exit params: TP=${(newTP * 100).toFixed(2)}% SL=${(newSL * 100).toFixed(2)}%`);
+
+    // Optimize max hold time from winning trades
+    if (memory.winHoldHours.length >= 30) {
+      const sortedHold = [...memory.winHoldHours].sort((a, b) => a - b);
+      const p90Hold = sortedHold[Math.floor(sortedHold.length * 0.9)];
+      memory.exitParams.maxHold = Math.max(12, Math.min(96, Math.ceil(p90Hold * 1.1)));
+    }
+  }
+
+  // --- 3. Log optimization results ---
+  const rsStats = Object.entries(memory.regimeStrategy)
+    .map(([k, v]) => ({ key: k, wr: v.wins / (v.wins + v.losses || 1), total: v.wins + v.losses }))
+    .filter(r => r.total >= 10)
+    .sort((a, b) => b.wr - a.wr);
+
+  if (rsStats.length > 0) {
+    const best = rsStats[0];
+    const worst = rsStats[rsStats.length - 1];
+    console.log(`[Training Optimizer] Best regime+strategy: ${best.key} ${(best.wr * 100).toFixed(1)}% WR (${best.total} trades)`);
+    console.log(`[Training Optimizer] Worst regime+strategy: ${worst.key} ${(worst.wr * 100).toFixed(1)}% WR (${worst.total} trades)`);
+  }
+
+  console.log(`[Training Optimizer] Thresholds: TREND=${params.TREND_BULLISH_ENTRY} MOM=${params.MOMENTUM_BULLISH_ENTRY} BKOUT=${params.BREAKOUT_SQUEEZE_ENTRY}`);
+
+  memory.tradesSinceOptimize = 0;
+  state.optimizer.lastOptimizeAt = Date.now();
 }
 
 /**
@@ -128,7 +392,10 @@ function createIsolatedState() {
  *
  * @param {number} currentTime — simulated timestamp (NOT Date.now()!)
  */
-function recordTradeToState(state, pnl, strategy, currentTime) {
+/**
+ * @param {object} tradeContext - {regime, indicatorValues, pnlPct, holdHours} for learning
+ */
+function recordTradeToState(state, pnl, strategy, currentTime, tradeContext = {}) {
   const isWin = pnl > 0;
 
   // Adaptive weights
@@ -140,6 +407,24 @@ function recordTradeToState(state, pnl, strategy, currentTime) {
     const total = sw.wins + sw.losses;
     if (total >= 5) {
       sw.weight = 0.5 + (sw.wins / total); // 0.5 to 1.5 range
+    }
+  }
+
+  // Trade memory — the learning engine
+  if (state.tradeMemory) {
+    recordToTradeMemory(
+      state.tradeMemory,
+      strategy,
+      tradeContext.regime || 'UNKNOWN',
+      tradeContext.indicatorValues || null,
+      pnl,
+      tradeContext.pnlPct || 0,
+      tradeContext.holdHours || 0
+    );
+
+    // Run optimization periodically
+    if (state.tradeMemory.tradesSinceOptimize >= OPTIMIZE_EVERY_N_TRADES) {
+      runOptimization(state);
     }
   }
 
@@ -310,24 +595,27 @@ function evaluateStrategies(candles, regime, state) {
 /**
  * Check exit conditions for an open position (mirrors server.js exit logic).
  */
-function checkExitConditions(position, candles) {
+function checkExitConditions(position, candles, exitParams = null) {
   if (candles.length < MIN_CANDLES_REQUIRED) return null;
 
   const currentPrice = candles[candles.length - 1].close;
   const pnlPct = (currentPrice - position.entryPrice) / position.entryPrice;
   const holdHours = (candles[candles.length - 1].time - position.entryTime) / 3600000;
 
-  // Stop loss: -5% (wider for hourly crypto volatility)
-  if (pnlPct <= -0.05) return 'Stop loss: -5%';
+  // Use learned exit params if available, else defaults
+  const ep = exitParams || { stopLoss: -0.05, takeProfit: 0.04, maxHold: 48, trailingStart: 0.03, trailingGiveBack: 0.4 };
 
-  // Take profit: +4% (realistic target that triggers more often)
-  if (pnlPct >= 0.04) return 'Take profit: +4%';
+  // Stop loss (learned)
+  if (pnlPct <= ep.stopLoss) return `Stop loss: ${(ep.stopLoss * 100).toFixed(1)}%`;
 
-  // Time exit: 48 hours max hold (faster turnover = more trades for ML)
-  if (holdHours >= 48) return 'Time exit: 48h max hold';
+  // Take profit (learned)
+  if (pnlPct >= ep.takeProfit) return `Take profit: +${(ep.takeProfit * 100).toFixed(1)}%`;
 
-  // Trailing stop: if position was up >3% and now gives back more than 60%
-  if (position.highestPnlPct >= 0.03 && pnlPct < position.highestPnlPct * 0.4) {
+  // Time exit (learned max hold hours)
+  if (holdHours >= ep.maxHold) return `Time exit: ${ep.maxHold}h max hold`;
+
+  // Trailing stop (learned)
+  if (position.highestPnlPct >= ep.trailingStart && pnlPct < position.highestPnlPct * ep.trailingGiveBack) {
     return `Trailing stop: gave back ${((position.highestPnlPct - pnlPct) * 100).toFixed(1)}%`;
   }
 
@@ -423,7 +711,7 @@ function seedStateFromRun(seedRunId) {
     state.beastMode.maxColdStreak = learned.beastMode.maxColdStreak || 0;
   }
 
-  // Seed optimizer thresholds (most impactful — changes which trades are taken)
+  // Seed optimizer thresholds (changes which trades are taken)
   if (learned.optimizer?.optimizedParams) {
     state.optimizer.optimizedParams = { ...THRESHOLDS, ...learned.optimizer.optimizedParams };
   }
@@ -431,8 +719,23 @@ function seedStateFromRun(seedRunId) {
     state.optimizer.tradeLog = learned.optimizer.tradeLog;
   }
 
+  // Seed trade memory — THIS IS THE KEY TO ITERATIVE LEARNING
+  // Carries forward regime+strategy win rates, indicator bin data, and exit params
+  if (learned.tradeMemory) {
+    state.tradeMemory.regimeStrategy = learned.tradeMemory.regimeStrategy || {};
+    state.tradeMemory.indicatorBins = learned.tradeMemory.indicatorBins || {};
+    state.tradeMemory.exitParams = learned.tradeMemory.exitParams || state.tradeMemory.exitParams;
+    // Don't carry forward raw PnL arrays (they'd be stale), but keep exit params
+    state.tradeMemory.tradesSinceOptimize = 0;
+  }
+
+  const rsCount = Object.keys(state.tradeMemory.regimeStrategy).length;
+  const binCount = Object.keys(state.tradeMemory.indicatorBins).length;
+
   console.log(`[Training] Seeded state from run ${seedRunId}: ` +
     `${state.circuitBreaker.totalTrades} prior trades, ` +
+    `${rsCount} regime+strategy combos, ${binCount} indicator bins, ` +
+    `exit: SL=${(state.tradeMemory.exitParams.stopLoss * 100).toFixed(1)}% TP=${(state.tradeMemory.exitParams.takeProfit * 100).toFixed(1)}%, ` +
     `weights: ${Object.entries(state.adaptiveWeights).map(([s, d]) => `${s}=${d.weight.toFixed(2)}`).join(', ')}`);
 
   return state;
@@ -644,7 +947,7 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
         position.highestPnlPct = pnlPct;
       }
 
-      const exitReason = checkExitConditions(position, candles);
+      const exitReason = checkExitConditions(position, candles, state.tradeMemory?.exitParams);
       if (exitReason) {
         // Execute simulated sell
         const sellFee = currentPrice * position.quantity * TRADING_FEE_PER_SIDE;
@@ -655,8 +958,15 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
         portfolio.cash += (position.quantity * currentPrice) - sellFee;
         delete portfolio.positions[ticker];
 
-        // Record to state
-        recordTradeToState(state, pnl, position.strategy, currentTime);
+        const holdHours = (currentTime - position.entryTime) / 3600000;
+
+        // Record to state WITH learning context
+        recordTradeToState(state, pnl, position.strategy, currentTime, {
+          regime: position.regime,
+          indicatorValues: position.indicatorValues || null,
+          pnlPct: pnlPct / 100, // convert from % to fraction for trade memory
+          holdHours,
+        });
 
         // Stats
         training.stats.totalTrades++;
@@ -759,6 +1069,23 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
         const entry = evaluateStrategies(candles, regime, state);
         if (!entry) continue;
 
+        // Capture indicator values for quality filtering + learning
+        const tcVal = calculateTCSeries(candles).pop() ?? 50;
+        const momVal = calculateMomentumSeries(candles).pop() ?? 50;
+        const bkoutVal = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
+        const indicatorValues = { tc: tcVal, momentum: momVal, breakout: bkoutVal };
+
+        // QUALITY FILTER — skip entries that historically lose
+        if (state.tradeMemory) {
+          const quality = evaluateTradeQuality(state.tradeMemory, entry.strategy, regime, indicatorValues);
+          if (!quality.allow) continue; // Skip bad setups
+
+          // Scale position size by confidence (high confidence = larger position)
+          var qualityMultiplier = 0.5 + quality.confidence; // 0.5x to 1.5x
+        } else {
+          var qualityMultiplier = 1.0;
+        }
+
         // Position sizing
         const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
           (sum, p) => sum + (p.quantity * p.currentPrice), 0);
@@ -766,6 +1093,9 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
           portfolio.cash * 0.90,
           totalValue * MAX_POSITION_PCT
         );
+
+        // Apply quality-based scaling
+        positionSize *= qualityMultiplier;
 
         // Apply compound multiplier from beast mode
         positionSize *= state.beastMode.compoundMultiplier;
@@ -792,6 +1122,7 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
           regime,
           compositeScore: score.compositeScore,
           score,
+          indicatorValues, // Store for learning at exit
           entryFeaturesJson: JSON.stringify(entryFeatures),
         };
 
@@ -900,7 +1231,14 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
     const pnl = (price - position.entryPrice) * position.quantity - sellFee - buyFee;
     portfolio.cash += (position.quantity * price) - sellFee;
 
-    recordTradeToState(state, pnl, position.strategy, lastStepTime);
+    const pnlPct = (price - position.entryPrice) / position.entryPrice;
+    const holdHrs = (lastStepTime - position.entryTime) / 3600000;
+    recordTradeToState(state, pnl, position.strategy, lastStepTime, {
+      regime: position.regime,
+      indicatorValues: position.indicatorValues,
+      pnlPct,
+      holdHours: holdHrs,
+    });
     training.stats.totalTrades++;
     training.stats.totalPnl += pnl;
     if (pnl > 0) training.stats.wins++;
@@ -940,6 +1278,12 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
       maxColdStreak: state.beastMode.maxColdStreak,
     },
     optimizer: state.optimizer,
+    // Trade memory — carries learned patterns to next epoch
+    tradeMemory: state.tradeMemory ? {
+      regimeStrategy: state.tradeMemory.regimeStrategy,
+      indicatorBins: state.tradeMemory.indicatorBins,
+      exitParams: state.tradeMemory.exitParams,
+    } : null,
     strategyBreakdown: training.strategyBreakdown,
   };
 
@@ -962,6 +1306,17 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
   });
 
   console.log(`[Training] Run ${runId} COMPLETE: ${training.stats.totalTrades} trades, ${winRate.toFixed(1)}% win rate, $${training.stats.totalPnl.toFixed(2)} PnL, ${totalReturn.toFixed(1)}% return, Sharpe: ${sharpe.toFixed(2)}`);
+
+  // Log learning stats
+  if (state.tradeMemory) {
+    const tm = state.tradeMemory;
+    const rsEntries = Object.entries(tm.regimeStrategy);
+    const filtered = rsEntries.filter(([_, v]) => v.wins + v.losses >= MIN_REGIME_STRATEGY_SAMPLES);
+    const blocked = filtered.filter(([_, v]) => v.wins / (v.wins + v.losses) < REGIME_STRATEGY_MIN_WINRATE);
+    console.log(`[Training] Learning: ${rsEntries.length} regime+strategy combos, ${blocked.length} blocked (below ${REGIME_STRATEGY_MIN_WINRATE * 100}% WR)`);
+    console.log(`[Training] Exit params: SL=${(tm.exitParams.stopLoss * 100).toFixed(1)}% TP=${(tm.exitParams.takeProfit * 100).toFixed(1)}% MaxHold=${tm.exitParams.maxHold}h`);
+    console.log(`[Training] Optimized thresholds: TREND=${state.optimizer.optimizedParams.TREND_BULLISH_ENTRY} MOM=${state.optimizer.optimizedParams.MOMENTUM_BULLISH_ENTRY} BKOUT=${state.optimizer.optimizedParams.BREAKOUT_SQUEEZE_ENTRY}`);
+  }
 }
 
 function getTrainingEquityForSharpe(runId) {
@@ -1041,6 +1396,20 @@ export function getTrainingStatus() {
   const winRate = activeTraining.stats.totalTrades > 0
     ? (activeTraining.stats.wins / activeTraining.stats.totalTrades) * 100 : 0;
 
+  // Collect learning metrics
+  const learningMetrics = {};
+  const tm = activeTraining.isolatedState?.tradeMemory;
+  if (tm) {
+    const rsEntries = Object.entries(tm.regimeStrategy);
+    const filtered = rsEntries.filter(([_, v]) => v.wins + v.losses >= MIN_REGIME_STRATEGY_SAMPLES);
+    const blocked = filtered.filter(([_, v]) => v.wins / (v.wins + v.losses) < REGIME_STRATEGY_MIN_WINRATE);
+    learningMetrics.regimeStrategyCombos = rsEntries.length;
+    learningMetrics.blockedCombos = blocked.length;
+    learningMetrics.indicatorBins = Object.keys(tm.indicatorBins).length;
+    learningMetrics.exitParams = tm.exitParams;
+    learningMetrics.optimizedThresholds = activeTraining.isolatedState.optimizer?.optimizedParams || {};
+  }
+
   return {
     active: activeTraining.status === 'running',
     runId: activeTraining.runId,
@@ -1056,6 +1425,7 @@ export function getTrainingStatus() {
     elapsed: activeTraining.startedAt ? Date.now() - activeTraining.startedAt : 0,
     epoch: activeTraining.epoch || 0,
     seedRunId: activeTraining.seedRunId || null,
+    learningMetrics,
   };
 }
 
