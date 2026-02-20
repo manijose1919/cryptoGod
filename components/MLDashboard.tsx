@@ -364,13 +364,13 @@ export function MLDashboard({ ticker, isVisible = true }: MLDashboardProps) {
                 </tr>
               </thead>
               <tbody>
-                {predictions.slice(0, 10).map(p => {
+                {predictions.slice(0, 10).map((p, i) => {
                   const predictionBadgeClass = p.prediction === 'UP'
                     ? 'bg-green-500/20 text-green-400 px-2 py-0.5 rounded text-xs font-semibold'
                     : 'bg-red-500/20 text-red-400 px-2 py-0.5 rounded text-xs font-semibold';
 
                   return (
-                    <tr key={p.id}>
+                    <tr key={p.id || `pred-${i}`}>
                       <td className="text-xs">{formatTime(p.timestamp)}</td>
                       <td>
                         <span className={predictionBadgeClass}>{p.prediction}</span>

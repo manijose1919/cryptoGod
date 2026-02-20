@@ -451,3 +451,127 @@ export interface SentimentData {
   socialMomentum: boolean;
   overallSentiment: 'VERY_BULLISH' | 'BULLISH' | 'NEUTRAL' | 'BEARISH' | 'VERY_BEARISH';
 }
+
+// ============================================
+// HISTORICAL TRAINING (TIME MACHINE) TYPES
+// ============================================
+
+export interface TrainingDownloadStatus {
+  active: boolean;
+  startTime: number | null;
+  elapsed: number;
+  pairs: Record<string, { status: string; downloaded: number; lastTime: number; error?: string }>;
+  fearGreed: { status: string; count: number; error?: string };
+  defiTvl: { status: string; count: number; error?: string };
+}
+
+export interface TrainingDataSummary {
+  pairs: Record<string, { count: number; earliest: string | null; latest: string | null }>;
+  fearGreed: number;
+  defiTvl: number;
+}
+
+export interface TrainingProgress {
+  currentStep: number;
+  totalSteps: number;
+  currentDate: string;
+  pct: number;
+}
+
+export interface TrainingStats {
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  totalPnl: number;
+  bestTrade: number;
+  worstTrade: number;
+  totalFees: number;
+  maxDrawdown: number;
+  winRate: number;
+}
+
+export interface TrainingStrategyBreakdown {
+  [strategy: string]: {
+    wins: number;
+    losses: number;
+    pnl: number;
+  };
+}
+
+export interface TrainingTrade {
+  id: number;
+  run_id: string;
+  time: number;
+  type: 'BUY' | 'SELL';
+  ticker: string;
+  strategy: string;
+  price: number;
+  quantity: number;
+  pnl: number;
+  pnl_percent: number;
+  fee: number;
+  balance_after: number;
+  regime: string;
+  composite_score: number;
+}
+
+export interface TrainingEquityPoint {
+  time: number;
+  total_value: number;
+  cash: number;
+  holdings_value: number;
+  open_positions: number;
+  drawdown: number;
+}
+
+export interface TrainingStatus {
+  active: boolean;
+  runId?: string;
+  status?: string;
+  progress?: TrainingProgress;
+  stats?: TrainingStats;
+  equity?: { peak: number; current: number };
+  strategyBreakdown?: TrainingStrategyBreakdown;
+  recentTrades?: TrainingTrade[];
+  elapsed?: number;
+}
+
+export interface TrainingRun {
+  id: number;
+  run_id: string;
+  status: string;
+  config_json: string;
+  start_time: number;
+  end_time: number | null;
+  current_step: number;
+  total_steps: number;
+  current_date: string;
+  total_trades: number;
+  win_rate: number;
+  total_pnl: number;
+  max_drawdown: number;
+  sharpe_ratio: number;
+  final_equity: number;
+  created_at: number;
+}
+
+export interface TrainingResults {
+  run: TrainingRun;
+  stats: {
+    total_trades: number;
+    sells: number;
+    wins: number;
+    losses: number;
+    total_pnl: number;
+    avg_pnl: number;
+    best_trade: number;
+    worst_trade: number;
+    total_fees: number;
+  };
+  learnedState: {
+    adaptiveWeights: Record<string, { wins: number; losses: number; totalPnl: number; weight: number }>;
+    circuitBreaker: { totalTrades: number; totalWins: number; totalLosses: number };
+    strategyBreakdown: TrainingStrategyBreakdown;
+  } | null;
+  strategyWeights: TrainingStrategyBreakdown | null;
+}

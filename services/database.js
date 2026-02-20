@@ -922,3 +922,374 @@ export function getMLThoughts(sessionId, limit = 200) {
     SELECT * FROM ml_thoughts WHERE session_id = ? ORDER BY time DESC LIMIT ?
   `).all(sessionId || '', limit);
 }
+
+// ============================================
+// HISTORICAL TRAINING (TIME MACHINE) TABLES
+// ============================================
+
+export function initializeTrainingTables() {
+  const d = getDb();
+  d.exec(`
+    -- Cached OHLCV data from Kraken
+    CREATE TABLE IF NOT EXISTS historical_candles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT NOT NULL,
+      timeframe TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      open REAL NOT NULL,
+      high REAL NOT NULL,
+      low REAL NOT NULL,
+      close REAL NOT NULL,
+      volume REAL NOT NULL,
+      UNIQUE(ticker, timeframe, time)
+    );
+    CREATE INDEX IF NOT EXISTS idx_hist_candle_lookup
+      ON historical_candles(ticker, timeframe, time);
+
+    -- Daily Fear & Greed Index
+    CREATE TABLE IF NOT EXISTS historical_fear_greed (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      value INTEGER NOT NULL,
+      classification TEXT
+    );
+
+    -- Daily DeFi TVL
+    CREATE TABLE IF NOT EXISTS historical_defi_tvl (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      tvl REAL NOT NULL
+    );
+
+    -- Download progress tracking (resume support)
+    CREATE TABLE IF NOT EXISTS historical_download_progress (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL,
+      ticker TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      total_expected INTEGER DEFAULT 0,
+      total_downloaded INTEGER DEFAULT 0,
+      last_timestamp INTEGER DEFAULT 0,
+      error TEXT,
+      updated_at INTEGER DEFAULT (unixepoch() * 1000),
+      UNIQUE(source, ticker)
+    );
+
+    -- Training run metadata
+    CREATE TABLE IF NOT EXISTS training_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      config_json TEXT,
+      start_time INTEGER,
+      end_time INTEGER,
+      current_step INTEGER DEFAULT 0,
+      total_steps INTEGER DEFAULT 0,
+      current_date TEXT,
+      total_trades INTEGER DEFAULT 0,
+      win_rate REAL DEFAULT 0,
+      total_pnl REAL DEFAULT 0,
+      max_drawdown REAL DEFAULT 0,
+      sharpe_ratio REAL DEFAULT 0,
+      final_equity REAL DEFAULT 0,
+      learned_state_json TEXT,
+      strategy_weights_json TEXT,
+      error TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+
+    -- Per-run trade history
+    CREATE TABLE IF NOT EXISTS training_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      strategy TEXT,
+      price REAL NOT NULL,
+      quantity REAL NOT NULL,
+      pnl REAL DEFAULT 0,
+      pnl_percent REAL DEFAULT 0,
+      fee REAL DEFAULT 0,
+      balance_after REAL DEFAULT 0,
+      regime TEXT,
+      composite_score REAL DEFAULT 0,
+      entry_features_json TEXT,
+      exit_features_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_training_trades_run
+      ON training_trades(run_id, time);
+
+    -- Per-run equity curve snapshots
+    CREATE TABLE IF NOT EXISTS training_equity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      total_value REAL NOT NULL,
+      cash REAL NOT NULL,
+      holdings_value REAL DEFAULT 0,
+      open_positions INTEGER DEFAULT 0,
+      drawdown REAL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_training_equity_run
+      ON training_equity(run_id, time);
+
+    -- Labeled feature vectors from simulated trades
+    CREATE TABLE IF NOT EXISTS training_ml_samples (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      time INTEGER NOT NULL,
+      features_json TEXT NOT NULL,
+      label TEXT,
+      label_value REAL,
+      strategy TEXT,
+      regime TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_training_ml_run
+      ON training_ml_samples(run_id, time);
+  `);
+  console.log('[Database] Historical training tables initialized');
+}
+
+// --- Historical Candles ---
+export function insertHistoricalCandlesBatch(candles) {
+  const stmt = getDb().prepare(`
+    INSERT OR IGNORE INTO historical_candles (ticker, timeframe, time, open, high, low, close, volume)
+    VALUES (@ticker, @timeframe, @time, @open, @high, @low, @close, @volume)
+  `);
+  const insertMany = getDb().transaction((rows) => {
+    for (const row of rows) stmt.run(row);
+  });
+  insertMany(candles);
+}
+
+export function getHistoricalCandles(ticker, timeframe, startTime, endTime, limit = 50000) {
+  return getDb().prepare(`
+    SELECT time, open, high, low, close, volume FROM historical_candles
+    WHERE ticker = ? AND timeframe = ? AND time >= ? AND time <= ?
+    ORDER BY time ASC LIMIT ?
+  `).all(ticker, timeframe, startTime, endTime, limit);
+}
+
+export function getHistoricalCandleCount(ticker, timeframe) {
+  return getDb().prepare(
+    'SELECT COUNT(*) as count FROM historical_candles WHERE ticker = ? AND timeframe = ?'
+  ).get(ticker, timeframe).count;
+}
+
+export function getHistoricalCandleRange(ticker, timeframe) {
+  return getDb().prepare(`
+    SELECT MIN(time) as earliest, MAX(time) as latest
+    FROM historical_candles WHERE ticker = ? AND timeframe = ?
+  `).get(ticker, timeframe);
+}
+
+// --- Historical Fear & Greed ---
+export function insertFearGreedBatch(entries) {
+  const stmt = getDb().prepare(`
+    INSERT OR IGNORE INTO historical_fear_greed (date, value, classification)
+    VALUES (@date, @value, @classification)
+  `);
+  const insertMany = getDb().transaction((rows) => {
+    for (const row of rows) stmt.run(row);
+  });
+  insertMany(entries);
+}
+
+export function getFearGreedForDate(dateStr) {
+  return getDb().prepare(
+    'SELECT value, classification FROM historical_fear_greed WHERE date = ?'
+  ).get(dateStr);
+}
+
+export function getFearGreedCount() {
+  return getDb().prepare('SELECT COUNT(*) as count FROM historical_fear_greed').get().count;
+}
+
+// --- Historical DeFi TVL ---
+export function insertDefiTvlBatch(entries) {
+  const stmt = getDb().prepare(`
+    INSERT OR IGNORE INTO historical_defi_tvl (date, tvl)
+    VALUES (@date, @tvl)
+  `);
+  const insertMany = getDb().transaction((rows) => {
+    for (const row of rows) stmt.run(row);
+  });
+  insertMany(entries);
+}
+
+export function getDefiTvlForDate(dateStr) {
+  return getDb().prepare(
+    'SELECT tvl FROM historical_defi_tvl WHERE date = ?'
+  ).get(dateStr);
+}
+
+export function getDefiTvlCount() {
+  return getDb().prepare('SELECT COUNT(*) as count FROM historical_defi_tvl').get().count;
+}
+
+// --- Download Progress ---
+export function upsertDownloadProgress(source, ticker, status, totalExpected, totalDownloaded, lastTimestamp, error = null) {
+  return getDb().prepare(`
+    INSERT INTO historical_download_progress (source, ticker, status, total_expected, total_downloaded, last_timestamp, error, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch() * 1000)
+    ON CONFLICT(source, ticker) DO UPDATE SET
+      status = ?, total_expected = ?, total_downloaded = ?, last_timestamp = ?, error = ?, updated_at = unixepoch() * 1000
+  `).run(source, ticker || '', status, totalExpected, totalDownloaded, lastTimestamp, error,
+         status, totalExpected, totalDownloaded, lastTimestamp, error);
+}
+
+export function getDownloadProgress() {
+  return getDb().prepare(
+    'SELECT * FROM historical_download_progress ORDER BY source, ticker'
+  ).all();
+}
+
+export function clearDownloadProgress() {
+  return getDb().prepare('DELETE FROM historical_download_progress').run();
+}
+
+// --- Training Runs ---
+export function insertTrainingRun(run) {
+  return getDb().prepare(`
+    INSERT INTO training_runs (run_id, status, config_json, start_time, total_steps)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(run.run_id, run.status || 'pending', JSON.stringify(run.config || {}),
+         run.start_time || Date.now(), run.total_steps || 0);
+}
+
+export function updateTrainingRun(runId, updates) {
+  const fields = [];
+  const values = [];
+  for (const [key, val] of Object.entries(updates)) {
+    const col = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+    fields.push(`${col} = ?`);
+    values.push(typeof val === 'object' ? JSON.stringify(val) : val);
+  }
+  values.push(runId);
+  return getDb().prepare(`UPDATE training_runs SET ${fields.join(', ')} WHERE run_id = ?`).run(...values);
+}
+
+export function getTrainingRun(runId) {
+  return getDb().prepare('SELECT * FROM training_runs WHERE run_id = ?').get(runId);
+}
+
+export function getTrainingRuns(limit = 20) {
+  return getDb().prepare(
+    'SELECT * FROM training_runs ORDER BY created_at DESC LIMIT ?'
+  ).all(limit);
+}
+
+// --- Training Trades ---
+export function insertTrainingTrade(trade) {
+  return getDb().prepare(`
+    INSERT INTO training_trades (run_id, time, type, ticker, strategy, price, quantity, pnl, pnl_percent, fee, balance_after, regime, composite_score, entry_features_json, exit_features_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(trade.run_id, trade.time, trade.type, trade.ticker, trade.strategy || '',
+         trade.price, trade.quantity, trade.pnl || 0, trade.pnl_percent || 0,
+         trade.fee || 0, trade.balance_after || 0, trade.regime || '',
+         trade.composite_score || 0, trade.entry_features_json || '{}', trade.exit_features_json || '{}');
+}
+
+export function insertTrainingTradesBatch(trades) {
+  const stmt = getDb().prepare(`
+    INSERT INTO training_trades (run_id, time, type, ticker, strategy, price, quantity, pnl, pnl_percent, fee, balance_after, regime, composite_score, entry_features_json, exit_features_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = getDb().transaction((rows) => {
+    for (const t of rows) {
+      stmt.run(t.run_id, t.time, t.type, t.ticker, t.strategy || '',
+        t.price, t.quantity, t.pnl || 0, t.pnl_percent || 0,
+        t.fee || 0, t.balance_after || 0, t.regime || '',
+        t.composite_score || 0, t.entry_features_json || '{}', t.exit_features_json || '{}');
+    }
+  });
+  insertMany(trades);
+}
+
+export function getTrainingTrades(runId, limit = 500) {
+  return getDb().prepare(
+    'SELECT * FROM training_trades WHERE run_id = ? ORDER BY time DESC LIMIT ?'
+  ).all(runId, limit);
+}
+
+export function getTrainingTradeStats(runId) {
+  return getDb().prepare(`
+    SELECT
+      COUNT(*) as total_trades,
+      SUM(CASE WHEN type = 'SELL' THEN 1 ELSE 0 END) as sells,
+      SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+      SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses,
+      SUM(pnl) as total_pnl,
+      AVG(CASE WHEN pnl != 0 THEN pnl ELSE NULL END) as avg_pnl,
+      MAX(pnl) as best_trade,
+      MIN(pnl) as worst_trade,
+      SUM(fee) as total_fees
+    FROM training_trades WHERE run_id = ? AND type = 'SELL'
+  `).get(runId);
+}
+
+// --- Training Equity ---
+export function insertTrainingEquity(snapshot) {
+  return getDb().prepare(`
+    INSERT INTO training_equity (run_id, time, total_value, cash, holdings_value, open_positions, drawdown)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(snapshot.run_id, snapshot.time, snapshot.total_value, snapshot.cash,
+         snapshot.holdings_value || 0, snapshot.open_positions || 0, snapshot.drawdown || 0);
+}
+
+export function insertTrainingEquityBatch(snapshots) {
+  const stmt = getDb().prepare(`
+    INSERT INTO training_equity (run_id, time, total_value, cash, holdings_value, open_positions, drawdown)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = getDb().transaction((rows) => {
+    for (const s of rows) {
+      stmt.run(s.run_id, s.time, s.total_value, s.cash,
+        s.holdings_value || 0, s.open_positions || 0, s.drawdown || 0);
+    }
+  });
+  insertMany(snapshots);
+}
+
+export function getTrainingEquity(runId, limit = 2000) {
+  return getDb().prepare(
+    'SELECT * FROM training_equity WHERE run_id = ? ORDER BY time ASC LIMIT ?'
+  ).all(runId, limit);
+}
+
+// --- Training ML Samples ---
+export function insertTrainingMLSample(sample) {
+  return getDb().prepare(`
+    INSERT INTO training_ml_samples (run_id, ticker, time, features_json, label, label_value, strategy, regime)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(sample.run_id, sample.ticker, sample.time, sample.features_json,
+         sample.label || null, sample.label_value || null, sample.strategy || '', sample.regime || '');
+}
+
+export function insertTrainingMLSamplesBatch(samples) {
+  const stmt = getDb().prepare(`
+    INSERT INTO training_ml_samples (run_id, ticker, time, features_json, label, label_value, strategy, regime)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = getDb().transaction((rows) => {
+    for (const s of rows) {
+      stmt.run(s.run_id, s.ticker, s.time, s.features_json,
+        s.label || null, s.label_value || null, s.strategy || '', s.regime || '');
+    }
+  });
+  insertMany(samples);
+}
+
+export function getTrainingMLSamples(runId, limit = 5000) {
+  return getDb().prepare(
+    'SELECT * FROM training_ml_samples WHERE run_id = ? ORDER BY time ASC LIMIT ?'
+  ).all(runId, limit);
+}
+
+export function getTrainingMLSampleCount(runId) {
+  return getDb().prepare(
+    'SELECT COUNT(*) as count FROM training_ml_samples WHERE run_id = ?'
+  ).get(runId).count;
+}
