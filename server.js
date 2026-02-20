@@ -58,6 +58,8 @@ import { triggerOptimization, getOptimizedEntryParams, getOptimizedTargets, getO
 import { getMasterSurgeDecision, detectSurge, detectCandlestickPatterns } from './services/surgeTradingBackend.js';
 import { recordTradeForLearning, shouldTakeTradeAI, getAILearningStatus, restoreFromDatabase as restoreAILearning, getParameterAdjustments } from './services/aiLearningBackend.js';
 import { getOnChainSignals } from './services/onChainBackend.js';
+import { getLearnedState } from './services/historicalTrainingEngine.js';
+import { getTrainingRun } from './services/database.js';
 import { getAssetProfile, getStrategyAssetMatch, getBestStrategyForAsset, getPositionSizeForLiquidity, getRiskAdjustedParams } from './services/assetIntelligenceBackend.js';
 import * as CapitalTierManager from './services/capitalTierManager.js';
 import * as SessionManager from './services/sessionManager.js';
@@ -2606,7 +2608,7 @@ app.post('/api/session/resume', (req, res) => {
  */
 app.post('/api/session/start', async (req, res) => {
     try {
-        const { mode = 'SIMULATION', budget = 10000, tickers } = req.body;
+        const { mode = 'SIMULATION', budget = 10000, tickers, trainedRunId } = req.body;
 
         if (botState.isActive) {
             return res.status(400).json({ error: 'A session is already active. Stop it first.' });
@@ -2663,6 +2665,46 @@ app.post('/api/session/start', async (req, res) => {
         fullResetWeights();
         setDailyBalance(portfolio.cash);
         peakValue = portfolio.cash;
+
+        // Apply trained state from Time Machine if requested
+        if (trainedRunId) {
+            try {
+                const learnedState = getLearnedState(trainedRunId);
+                if (learnedState) {
+                    // Apply adaptive weights
+                    if (learnedState.adaptiveWeights) {
+                        const awState = {};
+                        for (const [strategy, data] of Object.entries(learnedState.adaptiveWeights)) {
+                            awState[strategy] = {
+                                weight: data.weight || 1.0,
+                                wins: data.wins || 0,
+                                losses: data.losses || 0,
+                                totalPnl: data.totalPnl || 0,
+                            };
+                        }
+                        awImportState(awState);
+                    }
+                    // Apply circuit breaker Kelly data
+                    if (learnedState.circuitBreaker) {
+                        cbImportState({
+                            totalTrades: learnedState.circuitBreaker.totalTrades,
+                            totalWins: learnedState.circuitBreaker.totalWins,
+                            totalLosses: learnedState.circuitBreaker.totalLosses,
+                        });
+                    }
+                    // Apply optimizer parameters
+                    if (learnedState.optimizer) {
+                        optImportState(learnedState.optimizer);
+                    }
+                    addLog(`[SESSION] Applied trained state from run ${trainedRunId}`, 'SPECIAL');
+                } else {
+                    addLog(`[SESSION] Warning: No trained state found for run ${trainedRunId}`, 'WARN');
+                }
+            } catch (e) {
+                console.error('[SESSION] Failed to apply trained state:', e.message);
+                addLog(`[SESSION] Failed to apply trained state: ${e.message}`, 'ERROR');
+            }
+        }
 
         // Start the bot loop
         if (botInterval) clearInterval(botInterval);
