@@ -173,11 +173,13 @@ const _defById = new Map(TIMEFRAME_DEFINITIONS.map(d => [d.id, d]));
 // STRATEGY / PROFIT-METHOD POOLS
 // ============================================
 
-/** Strategies appropriate for slow / ranging markets. */
-const SLOW_STRATEGIES = ['RANGE', 'MEAN_REVERSION', 'ADAPTIVE', 'DIVERGENCE'];
+/** Strategies appropriate for slow / ranging markets.
+ *  Time Machine training proved WHALE (+$15K), MOMENTUM (+$6.7K), CONFLUENCE (+$11K)
+ *  are profitable across ALL regimes. Restricting them kills opportunity. */
+const SLOW_STRATEGIES = ['ADAPTIVE', 'DIVERGENCE', 'WHALE', 'MOMENTUM', 'CONFLUENCE'];
 
 /** Strategies appropriate for fast / trending markets. */
-const FAST_STRATEGIES = ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE'];
+const FAST_STRATEGIES = ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE', 'WHALE', 'ADAPTIVE'];
 
 /** Profit methods suited to slow markets (spread-capture / accumulation). */
 const SLOW_PROFIT_METHODS = ['Grid', 'MarketMaking'];
