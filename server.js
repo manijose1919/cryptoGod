@@ -876,7 +876,13 @@ async function tradingBotLoop() {
                 if (dynamicCheck.shouldExit) exitReason = dynamicCheck.reason;
             }
 
-            if (!exitReason) {
+            // Strategy indicator exits — only fire after minimum 5 min hold time.
+            // On 5m/15m candles, indicators are noisy and whipsaw constantly.
+            // Training on 1h candles showed trades need room to develop.
+            const indicatorHoldMs = Date.now() - (position.entryTime || 0);
+            const MIN_HOLD_FOR_INDICATOR_EXIT = 5 * 60 * 1000; // 5 minutes
+
+            if (!exitReason && indicatorHoldMs >= MIN_HOLD_FOR_INDICATOR_EXIT) {
                 const tcValue = calculateTCSeries(candles).pop() ?? 50;
                 const momentumValue = calculateMomentumSeries(candles).pop() ?? 50;
 
