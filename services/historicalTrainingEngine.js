@@ -217,17 +217,20 @@ function evaluateTradeQuality(memory, strategy, regime, indicatorValues) {
     return { allow: true, reason: 'insufficient_data', confidence: 0.5 };
   }
 
-  // 1. Check regime+strategy combo
+  // 1. Check regime+strategy combo — filter by BOTH win rate AND expected PnL
   const rsKey = `${regime}_${strategy}`;
   const rs = memory.regimeStrategy[rsKey];
   if (rs) {
     const total = rs.wins + rs.losses;
     if (total >= MIN_REGIME_STRATEGY_SAMPLES) {
       const winRate = rs.wins / total;
-      if (winRate < REGIME_STRATEGY_MIN_WINRATE) {
+      const avgPnl = rs.totalPnl / total;
+
+      // Block if win rate is terrible OR if average PnL is significantly negative
+      if (winRate < REGIME_STRATEGY_MIN_WINRATE || (total >= 30 && avgPnl < -0.5)) {
         return {
           allow: false,
-          reason: `${rsKey} winrate=${(winRate * 100).toFixed(0)}% < ${REGIME_STRATEGY_MIN_WINRATE * 100}% (${total} samples)`,
+          reason: `${rsKey} WR=${(winRate * 100).toFixed(0)}% avgPnL=$${avgPnl.toFixed(2)} (${total} samples)`,
           confidence: winRate,
         };
       }
@@ -339,32 +342,58 @@ function runOptimization(state) {
     }
   }
 
-  // --- 2. Optimize exit parameters based on PnL distribution ---
+  // --- 2. Optimize exit parameters for EXPECTED VALUE, not win rate ---
+  // The key insight: TP must be >= SL * MIN_REWARD_RISK to be profitable long-term.
+  // We simulate multiple TP/SL combos on the actual PnL data and pick the one
+  // with the highest expected value per trade.
   if (memory.winPnls.length >= 50 && memory.lossPnls.length >= 50) {
-    // Sort PnLs
-    const sortedWins = [...memory.winPnls].sort((a, b) => a - b);
-    const sortedLosses = [...memory.lossPnls].sort((a, b) => a - b);
+    const allPnls = [...memory.winPnls, ...memory.lossPnls];
+    const MIN_REWARD_RISK = 1.5; // Minimum 1.5:1 reward to risk
 
-    // Median win → ideal take profit should be ~80% of median win (capture most wins)
-    const medianWin = sortedWins[Math.floor(sortedWins.length * 0.5)];
-    // 25th percentile loss → how deep do most losses go
-    const p25Loss = sortedLosses[Math.floor(sortedLosses.length * 0.25)];
+    // Test grid of SL/TP combinations
+    let bestEV = -Infinity;
+    let bestSL = memory.exitParams.stopLoss;
+    let bestTP = memory.exitParams.takeProfit;
 
-    // Optimal take profit: 70% of median win (hit more often)
-    const newTP = Math.max(0.015, Math.min(0.08, medianWin * 0.7));
-    // Optimal stop loss: slightly wider than 75th percentile of losses (avoid getting stopped)
-    const newSL = Math.min(-0.01, Math.max(-0.10, p25Loss * 1.2));
+    const slCandidates = [-0.02, -0.025, -0.03, -0.035, -0.04, -0.05, -0.06, -0.07];
+    const tpCandidates = [0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.10];
 
-    memory.exitParams.takeProfit = newTP;
-    memory.exitParams.stopLoss = newSL;
+    for (const sl of slCandidates) {
+      for (const tp of tpCandidates) {
+        // Enforce minimum reward:risk ratio
+        if (tp < Math.abs(sl) * MIN_REWARD_RISK) continue;
 
-    console.log(`[Training Optimizer] Exit params: TP=${(newTP * 100).toFixed(2)}% SL=${(newSL * 100).toFixed(2)}%`);
+        // Simulate: count how many trades would have won/lost at these levels
+        let simWins = 0, simLosses = 0, simPnl = 0;
+        for (const pnl of allPnls) {
+          if (pnl >= tp) { simWins++; simPnl += tp; }        // Would have hit TP
+          else if (pnl <= sl) { simLosses++; simPnl += sl; } // Would have hit SL
+          else { simPnl += pnl; simLosses++; }               // Time exit / other
+        }
 
-    // Optimize max hold time from winning trades
+        const total = simWins + simLosses;
+        if (total < 20) continue;
+        const ev = simPnl / total;  // Expected value per trade
+
+        if (ev > bestEV) {
+          bestEV = ev;
+          bestSL = sl;
+          bestTP = tp;
+        }
+      }
+    }
+
+    memory.exitParams.stopLoss = bestSL;
+    memory.exitParams.takeProfit = bestTP;
+
+    console.log(`[Training Optimizer] Exit params optimized for EV: TP=${(bestTP * 100).toFixed(1)}% SL=${(bestSL * 100).toFixed(1)}% (EV=${(bestEV * 100).toFixed(3)}% per trade, R:R=${(bestTP / Math.abs(bestSL)).toFixed(1)}:1)`);
+
+    // Optimize max hold: use median hold time of PROFITABLE trades
     if (memory.winHoldHours.length >= 30) {
       const sortedHold = [...memory.winHoldHours].sort((a, b) => a - b);
-      const p90Hold = sortedHold[Math.floor(sortedHold.length * 0.9)];
-      memory.exitParams.maxHold = Math.max(12, Math.min(96, Math.ceil(p90Hold * 1.1)));
+      const p75Hold = sortedHold[Math.floor(sortedHold.length * 0.75)];
+      // Cap max hold to 75th percentile of winning trades × 1.5
+      memory.exitParams.maxHold = Math.max(12, Math.min(120, Math.ceil(p75Hold * 1.5)));
     }
   }
 
@@ -671,6 +700,47 @@ function yieldToEventLoop() {
 }
 
 /**
+ * Check higher timeframe trend for confirmation.
+ * Returns: 'BULLISH', 'BEARISH', or 'NEUTRAL'
+ */
+function getHigherTFTrend(candleData4h, ticker, currentTime) {
+  const candles4h = candleData4h[ticker];
+  if (!candles4h || candles4h.length < 20) return 'NEUTRAL';
+
+  // Find candles up to current time
+  let endIdx = candles4h.length - 1;
+  for (let i = candles4h.length - 1; i >= 0; i--) {
+    if (candles4h[i].time <= currentTime) { endIdx = i; break; }
+  }
+
+  const startIdx = Math.max(0, endIdx - 50);
+  const window = candles4h.slice(startIdx, endIdx + 1);
+  if (window.length < 10) return 'NEUTRAL';
+
+  // Simple: 20-period EMA direction on 4h
+  const closes = window.map(c => c.close);
+  const ema20 = calcEMA(closes, 20);
+  const ema8 = calcEMA(closes, 8);
+
+  if (ema8 === null || ema20 === null) return 'NEUTRAL';
+
+  const currentClose = closes[closes.length - 1];
+  if (ema8 > ema20 && currentClose > ema20) return 'BULLISH';
+  if (ema8 < ema20 && currentClose < ema20) return 'BEARISH';
+  return 'NEUTRAL';
+}
+
+function calcEMA(data, period) {
+  if (data.length < period) return null;
+  const mult = 2 / (period + 1);
+  let ema = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < data.length; i++) {
+    ema = (data[i] - ema) * mult + ema;
+  }
+  return ema;
+}
+
+/**
  * Seed isolated state from a previous training run's learned state.
  * This enables iterative training — each run refines the previous run's lessons.
  */
@@ -839,6 +909,7 @@ export async function startTraining(config = {}) {
   // Pre-load all candle data into memory for speed
   console.log(`[Training] Loading candle data for ${tickers.length} pairs...`);
   const candleData = {};
+  const candleData4h = {}; // Higher timeframe for multi-TF confirmation
   for (const ticker of tickers) {
     const candles = getHistoricalCandles(ticker, '1h', startTime, endTime, 100000);
     if (candles.length > 0) {
@@ -857,7 +928,17 @@ export async function startTraining(config = {}) {
         close: c.close,
         volume: c.volume,
       }));
-      console.log(`[Training] ${ticker}: ${candles.length} candles loaded`);
+      console.log(`[Training] ${ticker}: ${candles.length} 1h candles loaded`);
+    }
+
+    // Load 4h candles for higher-timeframe trend confirmation
+    const candles4h = getHistoricalCandles(ticker, '4h', startTime, endTime, 50000);
+    if (candles4h.length > 0) {
+      candleData4h[ticker] = candles4h.map(c => ({
+        t: c.time, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume,
+        time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+      }));
+      console.log(`[Training] ${ticker}: ${candles4h.length} 4h candles loaded`);
     }
   }
 
@@ -872,7 +953,7 @@ export async function startTraining(config = {}) {
   console.log(`[Training] Starting training run ${runId}: ${timeline.length} timesteps, ${Object.keys(candleData).length} pairs`);
 
   // Run training loop asynchronously
-  runTrainingLoop(runId, timeline, candleData, activeTraining).catch(err => {
+  runTrainingLoop(runId, timeline, candleData, candleData4h, activeTraining).catch(err => {
     console.error(`[Training] Fatal error: ${err.message}`);
     if (activeTraining && activeTraining.runId === runId) {
       activeTraining.status = 'error';
@@ -891,7 +972,7 @@ export async function startTraining(config = {}) {
 /**
  * Core training loop — processes timeline in chunks.
  */
-async function runTrainingLoop(runId, timeline, candleData, training) {
+async function runTrainingLoop(runId, timeline, candleData, candleData4h, training) {
   const portfolio = training.portfolio;
   const state = training.isolatedState;
   const tickers = Object.keys(candleData);
@@ -1069,37 +1150,64 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
         const entry = evaluateStrategies(candles, regime, state);
         if (!entry) continue;
 
+        // MULTI-TIMEFRAME CONFIRMATION — skip if 4h trend disagrees
+        const htfTrend = getHigherTFTrend(candleData4h, ticker, currentTime);
+        if (htfTrend === 'BEARISH') continue; // Don't buy against higher TF downtrend
+
         // Capture indicator values for quality filtering + learning
         const tcVal = calculateTCSeries(candles).pop() ?? 50;
         const momVal = calculateMomentumSeries(candles).pop() ?? 50;
         const bkoutVal = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
-        const indicatorValues = { tc: tcVal, momentum: momVal, breakout: bkoutVal };
+        // Also capture volume ratio for learning
+        const vols = candles.slice(-20).map(c => c.v || c.volume || 0);
+        const avgVol = vols.reduce((a, b) => a + b, 0) / (vols.length || 1);
+        const volRatio = avgVol > 0 ? ((candles[candles.length - 1].v || 0) / avgVol) * 25 : 50; // Scale to 0-100ish
+        const indicatorValues = { tc: tcVal, momentum: momVal, breakout: bkoutVal, volRatio: Math.min(100, volRatio) };
 
         // QUALITY FILTER — skip entries that historically lose
+        let qualityMultiplier = 1.0;
         if (state.tradeMemory) {
           const quality = evaluateTradeQuality(state.tradeMemory, entry.strategy, regime, indicatorValues);
           if (!quality.allow) continue; // Skip bad setups
-
-          // Scale position size by confidence (high confidence = larger position)
-          var qualityMultiplier = 0.5 + quality.confidence; // 0.5x to 1.5x
-        } else {
-          var qualityMultiplier = 1.0;
+          qualityMultiplier = 0.5 + quality.confidence; // 0.5x to 1.5x
         }
+
+        // KELLY-BASED POSITION SIZING per strategy
+        const sw = state.adaptiveWeights[entry.strategy];
+        let kellyFraction = 0.15; // Default 15% of portfolio
+        if (sw && sw.wins + sw.losses >= 20) {
+          const winRate = sw.wins / (sw.wins + sw.losses);
+          const ep = state.tradeMemory?.exitParams || { takeProfit: 0.04, stopLoss: -0.04 };
+          const avgWin = Math.abs(ep.takeProfit);
+          const avgLoss = Math.abs(ep.stopLoss);
+          if (avgLoss > 0 && avgWin > 0) {
+            // Kelly formula: f = (p * b - q) / b, where p=winRate, q=1-p, b=avgWin/avgLoss
+            const b = avgWin / avgLoss;
+            const kelly = (winRate * b - (1 - winRate)) / b;
+            // Use half-Kelly (safer) clamped to 5%-30% range
+            kellyFraction = Math.max(0.05, Math.min(0.30, kelly * 0.5));
+          }
+        }
+
+        // VOLATILITY-SCALED sizing — smaller positions in high-vol
+        let volScale = 1.0;
+        try {
+          const atr = calculateATR(candles, 14);
+          const atrPct = atr / currentPrice;
+          // Target risk per trade: normalize around 2% ATR
+          if (atrPct > 0) volScale = Math.max(0.4, Math.min(1.5, 0.02 / atrPct));
+        } catch (e) {}
 
         // Position sizing
         const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
           (sum, p) => sum + (p.quantity * p.currentPrice), 0);
-        let positionSize = Math.min(
-          portfolio.cash * 0.90,
-          totalValue * MAX_POSITION_PCT
-        );
-
-        // Apply quality-based scaling
-        positionSize *= qualityMultiplier;
+        let positionSize = totalValue * kellyFraction * qualityMultiplier * volScale;
 
         // Apply compound multiplier from beast mode
         positionSize *= state.beastMode.compoundMultiplier;
-        positionSize = Math.min(positionSize, portfolio.cash * 0.95);
+
+        // Clamp to available cash
+        positionSize = Math.min(positionSize, portfolio.cash * 0.90, totalValue * MAX_POSITION_PCT);
 
         if (positionSize < 10) continue;
 
