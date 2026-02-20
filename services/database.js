@@ -1199,9 +1199,10 @@ export function insertTrainingTradesBatch(trades) {
   `);
   const insertMany = getDb().transaction((rows) => {
     for (const t of rows) {
+      const regimeStr = typeof t.regime === 'object' ? JSON.stringify(t.regime) : (t.regime || '');
       stmt.run(t.run_id, t.time, t.type, t.ticker, t.strategy || '',
         t.price, t.quantity, t.pnl || 0, t.pnl_percent || 0,
-        t.fee || 0, t.balance_after || 0, t.regime || '',
+        t.fee || 0, t.balance_after || 0, regimeStr,
         t.composite_score || 0, t.entry_features_json || '{}', t.exit_features_json || '{}');
     }
   });
@@ -1275,8 +1276,9 @@ export function insertTrainingMLSamplesBatch(samples) {
   `);
   const insertMany = getDb().transaction((rows) => {
     for (const s of rows) {
+      const regimeStr = typeof s.regime === 'object' ? JSON.stringify(s.regime) : (s.regime || '');
       stmt.run(s.run_id, s.ticker, s.time, s.features_json,
-        s.label || null, s.label_value || null, s.strategy || '', s.regime || '');
+        s.label || null, s.label_value || null, s.strategy || '', regimeStr);
     }
   });
   insertMany(samples);

@@ -460,13 +460,22 @@ export interface TrainingDownloadStatus {
   active: boolean;
   startTime: number | null;
   elapsed: number;
-  pairs: Record<string, { status: string; downloaded: number; lastTime: number; error?: string }>;
+  pairs: Record<string, { status: string; downloaded: number; timeframes?: Record<string, { downloaded: number; status: string; error?: string }> }>;
+  timeframes?: Record<string, { status: string; totalCandles: number }>;
   fearGreed: { status: string; count: number; error?: string };
   defiTvl: { status: string; count: number; error?: string };
+  currentTicker?: string;
+  currentTimeframe?: string;
+  selectedTimeframes?: string[];
+  progress?: number;
+  completedRequests?: number;
+  totalRequestsEstimate?: number;
 }
 
 export interface TrainingDataSummary {
-  pairs: Record<string, { count: number; earliest: string | null; latest: string | null }>;
+  pairs: Record<string, { count: number; totalCount?: number; earliest: string | null; latest: string | null; timeframes?: Record<string, { count: number; earliest: string | null; latest: string | null }> }>;
+  timeframeSummary?: Record<string, { totalCandles: number; pairsWithData: number }>;
+  totalCandles?: number;
   fearGreed: number;
   defiTvl: number;
 }
@@ -534,6 +543,9 @@ export interface TrainingStatus {
   strategyBreakdown?: TrainingStrategyBreakdown;
   recentTrades?: TrainingTrade[];
   elapsed?: number;
+  epoch?: number;
+  seedRunId?: string | null;
+  error?: string;
 }
 
 export interface TrainingRun {

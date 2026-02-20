@@ -347,6 +347,62 @@ function yieldToEventLoop() {
 }
 
 /**
+ * Seed isolated state from a previous training run's learned state.
+ * This enables iterative training — each run refines the previous run's lessons.
+ */
+function seedStateFromRun(seedRunId) {
+  const learned = getLearnedState(seedRunId);
+  if (!learned) {
+    console.warn(`[Training] Seed run ${seedRunId} has no learned state, starting fresh`);
+    return createIsolatedState();
+  }
+
+  const state = createIsolatedState();
+
+  // Seed adaptive weights
+  if (learned.adaptiveWeights) {
+    for (const [strategy, data] of Object.entries(learned.adaptiveWeights)) {
+      if (state.adaptiveWeights[strategy]) {
+        state.adaptiveWeights[strategy] = {
+          wins: data.wins || 0,
+          losses: data.losses || 0,
+          totalPnl: data.totalPnl || 0,
+          weight: data.weight || 1.0,
+        };
+      }
+    }
+  }
+
+  // Seed circuit breaker Kelly stats (win/loss ratios carry forward)
+  if (learned.circuitBreaker) {
+    state.circuitBreaker.totalTrades = learned.circuitBreaker.totalTrades || 0;
+    state.circuitBreaker.totalWins = learned.circuitBreaker.totalWins || 0;
+    state.circuitBreaker.totalLosses = learned.circuitBreaker.totalLosses || 0;
+    state.circuitBreaker.maxConsecutiveLosses = learned.circuitBreaker.maxConsecutiveLosses || 0;
+  }
+
+  // Seed beast mode streak calibration
+  if (learned.beastMode) {
+    state.beastMode.maxStreak = learned.beastMode.maxStreak || 0;
+    state.beastMode.maxColdStreak = learned.beastMode.maxColdStreak || 0;
+  }
+
+  // Seed optimizer thresholds (most impactful — changes which trades are taken)
+  if (learned.optimizer?.optimizedParams) {
+    state.optimizer.optimizedParams = { ...THRESHOLDS, ...learned.optimizer.optimizedParams };
+  }
+  if (learned.optimizer?.tradeLog) {
+    state.optimizer.tradeLog = learned.optimizer.tradeLog;
+  }
+
+  console.log(`[Training] Seeded state from run ${seedRunId}: ` +
+    `${state.circuitBreaker.totalTrades} prior trades, ` +
+    `weights: ${Object.entries(state.adaptiveWeights).map(([s, d]) => `${s}=${d.weight.toFixed(2)}`).join(', ')}`);
+
+  return state;
+}
+
+/**
  * Start a historical training run.
  *
  * @param {Object} config - Training configuration
@@ -354,6 +410,7 @@ function yieldToEventLoop() {
  * @param {number} config.initialCash - Starting cash (default 10000)
  * @param {number} [config.startTime] - Start timestamp (ms). Auto-detected if omitted.
  * @param {number} [config.endTime] - End timestamp (ms). Auto-detected if omitted.
+ * @param {string} [config.seedRunId] - Previous run ID to seed state from (iterative training).
  */
 export async function startTraining(config = {}) {
   if (activeTraining && activeTraining.status === 'running') {
@@ -362,6 +419,7 @@ export async function startTraining(config = {}) {
 
   const tickers = config.tickers || ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
   const initialCash = config.initialCash || 10000;
+  const seedRunId = config.seedRunId || null;
   const runId = `train_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
   // Determine time range from available data
@@ -387,11 +445,16 @@ export async function startTraining(config = {}) {
   // Calculate total steps (1 step = 1 hour across all pairs)
   const totalHours = Math.floor((endTime - startTime) / 3600000);
 
+  // Build isolated state — fresh or seeded from previous run
+  const isolatedState = seedRunId
+    ? seedStateFromRun(seedRunId)
+    : createIsolatedState();
+
   // Save run to DB
   insertTrainingRun({
     run_id: runId,
     status: 'running',
-    config: { tickers, initialCash, startTime, endTime },
+    config: { tickers, initialCash, startTime, endTime, seedRunId },
     start_time: Date.now(),
     total_steps: totalHours,
   });
@@ -400,7 +463,7 @@ export async function startTraining(config = {}) {
   activeTraining = {
     runId,
     status: 'running',
-    config: { tickers, initialCash, startTime, endTime },
+    config: { tickers, initialCash, startTime, endTime, seedRunId },
     progress: {
       currentStep: 0,
       totalSteps: totalHours,
@@ -423,7 +486,9 @@ export async function startTraining(config = {}) {
       maxDrawdown: 0,
     },
     equity: { peak: initialCash, current: initialCash },
-    isolatedState: createIsolatedState(),
+    isolatedState,
+    seedRunId,
+    epoch: seedRunId ? (getTrainingRun(seedRunId)?.config_json ? ((JSON.parse(getTrainingRun(seedRunId).config_json).epoch || 0) + 1) : 1) : 0,
     strategyBreakdown: {},
     recentTrades: [],
     equityBuffer: [],    // Buffer for batch DB inserts
@@ -646,9 +711,10 @@ async function runTrainingLoop(runId, timeline, candleData, training) {
 
         // Detect regime
         let regime = 'NORMAL';
+        let regimeObj = null;
         try {
-          const regimeData = detectMarketRegime(candles);
-          regime = regimeData?.regime || regimeData || 'NORMAL';
+          regimeObj = detectMarketRegime(candles);
+          regime = regimeObj?.trend || 'NORMAL';
         } catch (e) {}
 
         // Evaluate strategies
@@ -950,6 +1016,8 @@ export function getTrainingStatus() {
     strategyBreakdown: activeTraining.strategyBreakdown,
     recentTrades: activeTraining.recentTrades,
     elapsed: activeTraining.startedAt ? Date.now() - activeTraining.startedAt : 0,
+    epoch: activeTraining.epoch || 0,
+    seedRunId: activeTraining.seedRunId || null,
   };
 }
 

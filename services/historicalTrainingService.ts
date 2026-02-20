@@ -38,8 +38,8 @@ async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 
 // --- Data Download ---
 
-export async function startDownload(tickers?: string[], yearsBack?: number) {
-  return apiPost<{ success: boolean; tickers: string[]; yearsBack: number }>('/download', { tickers, yearsBack });
+export async function startDownload(tickers?: string[], yearsBack?: number, timeframes?: string[]) {
+  return apiPost<{ success: boolean; tickers: string[]; yearsBack: number; timeframes: string[]; estimate: { totalRequests: number; estimatedMinutes: number; estimatedHours: string } }>('/download', { tickers, yearsBack, timeframes });
 }
 
 export async function abortDownload() {
@@ -61,6 +61,7 @@ export async function startTraining(config?: {
   initialCash?: number;
   startTime?: number;
   endTime?: number;
+  seedRunId?: string;
 }) {
   return apiPost<{ success: boolean; runId: string; totalSteps: number; tickers: string[] }>('/start', config);
 }
