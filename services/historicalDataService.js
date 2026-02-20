@@ -44,7 +44,7 @@ const CC_SYMBOLS = {
 };
 
 const CC_API_BASE = 'https://min-api.cryptocompare.com/data/v2';
-const CC_RATE_LIMIT_MS = 250;  // 4 req/sec (free tier allows ~50/sec but be safe)
+const CC_RATE_LIMIT_MS = 1500;  // ~0.7 req/sec — CryptoCompare free tier is strict
 const CC_MAX_CANDLES = 2000;
 
 // Supported timeframes for download
@@ -104,28 +104,44 @@ function sleep(ms) {
  * @param {number} limit - Max candles (up to 2000)
  * @param {number} toTs - End timestamp in seconds (pagination anchor)
  */
+const CC_MAX_RETRIES = 5;
+const CC_BASE_BACKOFF_MS = 5000;  // Start with 5s backoff on rate limit
+
 async function fetchCryptoCompare(endpoint, fsym, tsym, limit, toTs) {
   let url = `${CC_API_BASE}/${endpoint}?fsym=${fsym}&tsym=${tsym}&limit=${limit}`;
   if (toTs) url += `&toTs=${toTs}`;
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`CryptoCompare HTTP ${res.status}: ${res.statusText}`);
+  for (let attempt = 0; attempt <= CC_MAX_RETRIES; attempt++) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`CryptoCompare HTTP ${res.status}: ${res.statusText}`);
 
-  const data = await res.json();
-  if (data.Response === 'Error') {
-    throw new Error(`CryptoCompare API error: ${data.Message}`);
+    const data = await res.json();
+
+    // Handle rate limit errors with exponential backoff
+    if (data.Response === 'Error') {
+      const msg = data.Message || '';
+      if (msg.toLowerCase().includes('rate limit') && attempt < CC_MAX_RETRIES) {
+        const backoff = CC_BASE_BACKOFF_MS * Math.pow(2, attempt);
+        console.log(`[HistoricalData] Rate limited, backing off ${backoff / 1000}s (attempt ${attempt + 1}/${CC_MAX_RETRIES})...`);
+        await sleep(backoff);
+        continue;
+      }
+      throw new Error(`CryptoCompare API error: ${msg}`);
+    }
+
+    const candles = (data.Data?.Data || []).map(c => ({
+      time: c.time * 1000,  // Convert to ms
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volumefrom || 0,
+    }));
+
+    return candles;
   }
 
-  const candles = (data.Data?.Data || []).map(c => ({
-    time: c.time * 1000,  // Convert to ms
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-    volume: c.volumefrom || 0,
-  }));
-
-  return candles;
+  throw new Error('CryptoCompare: max retries exhausted');
 }
 
 /**
@@ -391,7 +407,7 @@ function estimateDownloadSize(tickers, timeframes, yearsBack) {
     }
   }
 
-  const estimatedSeconds = totalRequests * (CC_RATE_LIMIT_MS / 1000);
+  const estimatedSeconds = totalRequests * (CC_RATE_LIMIT_MS / 1000) * 1.2;  // +20% buffer for retries
   return {
     totalRequests,
     estimatedMinutes: Math.ceil(estimatedSeconds / 60),
