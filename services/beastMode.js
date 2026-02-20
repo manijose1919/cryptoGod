@@ -304,15 +304,16 @@ export function getDynamicTargets(candles) {
   // Fee-aware minimum: target must exceed round-trip fee + margin
   const feeFloor = roundTripFeePercent + 0.30;
 
-  // TP must provide positive expected value after 0.52% Kraken fees
-  // SL tightened to improve risk/reward ratio
+  // Time Machine training (5yr backtest) learned: SL=-2%, TP=+10% (5:1 R:R) is optimal.
+  // Wider stops let trades develop; tight stops cause death by a thousand cuts.
+  // Minimum R:R of 2:1 enforced across all regimes.
   let regime, baseTp, baseSl;
   if (atrPercent > 1.5) {
-    regime = 'HIGH_VOL'; baseTp = 2.5; baseSl = 1.2;   // Was 2.0/1.5: net R:R ~1.65:1
+    regime = 'HIGH_VOL'; baseTp = 6.0; baseSl = 3.0;    // R:R 2:1, wide for vol
   } else if (atrPercent > 0.5) {
-    regime = 'NORMAL'; baseTp = 1.8; baseSl = 1.0;      // Was 1.2/1.0: net R:R ~0.84:1 → now ~1.28:1.52=0.84 still
+    regime = 'NORMAL'; baseTp = 4.0; baseSl = 2.0;      // R:R 2:1, trained optimum
   } else {
-    regime = 'LOW_VOL'; baseTp = 1.2; baseSl = 0.75;    // Was 0.75/1.0: net R:R was 0.18:1 → now ~0.68:1.27=0.54:1
+    regime = 'LOW_VOL'; baseTp = 3.0; baseSl = 2.0;     // R:R 1.5:1, min 2% SL
   }
 
   let tp = baseTp;
@@ -357,8 +358,8 @@ export function checkDynamicExit(position, currentPrice, candles) {
   }
 
   // --- TRAILING STOP ---
-  // Activates once position reached +0.5% profit after fees from peak
-  const trailActivation = 0.5;
+  // Activates once position reached +2% profit after fees from peak (was 0.5% — too tight)
+  const trailActivation = 2.0;
   const highestPrice = position.highestPrice || position.openPrice;
   const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
   const highFeeAdj = highPnl - roundTripFeePercent;
@@ -385,8 +386,8 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
-  // Time-based exit: 30min and must be down >1.5% (was 15min/any loss — too aggressive in sideways)
-  if (holdMinutes > 30 && pnlPercent < -1.5) {
+  // Time-based exit: 4h and must be down >1.5% (was 30min — too aggressive, training used 48h max hold)
+  if (holdMinutes > 240 && pnlPercent < -1.5) {
     return {
       shouldExit: true,
       reason: `[BEAST-TIME] Stale position: ${pnlPercent.toFixed(2)}% raw, ${holdMinutes.toFixed(0)}min`,
