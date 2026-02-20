@@ -11,6 +11,7 @@ import {
   getDownloadStatus,
   getDataSummary,
   AVAILABLE_PAIRS,
+  SUPPORTED_TIMEFRAMES,
 } from '../services/historicalDataService.js';
 import {
   startTraining,
@@ -63,14 +64,15 @@ router.use((req, res, next) => {
 
 /**
  * POST /api/training/download — Start historical data download
- * Body: { tickers?: string[], yearsBack?: number }
+ * Body: { tickers?: string[], yearsBack?: number, timeframes?: string[] }
  */
 router.post('/download', async (req, res) => {
   try {
-    const { tickers, yearsBack } = req.body || {};
+    const { tickers, yearsBack, timeframes } = req.body || {};
     const result = await startDownload(
       tickers || AVAILABLE_PAIRS,
-      yearsBack || 5
+      yearsBack || 5,
+      timeframes || null
     );
     res.json({ success: true, ...result });
   } catch (e) {
@@ -106,7 +108,7 @@ router.get('/data/summary', (req, res) => {
 
 /**
  * POST /api/training/start — Start a training run
- * Body: { tickers?: string[], initialCash?: number, startTime?: number, endTime?: number }
+ * Body: { tickers?: string[], initialCash?: number, startTime?: number, endTime?: number, seedRunId?: string }
  */
 router.post('/start', async (req, res) => {
   try {

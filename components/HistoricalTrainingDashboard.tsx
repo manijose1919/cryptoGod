@@ -19,19 +19,24 @@ const NAV_LINKS = [
 ];
 
 const ALL_PAIRS = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
+const ALL_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w'];
 
 export const HistoricalTrainingDashboard: React.FC = () => {
   // Download state
   const [downloadStatus, setDownloadStatus] = useState<TrainingDownloadStatus | null>(null);
   const [dataSummary, setDataSummary] = useState<TrainingDataSummary | null>(null);
   const [selectedPairs, setSelectedPairs] = useState<string[]>([...ALL_PAIRS]);
+  const [selectedTimeframes, setSelectedTimeframes] = useState<string[]>(['1h', '4h', '1d']);
   const [yearsBack, setYearsBack] = useState(5);
   const [downloading, setDownloading] = useState(false);
+  const [downloadEstimate, setDownloadEstimate] = useState<string | null>(null);
 
   // Training state
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus | null>(null);
   const [initialCash, setInitialCash] = useState(10000);
   const [training, setTraining] = useState(false);
+  const [seedRunId, setSeedRunId] = useState<string>('');
+  const [trainingError, setTrainingError] = useState<string | null>(null);
 
   // Results state
   const [runs, setRuns] = useState<TrainingRun[]>([]);
@@ -47,9 +52,16 @@ export const HistoricalTrainingDashboard: React.FC = () => {
   useEffect(() => {
     loadDataSummary();
     loadRuns();
+    // Check if training is already running
+    api.getTrainingStatus().then(status => {
+      if (status.active) {
+        setTraining(true);
+        setTrainingStatus(status);
+      }
+    }).catch(() => {});
   }, []);
 
-  // Poll training status when training is active
+  // Poll training/download status
   useEffect(() => {
     if (training || downloading) {
       pollRef.current = setInterval(async () => {
@@ -59,6 +71,9 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             setTrainingStatus(status);
             if (!status.active && status.status !== 'running') {
               setTraining(false);
+              if (status.status === 'error') {
+                setTrainingError((status as any).error || 'Training failed');
+              }
               loadRuns();
             }
           }
@@ -95,7 +110,11 @@ export const HistoricalTrainingDashboard: React.FC = () => {
   const handleDownload = async () => {
     try {
       setDownloading(true);
-      await api.startDownload(selectedPairs, yearsBack);
+      setDownloadEstimate(null);
+      const result = await api.startDownload(selectedPairs, yearsBack, selectedTimeframes);
+      if (result.estimate) {
+        setDownloadEstimate(`~${result.estimate.estimatedMinutes} min (${result.estimate.totalRequests} requests)`);
+      }
     } catch (e: any) {
       alert(e.message);
       setDownloading(false);
@@ -113,12 +132,14 @@ export const HistoricalTrainingDashboard: React.FC = () => {
     try {
       setTraining(true);
       setTrainingStatus(null);
+      setTrainingError(null);
       await api.startTraining({
         tickers: selectedPairs,
         initialCash,
+        seedRunId: seedRunId || undefined,
       });
     } catch (e: any) {
-      alert(e.message);
+      setTrainingError(e.message);
       setTraining(false);
     }
   };
@@ -169,6 +190,14 @@ export const HistoricalTrainingDashboard: React.FC = () => {
     );
   };
 
+  const toggleTimeframe = (tf: string) => {
+    setSelectedTimeframes(prev =>
+      prev.includes(tf)
+        ? prev.filter(t => t !== tf)
+        : [...prev, tf]
+    );
+  };
+
   const formatDuration = (ms: number) => {
     const s = Math.floor(ms / 1000);
     const m = Math.floor(s / 60);
@@ -177,6 +206,9 @@ export const HistoricalTrainingDashboard: React.FC = () => {
     if (m > 0) return `${m}m ${s % 60}s`;
     return `${s}s`;
   };
+
+  const hasData = dataSummary && Object.values(dataSummary.pairs || {}).some(p => (p as any).count > 0 || (p as any).totalCount > 0);
+  const completedRuns = runs.filter(r => r.status === 'completed');
 
   // Mini equity chart using CSS bars
   const renderEquityChart = (data: TrainingEquityPoint[]) => {
@@ -228,13 +260,13 @@ export const HistoricalTrainingDashboard: React.FC = () => {
         {/* Section 1: Data Download */}
         <section className="glass-card p-5 space-y-4">
           <h2 className="text-lg font-semibold text-cyan-300 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            <span className={`w-2 h-2 rounded-full ${downloading ? 'bg-blue-500 animate-pulse' : 'bg-blue-500'}`} />
             Data Download
           </h2>
 
           {/* Pair selection */}
           <div>
-            <div className="text-xs text-gray-400 mb-2">Select pairs to download (Kraken 1h candles)</div>
+            <div className="text-xs text-gray-400 mb-2">Select pairs (Binance public API — no auth needed)</div>
             <div className="flex flex-wrap gap-2">
               {ALL_PAIRS.map(pair => (
                 <button
@@ -258,7 +290,33 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Years back */}
+          {/* Timeframe selection */}
+          <div>
+            <div className="text-xs text-gray-400 mb-2">Select timeframes to download</div>
+            <div className="flex flex-wrap gap-2">
+              {ALL_TIMEFRAMES.map(tf => (
+                <button
+                  key={tf}
+                  onClick={() => toggleTimeframe(tf)}
+                  className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                    selectedTimeframes.includes(tf)
+                      ? 'border-purple-500 bg-purple-500/20 text-purple-300'
+                      : 'border-gray-600 text-gray-500 hover:border-gray-400'
+                  }`}
+                >
+                  {tf}
+                </button>
+              ))}
+              <button
+                onClick={() => setSelectedTimeframes(selectedTimeframes.length === ALL_TIMEFRAMES.length ? ['1h'] : [...ALL_TIMEFRAMES])}
+                className="text-xs px-3 py-1 rounded-full border border-gray-600 text-gray-400 hover:text-white"
+              >
+                {selectedTimeframes.length === ALL_TIMEFRAMES.length ? 'Just 1h' : 'All TFs'}
+              </button>
+            </div>
+          </div>
+
+          {/* Years back + download button */}
           <div className="flex items-center gap-4">
             <div>
               <label className="text-xs text-gray-400">Years back</label>
@@ -274,7 +332,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             </div>
             <button
               onClick={downloading ? handleAbortDownload : handleDownload}
-              disabled={selectedPairs.length === 0}
+              disabled={selectedPairs.length === 0 || selectedTimeframes.length === 0}
               className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
                 downloading
                   ? 'bg-red-600 hover:bg-red-700'
@@ -283,40 +341,63 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             >
               {downloading ? 'Abort Download' : 'Download Data'}
             </button>
+            {downloadEstimate && !downloading && (
+              <span className="text-xs text-gray-400">Estimate: {downloadEstimate}</span>
+            )}
           </div>
 
           {/* Download progress */}
           {downloading && downloadStatus && (
-            <div className="space-y-2">
-              <div className="text-xs text-gray-400">
-                Elapsed: {formatDuration(downloadStatus.elapsed)}
+            <div className="space-y-3">
+              {/* Overall progress bar */}
+              <div>
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                  <span>Overall: {(downloadStatus as any).progress?.toFixed(1) || 0}%</span>
+                  <span>
+                    {downloadStatus.currentTicker && downloadStatus.currentTimeframe
+                      ? `Downloading ${downloadStatus.currentTicker} ${downloadStatus.currentTimeframe}`
+                      : 'Starting...'}
+                  </span>
+                  <span>Elapsed: {formatDuration(downloadStatus.elapsed)}</span>
+                </div>
+                <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full transition-all"
+                    style={{ width: `${(downloadStatus as any).progress || 0}%` }}
+                  />
+                </div>
+                <div className="text-[10px] text-gray-500 mt-1">
+                  {(downloadStatus as any).completedRequests || 0} / {(downloadStatus as any).totalRequestsEstimate || '?'} API requests
+                </div>
               </div>
-              {Object.entries(downloadStatus.pairs).map(([pair, info]) => (
-                <div key={pair} className="flex items-center gap-3">
-                  <span className="text-xs font-mono w-16">{pair}</span>
+
+              {/* Timeframe progress */}
+              {downloadStatus.timeframes && Object.entries(downloadStatus.timeframes).map(([tf, info]: [string, any]) => (
+                <div key={tf} className="flex items-center gap-3">
+                  <span className="text-xs font-mono w-10 text-purple-300">{tf}</span>
                   <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all ${
                         info.status === 'complete' ? 'bg-green-500' :
-                        info.status === 'error' ? 'bg-red-500' :
                         info.status === 'downloading' ? 'bg-blue-500 animate-pulse' : 'bg-gray-600'
                       }`}
-                      style={{ width: info.status === 'complete' ? '100%' : info.status === 'downloading' ? '60%' : '0%' }}
+                      style={{ width: info.status === 'complete' ? '100%' : info.status === 'downloading' ? '50%' : '0%' }}
                     />
                   </div>
-                  <span className="text-xs text-gray-400 w-20 text-right">
-                    {info.downloaded.toLocaleString()} candles
+                  <span className="text-xs text-gray-400 w-24 text-right">
+                    {info.totalCandles?.toLocaleString() || 0} candles
                   </span>
                   {info.status === 'complete' && <span className="text-green-400 text-xs">Done</span>}
-                  {info.status === 'error' && <span className="text-red-400 text-xs" title={info.error}>Error</span>}
                 </div>
               ))}
+
+              {/* Auxiliary data */}
               <div className="flex gap-4 text-xs">
-                <span className={downloadStatus.fearGreed.status === 'complete' ? 'text-green-400' : 'text-gray-400'}>
-                  Fear & Greed: {downloadStatus.fearGreed.count} days
+                <span className={downloadStatus.fearGreed?.status === 'complete' ? 'text-green-400' : 'text-gray-400'}>
+                  Fear & Greed: {downloadStatus.fearGreed?.count || 0} days
                 </span>
-                <span className={downloadStatus.defiTvl.status === 'complete' ? 'text-green-400' : 'text-gray-400'}>
-                  DeFi TVL: {downloadStatus.defiTvl.count} days
+                <span className={downloadStatus.defiTvl?.status === 'complete' ? 'text-green-400' : 'text-gray-400'}>
+                  DeFi TVL: {downloadStatus.defiTvl?.count || 0} days
                 </span>
               </div>
             </div>
@@ -324,13 +405,32 @@ export const HistoricalTrainingDashboard: React.FC = () => {
 
           {/* Data summary */}
           {dataSummary && !downloading && (
-            <div className="space-y-2">
-              <div className="text-xs text-gray-400 font-semibold">Downloaded Data</div>
+            <div className="space-y-3">
+              <div className="text-xs text-gray-400 font-semibold">
+                Downloaded Data {(dataSummary as any).totalCandles > 0 && (
+                  <span className="text-cyan-300 ml-2">({((dataSummary as any).totalCandles || 0).toLocaleString()} total candles)</span>
+                )}
+              </div>
+
+              {/* Timeframe summary */}
+              {(dataSummary as any).timeframeSummary && (
+                <div className="flex gap-3 flex-wrap">
+                  {Object.entries((dataSummary as any).timeframeSummary || {}).map(([tf, info]: [string, any]) => (
+                    <div key={tf} className="glass-card px-3 py-1.5 text-center">
+                      <div className="text-[10px] text-purple-300 font-mono">{tf}</div>
+                      <div className="text-xs font-bold">{(info.totalCandles || 0).toLocaleString()}</div>
+                      <div className="text-[10px] text-gray-500">{info.pairsWithData || 0} pairs</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Per-pair grid (1h candles for simplicity) */}
               <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
-                {Object.entries(dataSummary.pairs).map(([pair, info]) => (
+                {Object.entries(dataSummary.pairs).map(([pair, info]: [string, any]) => (
                   <div key={pair} className="glass-card p-2 text-center">
                     <div className="text-xs font-mono text-cyan-300">{pair}</div>
-                    <div className="text-sm font-bold">{info.count.toLocaleString()}</div>
+                    <div className="text-sm font-bold">{(info.totalCount || info.count || 0).toLocaleString()}</div>
                     <div className="text-[10px] text-gray-500">
                       {info.earliest ? new Date(info.earliest).toLocaleDateString() : 'N/A'}
                     </div>
@@ -352,19 +452,37 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             Training Engine
           </h2>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-end gap-4">
             <div>
-              <label className="text-xs text-gray-400">Initial Cash ($)</label>
+              <label className="text-xs text-gray-400 block mb-1">Initial Cash ($)</label>
               <input
                 type="number"
                 value={initialCash}
                 onChange={e => setInitialCash(Number(e.target.value))}
-                className="ml-2 bg-gray-800 text-white text-sm px-2 py-1 rounded border border-gray-600 w-24"
+                className="bg-gray-800 text-white text-sm px-2 py-1.5 rounded border border-gray-600 w-24"
               />
             </div>
+
+            {/* Seed Run (Iterative Training) */}
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Seed from run (iterative)</label>
+              <select
+                value={seedRunId}
+                onChange={e => setSeedRunId(e.target.value)}
+                className="bg-gray-800 text-white text-sm px-2 py-1.5 rounded border border-gray-600 w-56"
+              >
+                <option value="">Fresh start (no seed)</option>
+                {completedRuns.map(run => (
+                  <option key={run.run_id} value={run.run_id}>
+                    {run.run_id.slice(6, 20)}... ({run.total_trades} trades, {run.win_rate?.toFixed(0)}% WR)
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <button
               onClick={training ? handleStopTraining : handleStartTraining}
-              disabled={!dataSummary || Object.values(dataSummary?.pairs || {}).every(p => p.count === 0)}
+              disabled={!hasData && !training}
               className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
                 training
                   ? 'bg-red-600 hover:bg-red-700'
@@ -374,6 +492,27 @@ export const HistoricalTrainingDashboard: React.FC = () => {
               {training ? 'Stop Training' : 'Start Training'}
             </button>
           </div>
+
+          {/* Error display */}
+          {trainingError && (
+            <div className="bg-red-900/30 border border-red-500/50 rounded p-3 text-sm text-red-300">
+              Training error: {trainingError}
+            </div>
+          )}
+
+          {/* No data warning */}
+          {!hasData && !training && (
+            <div className="bg-yellow-900/20 border border-yellow-500/30 rounded p-3 text-sm text-yellow-300">
+              No historical data downloaded yet. Use the Data Download section above first.
+            </div>
+          )}
+
+          {/* Epoch indicator */}
+          {trainingStatus?.active && (trainingStatus as any).epoch > 0 && (
+            <div className="text-xs text-purple-300">
+              Epoch {(trainingStatus as any).epoch} — Seeded from: {(trainingStatus as any).seedRunId?.slice(0, 20)}...
+            </div>
+          )}
 
           {/* Live training progress */}
           {trainingStatus && trainingStatus.active && trainingStatus.progress && (
@@ -460,7 +599,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                 <div>
                   <div className="text-xs text-gray-400 mb-2">Recent Trades</div>
                   <div className="max-h-40 overflow-y-auto space-y-1 custom-scrollbar">
-                    {trainingStatus.recentTrades.filter(t => t.type === 'SELL').slice(0, 10).map((trade, i) => (
+                    {trainingStatus.recentTrades.filter((t: any) => t.type === 'SELL').slice(0, 10).map((trade: any, i: number) => (
                       <div key={i} className="flex items-center gap-2 text-xs">
                         <span className={`font-mono ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                           {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}
@@ -489,36 +628,45 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             <div>
               <div className="text-xs text-gray-400 mb-2">Training History</div>
               <div className="max-h-48 overflow-y-auto space-y-1 custom-scrollbar">
-                {runs.map(run => (
-                  <button
-                    key={run.run_id}
-                    onClick={() => handleSelectRun(run.run_id)}
-                    className={`w-full flex items-center justify-between p-2 rounded text-xs transition-colors ${
-                      selectedRun === run.run_id
-                        ? 'bg-cyan-800/30 border border-cyan-500/50'
-                        : 'hover:bg-gray-800 border border-transparent'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${
-                        run.status === 'completed' ? 'bg-green-500' :
-                        run.status === 'running' ? 'bg-blue-500 animate-pulse' :
-                        run.status === 'error' ? 'bg-red-500' : 'bg-gray-500'
-                      }`} />
-                      <span className="text-gray-300 font-mono">{run.run_id.slice(0, 20)}...</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-gray-400">{run.total_trades} trades</span>
-                      <span className={run.win_rate >= 50 ? 'text-green-400' : 'text-red-400'}>
-                        {run.win_rate?.toFixed(1)}% WR
-                      </span>
-                      <span className={run.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-                        ${run.total_pnl?.toFixed(2)}
-                      </span>
-                      <span className="text-gray-500">{new Date(run.start_time).toLocaleDateString()}</span>
-                    </div>
-                  </button>
-                ))}
+                {runs.map(run => {
+                  const configJson = (run as any).config_json;
+                  let epoch = 0;
+                  try { epoch = configJson ? JSON.parse(configJson).epoch || 0 : 0; } catch {}
+                  return (
+                    <button
+                      key={run.run_id}
+                      onClick={() => handleSelectRun(run.run_id)}
+                      className={`w-full flex items-center justify-between p-2 rounded text-xs transition-colors ${
+                        selectedRun === run.run_id
+                          ? 'bg-cyan-800/30 border border-cyan-500/50'
+                          : 'hover:bg-gray-800 border border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${
+                          run.status === 'completed' ? 'bg-green-500' :
+                          run.status === 'running' ? 'bg-blue-500 animate-pulse' :
+                          run.status === 'error' ? 'bg-red-500' : 'bg-gray-500'
+                        }`} />
+                        <span className="text-gray-300 font-mono">{run.run_id.slice(6, 20)}...</span>
+                        {epoch > 0 && <span className="text-purple-400 text-[10px]">Epoch {epoch}</span>}
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <span className="text-gray-400">{run.total_trades} trades</span>
+                        <span className={run.win_rate >= 50 ? 'text-green-400' : 'text-red-400'}>
+                          {run.win_rate?.toFixed(1)}% WR
+                        </span>
+                        <span className={run.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                          ${run.total_pnl?.toFixed(2)}
+                        </span>
+                        {run.status === 'error' && (
+                          <span className="text-red-400" title={(run as any).error}>ERR</span>
+                        )}
+                        <span className="text-gray-500">{new Date(run.start_time).toLocaleDateString()}</span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -583,7 +731,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                 <div>
                   <div className="text-xs text-gray-400 mb-2">Learned Strategy Weights</div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    {Object.entries(results.learnedState.adaptiveWeights).map(([strat, data]) => {
+                    {Object.entries(results.learnedState.adaptiveWeights).map(([strat, data]: [string, any]) => {
                       const total = data.wins + data.losses;
                       const wr = total > 0 ? (data.wins / total * 100) : 0;
                       return (
