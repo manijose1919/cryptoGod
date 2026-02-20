@@ -1,0 +1,316 @@
+/**
+ * Training API Routes — Historical ML Training ("Time Machine")
+ *
+ * Routes for downloading historical data, running training, and applying results.
+ */
+
+import express from 'express';
+import {
+  startDownload,
+  abortDownload,
+  getDownloadStatus,
+  getDataSummary,
+  AVAILABLE_PAIRS,
+} from '../services/historicalDataService.js';
+import {
+  startTraining,
+  stopTraining,
+  getTrainingStatus,
+  getTrainingResults,
+  getLearnedState,
+} from '../services/historicalTrainingEngine.js';
+import {
+  getTrainingRuns,
+  getTrainingRun,
+  getTrainingTrades,
+  getTrainingEquity,
+  getTrainingMLSamples,
+  getTrainingMLSampleCount,
+  insertMLFeatures,
+  initializeTrainingTables,
+} from '../services/database.js';
+
+// Import live system state transfer functions
+import { importState as awImportState, exportState as awExportState } from '../services/adaptiveWeights.js';
+import { importState as beastImportState, exportState as beastExportState } from '../services/beastMode.js';
+import { importState as cbImportState, exportState as cbExportState } from '../services/circuitBreaker.js';
+import { importState as optImportState, exportState as optExportState } from '../services/parameterOptimizer.js';
+
+const router = express.Router();
+
+// Initialize training tables (deferred — DB is already initialized by server.js)
+let tablesInitialized = false;
+function ensureTables() {
+  if (!tablesInitialized) {
+    try {
+      initializeTrainingTables();
+      tablesInitialized = true;
+    } catch (e) {
+      console.warn('[Training Routes] Table init warning:', e.message);
+    }
+  }
+}
+
+// Middleware: ensure tables exist before any route handler
+router.use((req, res, next) => {
+  ensureTables();
+  next();
+});
+
+// ============================================
+// DATA DOWNLOAD
+// ============================================
+
+/**
+ * POST /api/training/download — Start historical data download
+ * Body: { tickers?: string[], yearsBack?: number }
+ */
+router.post('/download', async (req, res) => {
+  try {
+    const { tickers, yearsBack } = req.body || {};
+    const result = await startDownload(
+      tickers || AVAILABLE_PAIRS,
+      yearsBack || 5
+    );
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/training/download/abort — Abort active download
+ */
+router.post('/download/abort', (req, res) => {
+  const result = abortDownload();
+  res.json(result);
+});
+
+/**
+ * GET /api/training/download/status — Get download progress
+ */
+router.get('/download/status', (req, res) => {
+  res.json(getDownloadStatus());
+});
+
+/**
+ * GET /api/training/data/summary — Get summary of all downloaded data
+ */
+router.get('/data/summary', (req, res) => {
+  res.json(getDataSummary());
+});
+
+// ============================================
+// TRAINING
+// ============================================
+
+/**
+ * POST /api/training/start — Start a training run
+ * Body: { tickers?: string[], initialCash?: number, startTime?: number, endTime?: number }
+ */
+router.post('/start', async (req, res) => {
+  try {
+    const result = await startTraining(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/training/stop — Stop active training
+ */
+router.post('/stop', (req, res) => {
+  const result = stopTraining();
+  res.json(result);
+});
+
+/**
+ * GET /api/training/status — Live training progress (polled every 2s)
+ */
+router.get('/status', (req, res) => {
+  res.json(getTrainingStatus());
+});
+
+/**
+ * GET /api/training/results/:runId — Get completed run results
+ */
+router.get('/results/:runId', (req, res) => {
+  const results = getTrainingResults(req.params.runId);
+  if (!results) {
+    return res.status(404).json({ error: 'Training run not found' });
+  }
+  res.json(results);
+});
+
+/**
+ * GET /api/training/runs — List all training runs
+ */
+router.get('/runs', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const runs = getTrainingRuns(limit);
+  res.json(runs);
+});
+
+/**
+ * GET /api/training/trades/:runId — Get trades for a training run
+ */
+router.get('/trades/:runId', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 500, 5000);
+  const trades = getTrainingTrades(req.params.runId, limit);
+  res.json(trades);
+});
+
+/**
+ * GET /api/training/equity/:runId — Get equity curve for a training run
+ */
+router.get('/equity/:runId', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 2000, 10000);
+  const equity = getTrainingEquity(req.params.runId, limit);
+  res.json(equity);
+});
+
+// ============================================
+// STATE TRANSFER (APPLY)
+// ============================================
+
+/**
+ * GET /api/training/current-state — Get current live system state (for comparison)
+ */
+router.get('/current-state', (req, res) => {
+  try {
+    res.json({
+      adaptiveWeights: awExportState(),
+      beastMode: beastExportState(),
+      circuitBreaker: cbExportState(),
+      optimizer: optExportState(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/training/apply — Transfer learned state from training to live system
+ * Body: { runId: string, components?: string[] }
+ *
+ * components can include: 'adaptiveWeights', 'beastMode', 'circuitBreaker', 'optimizer', 'mlSamples'
+ * Defaults to all components.
+ */
+router.post('/apply', async (req, res) => {
+  try {
+    const { runId, components } = req.body || {};
+    if (!runId) {
+      return res.status(400).json({ error: 'runId is required' });
+    }
+
+    const run = getTrainingRun(runId);
+    if (!run) {
+      return res.status(404).json({ error: 'Training run not found' });
+    }
+    if (run.status !== 'completed') {
+      return res.status(400).json({ error: `Run status is "${run.status}", must be "completed"` });
+    }
+
+    const learnedState = getLearnedState(runId);
+    if (!learnedState) {
+      return res.status(400).json({ error: 'No learned state found for this run' });
+    }
+
+    const applyComponents = components || ['adaptiveWeights', 'circuitBreaker', 'optimizer', 'mlSamples'];
+    const applied = [];
+    const beforeState = {};
+
+    // Save before state for comparison
+    try { beforeState.adaptiveWeights = awExportState(); } catch (e) {}
+    try { beforeState.circuitBreaker = cbExportState(); } catch (e) {}
+    try { beforeState.optimizer = optExportState(); } catch (e) {}
+
+    // Apply adaptive weights
+    if (applyComponents.includes('adaptiveWeights') && learnedState.adaptiveWeights) {
+      try {
+        // Build import format matching adaptiveWeights.js importState()
+        const awState = {};
+        for (const [strategy, data] of Object.entries(learnedState.adaptiveWeights)) {
+          awState[strategy] = {
+            weight: data.weight || 1.0,
+            wins: data.wins || 0,
+            losses: data.losses || 0,
+            totalPnl: data.totalPnl || 0,
+          };
+        }
+        awImportState(awState);
+        applied.push('adaptiveWeights');
+      } catch (e) {
+        console.error('[Training Apply] adaptiveWeights error:', e.message);
+      }
+    }
+
+    // Apply circuit breaker Kelly data
+    if (applyComponents.includes('circuitBreaker') && learnedState.circuitBreaker) {
+      try {
+        const cbData = learnedState.circuitBreaker;
+        cbImportState({
+          totalTrades: cbData.totalTrades,
+          totalWins: cbData.totalWins,
+          totalLosses: cbData.totalLosses,
+        });
+        applied.push('circuitBreaker');
+      } catch (e) {
+        console.error('[Training Apply] circuitBreaker error:', e.message);
+      }
+    }
+
+    // Apply optimizer parameters
+    if (applyComponents.includes('optimizer') && learnedState.optimizer) {
+      try {
+        optImportState(learnedState.optimizer);
+        applied.push('optimizer');
+      } catch (e) {
+        console.error('[Training Apply] optimizer error:', e.message);
+      }
+    }
+
+    // Copy ML samples to ml_features table
+    if (applyComponents.includes('mlSamples')) {
+      try {
+        const samples = getTrainingMLSamples(runId, 10000);
+        let copied = 0;
+        for (const sample of samples) {
+          if (sample.label) {
+            insertMLFeatures({
+              ticker: sample.ticker,
+              timestamp: sample.time,
+              featuresJson: sample.features_json,
+              label: sample.label,
+              labelValue: sample.label_value,
+              labeledAt: Date.now(),
+            });
+            copied++;
+          }
+        }
+        applied.push(`mlSamples (${copied} samples)`);
+      } catch (e) {
+        console.error('[Training Apply] mlSamples error:', e.message);
+      }
+    }
+
+    console.log(`[Training] Applied learned state from run ${runId}: ${applied.join(', ')}`);
+
+    res.json({
+      success: true,
+      runId,
+      applied,
+      beforeState,
+      afterState: {
+        adaptiveWeights: awExportState(),
+        circuitBreaker: cbExportState(),
+        optimizer: optExportState(),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+export default router;

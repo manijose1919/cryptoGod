@@ -187,6 +187,9 @@ const App: React.FC = () => {
     const [isBotActive, setIsBotActive] = useState<boolean>(false);
     const [isScannerActive, setIsScannerActive] = useState<boolean>(false);
     const [scannerPaused, setScannerPaused] = useState<boolean>(false); // NEW: Prevent repeated logging
+    const [showReconnect, setShowReconnect] = useState<boolean>(false);
+    const [checkingSession, setCheckingSession] = useState<boolean>(true);
+    const [isVPSReconnect, setIsVPSReconnect] = useState<boolean>(false);
 
     // Adaptive TC State
     const [adaptiveData, setAdaptiveData] = useState<AdaptiveData | null>(null);
@@ -305,6 +308,24 @@ const App: React.FC = () => {
                 });
             })
             .catch(() => { /* Backend not running yet, use defaults */ });
+    }, []);
+
+    // Check for active backend session on mount (VPS reconnect)
+    useEffect(() => {
+        const checkForActiveSession = async () => {
+            try {
+                const res = await fetch('/api/session/full-status');
+                const data = await res.json();
+                if (data.sessionActive) {
+                    setShowReconnect(true);
+                }
+            } catch {
+                // Backend not available
+            } finally {
+                setCheckingSession(false);
+            }
+        };
+        checkForActiveSession();
     }, []);
 
     // ============================================
@@ -504,6 +525,14 @@ const App: React.FC = () => {
     // ============================================
     useEffect(() => {
         if (!isTradingActive) return; // <-- FIX: Only run when trading is active
+
+        // Skip heavy candle fetching when reconnecting to VPS session
+        // The backend bot already has all data — frontend just polls /api/session/full-status
+        if (isVPSReconnect) {
+            addLog('VPS reconnect mode — skipping candle initialization, using session polling only.', 'INFO');
+            setIsLoading(false);
+            return;
+        }
 
         const setupMarketData = async () => {
             setIsLoading(true);
@@ -1268,6 +1297,31 @@ const App: React.FC = () => {
                 isSessionActive={isBotActive}
             />
 
+            {/* Session Reconnect Overlay */}
+            {showReconnect && !isBotActive && (
+                <div className="fixed inset-0 z-50 bg-gray-900/95 flex items-center justify-center">
+                    <SessionReconnect
+                        onReconnect={() => {
+                            setShowReconnect(false);
+                            setIsVPSReconnect(true);
+                            setIsTradingActive(true);
+                            setIsBotActive(true);
+                            setIsScannerActive(true);
+                            setIsLoading(false);
+                            addLog('Reconnected to active backend session (VPS mode)', 'SPECIAL');
+                        }}
+                        onStopSession={() => {
+                            setShowReconnect(false);
+                            setIsBotActive(false);
+                            setIsTradingActive(false);
+                        }}
+                        onStartNew={() => {
+                            setShowReconnect(false);
+                        }}
+                    />
+                </div>
+            )}
+
             {/* Navigation Bar */}
             <nav className="flex items-center justify-between px-4 py-2 border-b border-gray-700/50 bg-gray-900/80">
                 <div className="flex items-center gap-3">
@@ -1277,6 +1331,7 @@ const App: React.FC = () => {
                         { href: '/performance', label: 'Performance' },
                         { href: '/backtest', label: 'Backtest' },
                         { href: '/replay', label: 'Replay' },
+                        { href: '/training', label: 'Training' },
                     ].map(link => (
                         <a key={link.href} href={link.href}
                             className={`text-xs px-2 py-1 rounded ${link.active ? 'bg-cyan-800/50 text-cyan-300' : 'text-gray-400 hover:text-white'}`}>

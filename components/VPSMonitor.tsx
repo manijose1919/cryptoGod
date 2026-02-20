@@ -113,8 +113,11 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
     );
   }
 
-  const dailyRate = status.uptime > 0 && status.portfolio.initialBudget > 0
-    ? (status.portfolio.pnl / status.portfolio.initialBudget * 100) / (status.uptime / 86400000)
+  const portfolio = status.portfolio || { initialBudget: 0, pnl: 0, pnlPercent: 0, totalValue: 0, positions: [] };
+  const exchange = status.exchange || { id: 'unknown', wsConnected: false };
+
+  const dailyRate = status.uptime > 0 && portfolio.initialBudget > 0
+    ? (portfolio.pnl / portfolio.initialBudget * 100) / (status.uptime / 86400000)
     : 0;
 
   const estimatedDaysToDouble = dailyRate > 0
@@ -140,8 +143,8 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
             {status.tradingMode}
           </span>
           <span className="text-gray-500">|</span>
-          <span className="text-gray-400">{status.exchange.id}</span>
-          <span className={`w-2 h-2 rounded-full ${status.exchange.wsConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+          <span className="text-gray-400">{exchange.id}</span>
+          <span className={`w-2 h-2 rounded-full ${exchange.wsConnected ? 'bg-green-400' : 'bg-red-400'}`} />
         </div>
       </div>
 
@@ -153,13 +156,13 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">
           <div className="text-xs text-gray-400">Portfolio Value</div>
-          <div className="text-sm font-bold text-white">${status.portfolio.totalValue.toFixed(2)}</div>
+          <div className="text-sm font-bold text-white">${portfolio.totalValue.toFixed(2)}</div>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">
           <div className="text-xs text-gray-400">Total P&L</div>
           <div className="text-sm font-bold">
-            <AnimatedNumber value={status.portfolio.pnl} showSign />
-            <span className="text-xs ml-1">(<AnimatedNumber value={status.portfolio.pnlPercent} format="percent" showSign />)</span>
+            <AnimatedNumber value={portfolio.pnl} showSign />
+            <span className="text-xs ml-1">(<AnimatedNumber value={portfolio.pnlPercent} format="percent" showSign />)</span>
           </div>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">
@@ -175,7 +178,7 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
           <div className="flex items-end gap-px h-16">
             {equityCurve.slice(-60).map((point, i) => {
               const height = ((point.value - chartMin) / chartRange) * 100;
-              const isPositive = point.value >= (status?.portfolio.initialBudget || 0);
+              const isPositive = point.value >= (portfolio.initialBudget || 0);
               return (
                 <div
                   key={i}
@@ -190,11 +193,11 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
       )}
 
       {/* Open Positions */}
-      {status.portfolio.positions.length > 0 && (
+      {portfolio.positions.length > 0 && (
         <div className="bg-gray-800/30 rounded-lg p-3">
-          <div className="text-xs text-gray-400 mb-2">Open Positions ({status.portfolio.positions.length})</div>
+          <div className="text-xs text-gray-400 mb-2">Open Positions ({portfolio.positions.length})</div>
           <div className="space-y-1">
-            {status.portfolio.positions.map(pos => (
+            {portfolio.positions.map((pos: any) => (
               <div key={pos.ticker} className="flex items-center justify-between text-xs py-1 border-b border-gray-700/30 last:border-0">
                 <div className="flex items-center gap-2">
                   <span className="text-white font-mono font-bold">{pos.ticker}</span>

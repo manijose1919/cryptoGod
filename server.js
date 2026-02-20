@@ -437,6 +437,17 @@ app.use('/api/db', persistenceRoutes);
 // Mount TradingView webhook routes
 // app.use('/api/tradingview', tradingviewRoutes);
 
+// Mount Historical Training (Time Machine) routes
+let trainingRoutes = null;
+try {
+    const mod = await import('./routes/training.js');
+    trainingRoutes = mod.default;
+    app.use('/api/training', trainingRoutes);
+    console.log('[Server] Training routes loaded');
+} catch (e) {
+    console.warn('[Server] Training routes not available:', e.message);
+}
+
 // Clean expired sessions periodically
 setInterval(() => {
     const cleaned = SessionManager.cleanExpiredSessions();

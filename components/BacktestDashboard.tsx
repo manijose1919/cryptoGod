@@ -15,6 +15,7 @@ const NAV_LINKS = [
   { to: '/performance', label: 'Performance' },
   { to: '/backtest', label: 'Backtest' },
   { to: '/replay', label: 'Replay' },
+  { to: '/training', label: 'Training' },
 ];
 
 const STRATEGIES = ['TREND', 'BREAKOUT', 'MOMENTUM', 'SWING', 'WHALE', 'CONFLUENCE', 'DIVERGENCE', 'ADAPTIVE', 'MA_CROSSOVER', 'MEAN_REVERSION', 'REVERSAL', 'RANGE'];

@@ -10,6 +10,7 @@ import { BacktestDashboard } from './components/BacktestDashboard';
 import { ReplayDashboard } from './components/ReplayDashboard';
 import { RiskDashboard } from './components/RiskDashboard';
 import { SystemHealthPanel } from './components/SystemHealthPanel';
+import { HistoricalTrainingDashboard } from './components/HistoricalTrainingDashboard';
 import './index.css';
 import './ui-theme.css';
 
@@ -63,6 +64,7 @@ root.render(
           <Route path="/replay" element={<ReplayDashboard />} />
           <Route path="/risk" element={<RiskDashboard />} />
           <Route path="/system" element={<SystemHealthPanel />} />
+          <Route path="/training" element={<HistoricalTrainingDashboard />} />
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>

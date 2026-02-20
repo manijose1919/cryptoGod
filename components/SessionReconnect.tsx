@@ -113,36 +113,36 @@ const SessionReconnect: React.FC<SessionReconnectProps> = ({ onReconnect, onStop
         </div>
         <div className="flex justify-between text-sm">
           <span className="text-gray-400">Exchange</span>
-          <span className="text-white">{status.exchange.id} {status.exchange.wsConnected ? '(WS connected)' : '(WS disconnected)'}</span>
+          <span className="text-white">{status.exchange?.id || 'unknown'} {status.exchange?.wsConnected ? '(WS connected)' : '(WS disconnected)'}</span>
         </div>
         <div className="flex justify-between text-sm">
           <span className="text-gray-400">Trades</span>
-          <span className="text-white">{status.session?.totalTrades || 0}</span>
+          <span className="text-white">{status.session?.totalTrades ?? 0}</span>
         </div>
 
         <hr className="border-gray-700 my-2" />
 
         <div className="flex justify-between">
           <span className="text-gray-400">Portfolio Value</span>
-          <span className="text-white font-bold">${status.portfolio.totalValue.toFixed(2)}</span>
+          <span className="text-white font-bold">${(status.portfolio?.totalValue ?? 0).toFixed(2)}</span>
         </div>
         <div className="flex justify-between">
           <span className="text-gray-400">P&L</span>
-          <span className={status.portfolio.pnl >= 0 ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
-            {status.portfolio.pnl >= 0 ? '+' : ''}${status.portfolio.pnl.toFixed(2)}
-            ({status.portfolio.pnlPercent >= 0 ? '+' : ''}{status.portfolio.pnlPercent.toFixed(2)}%)
+          <span className={(status.portfolio?.pnl ?? 0) >= 0 ? 'text-green-400 font-bold' : 'text-red-400 font-bold'}>
+            {(status.portfolio?.pnl ?? 0) >= 0 ? '+' : ''}${(status.portfolio?.pnl ?? 0).toFixed(2)}
+            ({(status.portfolio?.pnlPercent ?? 0) >= 0 ? '+' : ''}{(status.portfolio?.pnlPercent ?? 0).toFixed(2)}%)
           </span>
         </div>
         <div className="flex justify-between text-sm">
           <span className="text-gray-400">Open Positions</span>
-          <span className="text-white">{status.portfolio.positions.length}</span>
+          <span className="text-white">{status.portfolio?.positions?.length ?? 0}</span>
         </div>
       </div>
 
-      {status.portfolio.positions.length > 0 && (
+      {(status.portfolio?.positions?.length ?? 0) > 0 && (
         <div className="bg-gray-800/30 rounded-lg p-3 mb-4">
           <div className="text-xs text-gray-400 mb-2">Open Positions</div>
-          {status.portfolio.positions.map(pos => (
+          {status.portfolio.positions.map((pos: any) => (
             <div key={pos.ticker} className="flex justify-between text-sm py-1 border-b border-gray-700/50 last:border-0">
               <span className="text-white font-mono">{pos.ticker}</span>
               <span className={pos.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}>

@@ -9,6 +9,7 @@ const NAV_LINKS = [
   { to: '/performance', label: 'Performance' },
   { to: '/backtest', label: 'Backtest' },
   { to: '/replay', label: 'Replay' },
+  { to: '/training', label: 'Training' },
 ];
 
 export const ReplayDashboard: React.FC = () => {
