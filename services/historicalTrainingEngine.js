@@ -1265,12 +1265,13 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
       const candles = candleWindows[ticker];
       if (!candles || candles.length < 2) continue;
 
-      const currentPrice = candles[candles.length - 1].c * (1 - SLIPPAGE_PER_SIDE); // Sell slippage
+      const rawPrice = candles[candles.length - 1].c;
+      const currentPrice = rawPrice * (1 - SLIPPAGE_PER_SIDE); // Sell slippage for PnL
 
-      // Update highest price tracking
-      if (currentPrice > (position.highestPrice || 0)) {
-        position.highestPrice = currentPrice;
-        const pnlPct = (currentPrice - position.entryPrice) / position.entryPrice;
+      // Update highest price tracking using RAW price (not slippage-adjusted)
+      if (rawPrice > (position.highestPrice || 0)) {
+        position.highestPrice = rawPrice;
+        const pnlPct = (rawPrice - position.entryPrice) / position.entryPrice;
         position.highestPnlPct = pnlPct;
       }
 

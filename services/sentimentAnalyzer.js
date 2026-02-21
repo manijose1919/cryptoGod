@@ -11,8 +11,41 @@
  * Requirements 16, 49, 50
  */
 
-import { calculateSentimentFromMarketData } from './enhancedSentimentService.js';
 import { fetchFearGreedIndex, fetchCryptoNews } from './socialSentiment.js';
+
+/**
+ * Simple price-action sentiment proxy for backend use.
+ * Analyzes recent candle momentum and buying pressure.
+ * Returns a score from -1 (very bearish) to +1 (very bullish).
+ */
+function calculatePriceActionSentiment(candles) {
+  if (!candles || candles.length < 20) return 0;
+
+  const recent = candles.slice(-20);
+  const veryRecent = candles.slice(-5);
+
+  // Normalize candle fields (handle both {c,h,l,o,v} and {close,high,low,open,volume})
+  const close = c => c.c ?? c.close ?? 0;
+  const high = c => c.h ?? c.high ?? 0;
+  const low = c => c.l ?? c.low ?? 0;
+
+  // 1. Price momentum
+  const priceChange = (close(recent[recent.length - 1]) - close(recent[0])) / (close(recent[0]) || 1);
+  const shortChange = (close(veryRecent[veryRecent.length - 1]) - close(veryRecent[0])) / (close(veryRecent[0]) || 1);
+
+  // 2. Buying pressure (close position within candle range)
+  let buyPressure = 0;
+  for (const c of recent) {
+    const range = high(c) - low(c);
+    buyPressure += range > 0 ? (close(c) - low(c)) / range : 0.5;
+  }
+  buyPressure = buyPressure / recent.length; // 0 to 1, >0.5 = bullish
+
+  // 3. Combine: momentum (60%) + buying pressure (40%)
+  const momentumScore = Math.max(-1, Math.min(1, priceChange * 10 + shortChange * 5));
+  const pressureScore = (buyPressure - 0.5) * 2; // -1 to +1
+  return momentumScore * 0.6 + pressureScore * 0.4;
+}
 
 const sentimentAlerts = [];
 const MAX_ALERTS = 100;
@@ -55,8 +88,7 @@ export async function performDeepSentimentAnalysis(ticker, candles) {
   // 3. Price-action sentiment (derived from market data)
   let priceScore = 0;
   try {
-    const priceSentiment = calculateSentimentFromMarketData(candles, ticker);
-    priceScore = priceSentiment.score / 100; // Normalize to -1..1
+    priceScore = calculatePriceActionSentiment(candles); // Already -1..+1
   } catch (e) {
     priceScore = 0;
   }
