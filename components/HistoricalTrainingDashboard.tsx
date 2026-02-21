@@ -37,6 +37,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
   // Training state
   const [trainingStatus, setTrainingStatus] = useState<TrainingStatus | null>(null);
   const [initialCash, setInitialCash] = useState(10000);
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [training, setTraining] = useState(false);
   const [seedRunId, setSeedRunId] = useState<string>('');
   const [trainingError, setTrainingError] = useState<string | null>(null);
@@ -528,37 +529,40 @@ export const HistoricalTrainingDashboard: React.FC = () => {
           <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={() => {
+                  setSelectedPreset('Conservative');
                   setInitialCash(10000);
                   setSelectedPairs(['BTCUSD', 'ETHUSD']);
                   setSelectedTimeframes(['1h', '4h', '1d']);
                 }}
-                className="p-3 rounded-lg border border-blue-500/30 bg-blue-900/10 hover:bg-blue-900/30 text-left transition-colors"
+                className={`p-3 rounded-lg border text-left transition-all ${selectedPreset === 'Conservative' ? 'border-blue-400 bg-blue-900/40 ring-2 ring-blue-500/50' : 'border-blue-500/30 bg-blue-900/10 hover:bg-blue-900/30'}`}
               >
-                <div className="text-sm font-semibold text-blue-300">Conservative</div>
+                <div className="text-sm font-semibold text-blue-300 flex items-center gap-2">{selectedPreset === 'Conservative' && <span className="w-2 h-2 rounded-full bg-blue-400" />}Conservative</div>
                 <div className="text-[10px] text-gray-400 mt-1">Low risk, major pairs only</div>
                 <div className="text-[10px] text-gray-500 mt-1">2 pairs | 1h, 4h, 1d</div>
               </button>
               <button
                 onClick={() => {
+                  setSelectedPreset('Balanced');
                   setInitialCash(10000);
                   setSelectedPairs([...ALL_PAIRS].slice(0, 6));
                   setSelectedTimeframes(['15m', '1h', '4h']);
                 }}
-                className="p-3 rounded-lg border border-purple-500/30 bg-purple-900/10 hover:bg-purple-900/30 text-left transition-colors"
+                className={`p-3 rounded-lg border text-left transition-all ${selectedPreset === 'Balanced' ? 'border-purple-400 bg-purple-900/40 ring-2 ring-purple-500/50' : 'border-purple-500/30 bg-purple-900/10 hover:bg-purple-900/30'}`}
               >
-                <div className="text-sm font-semibold text-purple-300">Balanced</div>
+                <div className="text-sm font-semibold text-purple-300 flex items-center gap-2">{selectedPreset === 'Balanced' && <span className="w-2 h-2 rounded-full bg-purple-400" />}Balanced</div>
                 <div className="text-[10px] text-gray-400 mt-1">Mixed timeframes, 6 pairs</div>
                 <div className="text-[10px] text-gray-500 mt-1">6 pairs | 15m, 1h, 4h</div>
               </button>
               <button
                 onClick={() => {
+                  setSelectedPreset('Aggressive');
                   setInitialCash(10000);
                   setSelectedPairs([...ALL_PAIRS]);
                   setSelectedTimeframes(['5m', '15m', '1h']);
                 }}
-                className="p-3 rounded-lg border border-red-500/30 bg-red-900/10 hover:bg-red-900/30 text-left transition-colors"
+                className={`p-3 rounded-lg border text-left transition-all ${selectedPreset === 'Aggressive' ? 'border-red-400 bg-red-900/40 ring-2 ring-red-500/50' : 'border-red-500/30 bg-red-900/10 hover:bg-red-900/30'}`}
               >
-                <div className="text-sm font-semibold text-red-300">Aggressive</div>
+                <div className="text-sm font-semibold text-red-300 flex items-center gap-2">{selectedPreset === 'Aggressive' && <span className="w-2 h-2 rounded-full bg-red-400" />}Aggressive</div>
                 <div className="text-[10px] text-gray-400 mt-1">All pairs, fast timeframes</div>
                 <div className="text-[10px] text-gray-500 mt-1">{ALL_PAIRS.length} pairs | 5m, 15m, 1h</div>
               </button>
