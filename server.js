@@ -441,6 +441,10 @@ app.use(cors({
         if (!origin) return callback(null, true);
         // Allow localhost on any port for development
         if (origin.startsWith('http://localhost:')) return callback(null, true);
+        // Allow same-server access (browser accessing the server directly by IP/hostname)
+        const serverPort = CONFIG.PORT || 3033;
+        if (origin === `http://localhost:${serverPort}`) return callback(null, true);
+        if (/^https?:\/\/\d+\.\d+\.\d+\.\d+(:\d+)?$/.test(origin)) return callback(null, true);
         // Allow VPS direct access
         const vpsIp = process.env.VPS_IP;
         if (vpsIp && origin.includes(vpsIp)) return callback(null, true);
