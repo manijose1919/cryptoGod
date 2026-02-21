@@ -1312,14 +1312,15 @@ async function tradingBotLoop() {
                     } catch (e) {}
                 }
 
-                // Hard floor: reject any entry with compositeScore below optimizer floor
-                if (entryStrategy && score.compositeScore < optParams.compositeScoreFloor) {
+                // Hard floor: reject any entry with adjusted compositeScore below optimizer floor
+                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj;
+                if (entryStrategy && adjustedComposite < optParams.compositeScoreFloor) {
                     logThought({
                         type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
-                        confidence: score.compositeScore,
-                        reason: `compositeScore ${score.compositeScore} < ${optParams.compositeScoreFloor} floor`,
+                        confidence: adjustedComposite,
+                        reason: `adjustedComposite ${adjustedComposite} (raw=${score.compositeScore}, htf=${htfAdj}, funding=${fundingAdj}) < ${optParams.compositeScoreFloor} floor`,
                         regime: currentRegime,
-                        indicators: { compositeScore: score.compositeScore, entryStrategy },
+                        indicators: { compositeScore: score.compositeScore, adjustedComposite, htfAdj, fundingAdj, entryStrategy },
                     });
                     entryStrategy = null;
                 }
