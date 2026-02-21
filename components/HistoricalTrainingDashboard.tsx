@@ -526,25 +526,42 @@ export const HistoricalTrainingDashboard: React.FC = () => {
 
           {/* Training Presets */}
           <div className="grid grid-cols-3 gap-3">
-            {[
-              { name: 'Conservative', cash: 10000, pairs: ['BTCUSD', 'ETHUSD'], tfs: ['1h', '4h', '1d'], color: 'blue', desc: 'Low risk, major pairs only' },
-              { name: 'Balanced', cash: 10000, pairs: [...ALL_PAIRS].slice(0, 6), tfs: ['15m', '1h', '4h'], color: 'purple', desc: 'Mixed timeframes, 6 pairs' },
-              { name: 'Aggressive', cash: 10000, pairs: [...ALL_PAIRS], tfs: ['5m', '15m', '1h'], color: 'red', desc: 'All pairs, fast timeframes' },
-            ].map(preset => (
               <button
-                key={preset.name}
                 onClick={() => {
-                  setInitialCash(preset.cash);
-                  setSelectedPairs(preset.pairs);
-                  setSelectedTimeframes(preset.tfs);
+                  setInitialCash(10000);
+                  setSelectedPairs(['BTCUSD', 'ETHUSD']);
+                  setSelectedTimeframes(['1h', '4h', '1d']);
                 }}
-                className={`p-3 rounded-lg border border-${preset.color}-500/30 bg-${preset.color}-900/10 hover:bg-${preset.color}-900/30 text-left transition-colors`}
+                className="p-3 rounded-lg border border-blue-500/30 bg-blue-900/10 hover:bg-blue-900/30 text-left transition-colors"
               >
-                <div className={`text-sm font-semibold text-${preset.color}-300`}>{preset.name}</div>
-                <div className="text-[10px] text-gray-400 mt-1">{preset.desc}</div>
-                <div className="text-[10px] text-gray-500 mt-1">{preset.pairs.length} pairs | {preset.tfs.join(', ')}</div>
+                <div className="text-sm font-semibold text-blue-300">Conservative</div>
+                <div className="text-[10px] text-gray-400 mt-1">Low risk, major pairs only</div>
+                <div className="text-[10px] text-gray-500 mt-1">2 pairs | 1h, 4h, 1d</div>
               </button>
-            ))}
+              <button
+                onClick={() => {
+                  setInitialCash(10000);
+                  setSelectedPairs([...ALL_PAIRS].slice(0, 6));
+                  setSelectedTimeframes(['15m', '1h', '4h']);
+                }}
+                className="p-3 rounded-lg border border-purple-500/30 bg-purple-900/10 hover:bg-purple-900/30 text-left transition-colors"
+              >
+                <div className="text-sm font-semibold text-purple-300">Balanced</div>
+                <div className="text-[10px] text-gray-400 mt-1">Mixed timeframes, 6 pairs</div>
+                <div className="text-[10px] text-gray-500 mt-1">6 pairs | 15m, 1h, 4h</div>
+              </button>
+              <button
+                onClick={() => {
+                  setInitialCash(10000);
+                  setSelectedPairs([...ALL_PAIRS]);
+                  setSelectedTimeframes(['5m', '15m', '1h']);
+                }}
+                className="p-3 rounded-lg border border-red-500/30 bg-red-900/10 hover:bg-red-900/30 text-left transition-colors"
+              >
+                <div className="text-sm font-semibold text-red-300">Aggressive</div>
+                <div className="text-[10px] text-gray-400 mt-1">All pairs, fast timeframes</div>
+                <div className="text-[10px] text-gray-500 mt-1">{ALL_PAIRS.length} pairs | 5m, 15m, 1h</div>
+              </button>
           </div>
 
           <div className="flex flex-wrap items-end gap-4">
