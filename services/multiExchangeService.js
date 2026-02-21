@@ -38,12 +38,14 @@ TICKERS.forEach(ticker => {
 async function loadServices() {
   const services = [];
 
-  try {
-    binanceService = await import('./binanceDataService.js');
-    services.push('Binance');
-  } catch (err) {
-    console.warn('[MultiExchange] Binance service not available:', err.message);
-  }
+  // Binance: DISABLED — geo-blocked from VPS location, generates constant 451 errors
+  // To re-enable, uncomment below:
+  // try {
+  //   binanceService = await import('./binanceDataService.js');
+  //   services.push('Binance');
+  // } catch (err) {
+  //   console.warn('[MultiExchange] Binance service not available:', err.message);
+  // }
 
   try {
     okxService = await import('./okxDataService.js');
@@ -313,7 +315,13 @@ async function fetchCryptoPanicNews() {
 async function fetchRedditSentiment() {
   if (!redditService) return;
 
+  // Skip entirely if Reddit is in rate limit backoff
+  if (redditService.isInBackoff && redditService.isInBackoff()) return;
+
   for (const ticker of TICKERS) {
+    // Abort loop if we hit rate limits mid-cycle
+    if (redditService.isInBackoff && redditService.isInBackoff()) break;
+
     try {
       const data = await redditService.getTickerMentions(ticker);
 
@@ -459,14 +467,14 @@ export async function startDataCollection(ticker = 'BTCUSD') {
   // Load all services
   await loadServices();
 
-  // Binance: start immediately
-  if (binanceService) {
-    fetchBinanceOrderBook(); // Initial fetch
-    intervals.binance_orderbook = setInterval(fetchBinanceOrderBook, 10000);
-
-    fetchBinanceCandles(); // Initial fetch
-    intervals.binance_candles = setInterval(fetchBinanceCandles, 30000);
-  }
+  // Binance: DISABLED — geo-blocked from VPS and not needed for Kraken
+  // If re-enabling, uncomment the lines below
+  // if (binanceService) {
+  //   fetchBinanceOrderBook();
+  //   intervals.binance_orderbook = setInterval(fetchBinanceOrderBook, 10000);
+  //   fetchBinanceCandles();
+  //   intervals.binance_candles = setInterval(fetchBinanceCandles, 30000);
+  // }
 
   // OKX: start after 5s
   setTimeout(() => {
@@ -509,11 +517,11 @@ export async function startDataCollection(ticker = 'BTCUSD') {
     }
   }, 20000);
 
-  // Reddit: start after 25s
+  // Reddit: start after 25s (every 30min to avoid rate limits — Reddit free tier is very restricted)
   setTimeout(() => {
     if (redditService && isRunning) {
       fetchRedditSentiment(); // Initial fetch
-      intervals.reddit = setInterval(fetchRedditSentiment, 300000);
+      intervals.reddit = setInterval(fetchRedditSentiment, 1800000);
     }
   }, 25000);
 

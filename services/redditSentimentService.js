@@ -17,23 +17,13 @@ const TICKER_SEARCH_MAP = {
   BNBUSD: ["BNB", "binance coin"]
 };
 
-// Subreddits to monitor (expanded from 5 to 15)
+// Subreddits to monitor (reduced to highest-signal subs to respect rate limits)
 const CRYPTO_SUBREDDITS = [
   'CryptoCurrency',
   'Bitcoin',
   'ethereum',
   'CryptoMarkets',
-  'SatoshiStreetBets',
-  'CryptoMoonShots',
-  'altcoin',
-  'defi',
-  'solana',
-  'cardano',
-  'Ripple',
-  'dogecoin',
-  'binance',
-  'kucoin',
-  'CryptoTechnology'
+  'SatoshiStreetBets'
 ];
 
 // Sentiment keywords for enhanced analysis
@@ -49,10 +39,11 @@ const cache = new Map();
 
 // Rate limiting configuration
 const MIN_REQUEST_DELAY_MS = 2000; // 2 seconds between requests
-const RATE_LIMIT_BACKOFF_MS = 60000; // 60 seconds on 429
+const RATE_LIMIT_BACKOFF_MS = 600000; // 10 minutes on 429 (was 60s — too aggressive for free tier)
 let lastRequestTime = 0;
 let isBackingOff = false;
 let backoffUntil = 0;
+let consecutiveRateLimits = 0;
 
 // User-Agent for Reddit requests
 const USER_AGENT = 'TradingDashboard/1.0 (educational crypto analysis)';
@@ -98,13 +89,18 @@ async function fetchReddit(url) {
       timeout: 10000
     });
 
-    // Handle rate limiting
+    // Handle rate limiting with escalating backoff
     if (response.status === 429) {
-      console.log(`[Reddit] Rate limited (429) - backing off for 60s`);
+      consecutiveRateLimits++;
+      const multiplier = Math.min(consecutiveRateLimits, 6); // Max 1 hour backoff
+      const backoffMs = RATE_LIMIT_BACKOFF_MS * multiplier;
+      console.log(`[Reddit] Rate limited (429) - backing off for ${Math.round(backoffMs / 60000)}min (streak: ${consecutiveRateLimits})`);
       isBackingOff = true;
-      backoffUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
+      backoffUntil = Date.now() + backoffMs;
       return null;
     }
+    // Reset consecutive counter on successful request
+    consecutiveRateLimits = 0;
 
     if (!response.ok) {
       console.log(`[Reddit] HTTP ${response.status} for ${url}`);
@@ -533,6 +529,13 @@ export async function getEnhancedTickerSentiment(ticker) {
   return result;
 }
 
+/**
+ * Check if Reddit service is currently in rate limit backoff
+ */
+export function isInBackoff() {
+  return isBackingOff && Date.now() < backoffUntil;
+}
+
 // Export all functions
 export default {
   getSubredditPosts,
@@ -543,4 +546,5 @@ export default {
   analyzeTextSentiment,
   getPostComments,
   getEnhancedTickerSentiment,
+  isInBackoff,
 };

@@ -27,12 +27,14 @@ const MAX_DIVERGENCE_HISTORY = 20;
 
 // Initialize data services
 (async () => {
-  try {
-    binanceData = await import('./binanceDataService.js');
-    console.log('[SmartMoney] Binance data service loaded');
-  } catch (e) {
-    console.warn('[SmartMoney] Binance data service not available:', e.message);
-  }
+  // Binance: DISABLED — geo-blocked from VPS, generates 451 errors
+  // To re-enable: uncomment below
+  // try {
+  //   binanceData = await import('./binanceDataService.js');
+  //   console.log('[SmartMoney] Binance data service loaded');
+  // } catch (e) {
+  //   console.warn('[SmartMoney] Binance data service not available:', e.message);
+  // }
 
   try {
     okxData = await import('./okxDataService.js');
