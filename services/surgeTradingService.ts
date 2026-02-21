@@ -109,7 +109,7 @@ export function detectCandlestickPatterns(candles: Candle[]): CandlestickPattern
     patterns.push({
       name: 'BULLISH_ENGULFING',
       type: 'BULLISH',
-      strength: Math.min(95, engulfRatio * 40),
+      strength: Math.min(95, 50 + engulfRatio * 15),
       description: 'Bullish candle engulfs bearish'
     });
   }
@@ -120,7 +120,7 @@ export function detectCandlestickPatterns(candles: Candle[]): CandlestickPattern
     patterns.push({
       name: 'BEARISH_ENGULFING',
       type: 'BEARISH',
-      strength: Math.min(95, engulfRatio * 40),
+      strength: Math.min(95, 50 + engulfRatio * 15),
       description: 'Bearish candle engulfs bullish'
     });
   }
@@ -243,7 +243,7 @@ export function detectSurge(candles: Candle[]): SurgeSignal {
     urgency: 'WATCH'
   };
 
-  if (candles.length < 10) return noSignal;
+  if (candles.length < 15) return noSignal;
 
   const len = candles.length;
   const current = candles[len - 1];

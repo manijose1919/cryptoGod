@@ -121,6 +121,9 @@ export const TRADING_FEES = {
     TAKER_FEE_PERCENT: 0.075,      // Crypto.com taker fee per side
     ROUND_TRIP_FEE_PERCENT: 0.15,  // Total buy + sell fees
     FEE_BUFFER_PERCENT: 0.10,      // Slippage buffer
+    ESTIMATED_SLIPPAGE_PERCENT: 0.10, // Estimated slippage per trade
+    BID_ASK_SPREAD_PERCENT: 0.05,    // Typical bid-ask spread cost
+    TOTAL_COST_PER_TRADE: 0.30,      // Total: fees + slippage + spread (round trip)
 } as const;
 
 // ============================================
@@ -132,6 +135,9 @@ export const KRAKEN_FEES = {
     ROUND_TRIP_FEE_PERCENT: 0.52,  // Total buy + sell taker fees
     ROUND_TRIP_MAKER_PERCENT: 0.32, // Total buy + sell maker fees
     FEE_BUFFER_PERCENT: 0.10,      // Slippage buffer
+    ESTIMATED_SLIPPAGE_PERCENT: 0.15, // Kraken typically has wider spreads
+    BID_ASK_SPREAD_PERCENT: 0.08,    // Typical bid-ask spread cost
+    TOTAL_COST_PER_TRADE: 0.75,      // Total: fees + slippage + spread (round trip)
 } as const;
 
 // ============================================
@@ -226,9 +232,12 @@ export const RISK_DEFAULTS = {
     DEFAULT_TRAILING_STOP_PERCENT: 2,   // 2% trailing stop
     MIN_TRADE_SIZE_USD: 1.00,           // Minimum trade size (Crypto.com practical minimum)
     MAX_POSITION_PERCENT: 20,           // Max 20% of portfolio per position
+    MAX_CORRELATED_EXPOSURE: 35,        // Max 35% of portfolio in correlated assets
     DEFAULT_RISK_AMOUNT: 1.0,           // Risk multiplier (1.0 = 100%)
     MAX_CONCURRENT_TRADES: 5,           // Default max positions (0 = unlimited)
-    MIN_SIGNAL_CONFIDENCE: 25,          // Minimum confidence to trade (lowered for surge trading)
+    MIN_SIGNAL_CONFIDENCE: 30,          // Minimum confidence to trade
+    MIN_CANDLE_VOLUME_USD: 5000,        // Skip tickers with < $5K average candle volume
+    MAX_DRAWDOWN_FROM_PEAK: 15,         // Kill switch: stop trading at 15% drawdown from peak
 } as const;
 
 // ============================================
@@ -435,7 +444,7 @@ export const INDICATOR_PARAMS = {
     VALUE_AREA_PERCENT: 70, // 70% of volume in value area
 
     // Data limits
-    MIN_CANDLES_REQUIRED: 21,
+    MIN_CANDLES_REQUIRED: 50,
     MIN_CANDLES_FOR_MA200: 200,
     MAX_CANDLES_STORED: 200,
 } as const;

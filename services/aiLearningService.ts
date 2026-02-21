@@ -379,8 +379,9 @@ export function recordTrade(trade: {
   const pnlPercent = ((trade.exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
   const holdDuration = (trade.exitTime - trade.entryTime) / 60000; // minutes
 
+  // Fee-aware outcome: round-trip fees are ~0.15-0.52%, so account for that
   const outcome: 'WIN' | 'LOSS' | 'BREAKEVEN' =
-    pnlPercent > 0.05 ? 'WIN' : pnlPercent < -0.05 ? 'LOSS' : 'BREAKEVEN';
+    pnlPercent > 0.20 ? 'WIN' : pnlPercent < -0.20 ? 'LOSS' : 'BREAKEVEN';
 
   const memory: TradeMemory = {
     id: Date.now(),
@@ -400,9 +401,9 @@ export function recordTrade(trade: {
 
   tradeMemory.push(memory);
 
-  // Keep only last 500 trades
-  if (tradeMemory.length > 500) {
-    tradeMemory = tradeMemory.slice(-500);
+  // Keep only last 500 trades - splice in-place instead of creating new array
+  if (tradeMemory.length > 600) {
+    tradeMemory.splice(0, tradeMemory.length - 500);
   }
 
   // Persist to SQLite (fire-and-forget)
@@ -438,7 +439,7 @@ function updateLearningState(): void {
 
   const totalWinAmount = wins.reduce((sum, t) => sum + t.pnl, 0);
   const totalLossAmount = Math.abs(losses.reduce((sum, t) => sum + t.pnl, 0));
-  learningState.profitFactor = totalLossAmount > 0 ? totalWinAmount / totalLossAmount : totalWinAmount > 0 ? 999 : 0;
+  learningState.profitFactor = totalLossAmount > 0 ? Math.min(999, totalWinAmount / totalLossAmount) : totalWinAmount > 0 ? 999 : 0;
 
   // Update strategy stats
   const strategies: TradingStrategy[] = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];

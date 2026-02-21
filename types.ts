@@ -50,7 +50,7 @@ export interface SystemEvent {
   id: number;
   time: number;
   message: string;
-  type: 'BUY' | 'SELL' | 'INFO' | 'ERROR' | 'SPECIAL';
+  type: 'BUY' | 'SELL' | 'INFO' | 'WARN' | 'ERROR' | 'SPECIAL';
 }
 
 export interface Trade {
@@ -586,4 +586,66 @@ export interface TrainingResults {
     strategyBreakdown: TrainingStrategyBreakdown;
   } | null;
   strategyWeights: TrainingStrategyBreakdown | null;
+}
+
+// ============================================
+// WALK-FORWARD VALIDATION TYPES
+// ============================================
+
+export interface WalkForwardConfig {
+  trainMonths: number;    // default 12
+  testMonths: number;     // default 3
+  stepMonths: number;     // default 3
+  tickers?: string[];
+  initialCash?: number;
+}
+
+export interface WalkForwardFold {
+  foldNumber: number;
+  trainStart: number;
+  trainEnd: number;
+  testStart: number;
+  testEnd: number;
+  trainPnl: number;
+  testPnl: number;
+  trainTrades: number;
+  testTrades: number;
+  trainWinRate: number;
+  testWinRate: number;
+  overfittingRatio: number;
+  status: 'pending' | 'training' | 'testing' | 'completed';
+}
+
+export interface WalkForwardRun {
+  id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  totalFolds: number;
+  completedFolds: number;
+  folds: WalkForwardFold[];
+  aggregateOOS: {
+    totalTrades: number;
+    winRate: number;
+    totalPnl: number;
+    sharpe: number;
+  };
+  bestFoldId: string;
+}
+
+export interface WalkForwardStatus {
+  running: boolean;
+  runId?: string;
+  status?: string;
+  currentFold?: number;
+  totalFolds?: number;
+  completedFolds?: number;
+  currentPhase?: 'training' | 'testing';
+  folds: WalkForwardFold[];
+  aggregateOOS?: {
+    totalTrades: number;
+    winRate: number;
+    totalPnl: number;
+    sharpe: number;
+  };
+  elapsed?: number;
+  error?: string;
 }

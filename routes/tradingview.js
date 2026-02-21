@@ -25,6 +25,15 @@ export function injectSignal(signalObj) {
 // POST /api/tradingview/webhook - Receive TradingView alerts
 router.post('/webhook', (req, res) => {
     try {
+        // Webhook authentication: check header or body for secret
+        const webhookSecret = process.env.TRADINGVIEW_WEBHOOK_SECRET;
+        if (webhookSecret) {
+            const providedSecret = req.headers['x-webhook-secret'] || (req.body && req.body.secret);
+            if (providedSecret !== webhookSecret) {
+                return res.status(401).json({ error: 'Unauthorized: invalid webhook secret' });
+            }
+        }
+
         const alert = req.body;
         if (!alert || !alert.ticker) {
             return res.status(400).json({ error: 'Missing ticker in alert payload' });

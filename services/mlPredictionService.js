@@ -149,11 +149,9 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
 
     // Step 1: Build feature vector
     let features;
+    let featureArray;
     try {
-      features = buildFeatureVector({
-        ticker,
-        candles,
-        strategy,
+      const result = buildFeatureVector(ticker, candles, {
         exchangeSnapshot,
         derivativesData,
         sentimentData,
@@ -162,8 +160,11 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
         lastTradeTime
       });
 
-      if (!features || features.length !== FEATURE_COUNT) {
-        console.warn(`[ML Prediction] Invalid feature vector length: ${features?.length}, expected ${FEATURE_COUNT}`);
+      features = result;
+      featureArray = result.features;
+
+      if (!featureArray || featureArray.length !== FEATURE_COUNT) {
+        console.warn(`[ML Prediction] Invalid feature vector length: ${featureArray?.length}, expected ${FEATURE_COUNT}`);
         return {
           take: true,
           mlAvailable: false,
@@ -187,7 +188,7 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
         db.insertMLFeatures({
           ticker,
           strategy,
-          features_json: JSON.stringify(features),
+          features_json: JSON.stringify(featureArray),
           timestamp: Date.now()
         });
       }
@@ -198,7 +199,7 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
     // Step 3: Check for market anomalies
     let anomalyResult = { isAnomaly: false, severity: 'NORMAL', recommendation: 'PROCEED' };
     try {
-      anomalyResult = anomalyDetector.checkAnomaly(features);
+      anomalyResult = anomalyDetector.checkAnomaly(featureArray);
     } catch (err) {
       console.warn('[ML Prediction] Anomaly detection error:', err.message);
     }
@@ -218,7 +219,7 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
 
     let prediction;
     try {
-      prediction = mlEngine.predict(features);
+      prediction = mlEngine.predict(featureArray);
       predictionCount++;
 
       // Store prediction in DB for later resolution
@@ -226,7 +227,7 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
         db.insertMLPrediction({
           ticker,
           strategy,
-          features_json: JSON.stringify(features),
+          features_json: JSON.stringify(featureArray),
           prediction: prediction.prediction,
           confidence: prediction.confidence,
           up_prob: prediction.probabilities?.up || 0,
@@ -577,6 +578,41 @@ export function getMLAccuracyStats() {
   } catch (err) {
     console.error('[ML Prediction] getMLAccuracyStats error:', err);
     return {};
+  }
+}
+
+/**
+ * Safe ML advice wrapper for A/B tracking.
+ * Never throws — always returns a result.
+ *
+ * @param {string} ticker - Trading pair
+ * @param {Array} candles - OHLCV candles
+ * @param {Object} options - Additional context
+ * @returns {Promise<{ available: boolean, direction: 'UP'|'DOWN'|null, confidence: number }>}
+ */
+export async function getMLAdvice(ticker, candles, options = {}) {
+  try {
+    if (!isInitialized || !mlEngine || !buildFeatureVector) {
+      return { available: false, direction: null, confidence: 0 };
+    }
+
+    const modelStatus = mlEngine.getModelStatus();
+    if (!modelStatus.isTrained) {
+      return { available: false, direction: null, confidence: 0 };
+    }
+
+    const result = await shouldTradeML(ticker, candles, 'ADAPTIVE', options);
+    if (!result.mlAvailable) {
+      return { available: false, direction: null, confidence: 0 };
+    }
+
+    return {
+      available: true,
+      direction: result.direction || null,
+      confidence: result.confidence || 0,
+    };
+  } catch (err) {
+    return { available: false, direction: null, confidence: 0 };
   }
 }
 

@@ -15,8 +15,8 @@
 const SCAN_INTERVAL_MS = 60000; // Scan every 60 seconds
 const SCAN_TIMEFRAMES = ['5m', '15m', '1h']; // Multiple timeframes for confirmation
 const SIGNAL_COOLDOWN_MS = 300000; // 5 min cooldown per ticker to avoid spam
-const MIN_SCORE_BUY = 3;  // Minimum score to trigger BUY (out of ~12)
-const MIN_SCORE_SELL = 3; // Minimum score to trigger SELL
+const MIN_SCORE_BUY = 5;  // Minimum score to trigger BUY (raised from 3 to reduce false positives)
+const MIN_SCORE_SELL = 5; // Minimum score to trigger SELL
 const MAX_SIGNALS = 100;
 
 const TICKERS = [
@@ -356,8 +356,8 @@ export class SignalScanner {
         const lastTime = this.lastSignalTime.get(ticker) || 0;
         if (Date.now() - lastTime < SIGNAL_COOLDOWN_MS) continue;
 
-        // Prefer multi-timeframe agreement, but allow strong single-TF signals
-        if (combined.timeframes.length < 2 && combined.totalScore < 8) continue;
+        // Require at least 2 timeframe agreement, or very strong single-TF signal
+        if (combined.timeframes.length < 2 && combined.totalScore < 12) continue;
 
         // Create signal object compatible with existing TradingView signals format
         const signalObj = {

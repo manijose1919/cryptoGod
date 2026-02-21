@@ -25,7 +25,7 @@ let pausedUntil = 0;
 let pauseReason = '';
 
 const CIRCUIT_BREAKER_CONFIG = {
-  MAX_CONSECUTIVE_LOSSES: 4,            // Was 6: tighter protection (9.4% WR = frequent loss streaks)
+  MAX_CONSECUTIVE_LOSSES: 3,            // Tighter: 3 consecutive losses triggers pause
   MAX_DAILY_DRAWDOWN_PERCENT: 8,        // Was 15%: protect capital more aggressively
   MAX_HOURLY_LOSSES: 8,                 // Was 20: 8 losses/hour is already excessive
   PAUSE_DURATION_MS: 10 * 60 * 1000,    // Was 5min: longer cooldown to prevent overtrading
@@ -55,8 +55,8 @@ export function recordTradeResult(pnl, strategy = 'UNKNOWN', ticker = '') {
   tradeHistory.push({ time: now, pnl, strategy, ticker });
   dailyPnl += pnl;
 
-  // Keep last 500 trades
-  if (tradeHistory.length > 500) {
+  // Keep last 500 trades - use efficient in-place splice
+  if (tradeHistory.length > 600) {
     tradeHistory.splice(0, tradeHistory.length - 500);
   }
 
@@ -166,7 +166,7 @@ export function fullResetCircuitBreaker() {
  * Calculate Kelly fraction from trade history
  * Returns recommended position size as fraction of portfolio (0 to 1)
  */
-export function calculateKellyFraction(minTrades = 5) {  // Beast Mode: was 10
+export function calculateKellyFraction(minTrades = 20) {  // Need sufficient sample for statistical significance
   const completedTrades = tradeHistory.filter(t => t.pnl !== 0);
   if (completedTrades.length < minTrades) {
     return {
@@ -291,6 +291,36 @@ export function importState(state) {
   pausedUntil = state.pausedUntil || 0;
   pauseReason = state.pauseReason || '';
   pauseCount = state.pauseCount || 0;
+}
+
+/**
+ * Check if portfolio has excessive correlation risk
+ * @param {Array} openPositions - Array of { ticker, strategy, amount }
+ * @param {number} maxSingleTickerPercent - Max % of portfolio in one ticker (default 25%)
+ * @returns {{ safe: boolean, reason: string, tickerExposure: Object }}
+ */
+export function checkCorrelationRisk(openPositions = [], maxSingleTickerPercent = 25) {
+  const totalAmount = openPositions.reduce((s, p) => s + (p.amount || 0), 0);
+  if (totalAmount <= 0) return { safe: true, reason: '', tickerExposure: {} };
+
+  const tickerExposure = {};
+  for (const pos of openPositions) {
+    const ticker = pos.ticker || 'UNKNOWN';
+    tickerExposure[ticker] = (tickerExposure[ticker] || 0) + (pos.amount || 0);
+  }
+
+  for (const [ticker, amount] of Object.entries(tickerExposure)) {
+    const pct = (amount / totalAmount) * 100;
+    if (pct > maxSingleTickerPercent) {
+      return {
+        safe: false,
+        reason: `${ticker} exposure ${pct.toFixed(1)}% exceeds ${maxSingleTickerPercent}% limit`,
+        tickerExposure,
+      };
+    }
+  }
+
+  return { safe: true, reason: '', tickerExposure };
 }
 
 export function getCircuitBreakerStatus() {

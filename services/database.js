@@ -336,8 +336,97 @@ export function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`); } catch(e) {}
 
+  // Schema version tracking for future migrations
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_version (
+      version INTEGER PRIMARY KEY,
+      applied_at INTEGER DEFAULT (unixepoch() * 1000),
+      description TEXT
+    );
+  `);
+
+  // Insert initial version if not exists
+  try {
+    db.exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'Initial schema')`);
+  } catch(e) {}
+
+  // Additional indexes for performance
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_equity_snapshots_time_desc ON equity_snapshots(session_id, time DESC)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_session_trades_ticker ON session_trades(session_id, ticker)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy, created_at DESC)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_trade_memory_strategy ON trade_memory(strategy, created_at DESC)`); } catch(e) {}
+
+  // Phase 2: DCA / Grid / Swing position persistence
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dca_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      total_invested REAL DEFAULT 0,
+      total_quantity REAL DEFAULT 0,
+      avg_price REAL DEFAULT 0,
+      buy_count INTEGER DEFAULT 0,
+      last_buy_time INTEGER,
+      take_profit_price REAL,
+      status TEXT DEFAULT 'ACTIVE',
+      created_at INTEGER DEFAULT (unixepoch() * 1000),
+      updated_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dca_positions_session
+      ON dca_positions(session_id, status);
+
+    CREATE TABLE IF NOT EXISTS grid_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      grid_low REAL NOT NULL,
+      grid_high REAL NOT NULL,
+      grid_count INTEGER DEFAULT 5,
+      levels_json TEXT,
+      filled_buys INTEGER DEFAULT 0,
+      filled_sells INTEGER DEFAULT 0,
+      total_pnl REAL DEFAULT 0,
+      status TEXT DEFAULT 'ACTIVE',
+      created_at INTEGER DEFAULT (unixepoch() * 1000),
+      updated_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_grid_positions_session
+      ON grid_positions(session_id, status);
+
+    CREATE TABLE IF NOT EXISTS swing_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      entry_price REAL NOT NULL,
+      quantity REAL DEFAULT 0,
+      stop_loss REAL,
+      take_profit REAL,
+      highest_price REAL,
+      trailing_stop REAL,
+      confidence INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'ACTIVE',
+      created_at INTEGER DEFAULT (unixepoch() * 1000),
+      updated_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_swing_positions_session
+      ON swing_positions(session_id, status);
+  `);
+
   console.log(`[Database] Initialized SQLite at ${dbPath}`);
   return db;
+}
+
+/**
+ * Ping the database to check if it's responsive
+ * @returns {boolean}
+ */
+export function pingDatabase() {
+  try {
+    const row = getDb().prepare('SELECT 1 AS ok').get();
+    return row?.ok === 1;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -483,23 +572,23 @@ export function completeSession(sessionId, endTime, finalValue, totalTrades, win
 }
 
 export function markAbandonedSessions() {
-  const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-  // Mark any ACTIVE session whose last equity snapshot is older than 5 minutes
-  const activeSessions = getDb().prepare(
-    `SELECT s.id, s.session_id FROM sessions s WHERE s.status = 'ACTIVE'`
-  ).all();
-  let marked = 0;
-  for (const sess of activeSessions) {
-    const latest = getDb().prepare(
-      `SELECT MAX(time) as last_time FROM equity_snapshots WHERE session_id = ?`
-    ).get(sess.session_id);
-    if (!latest?.last_time || latest.last_time < fiveMinAgo) {
-      getDb().prepare(`UPDATE sessions SET status = 'ABANDONED' WHERE id = ?`).run(sess.id);
-      marked++;
-    }
+  try {
+    const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+    // Single query: mark sessions as abandoned if they have no recent activity
+    getDb().prepare(`
+      UPDATE sessions
+      SET status = 'ABANDONED', end_time = ?
+      WHERE status = 'ACTIVE'
+        AND session_id IS NOT NULL
+        AND COALESCE(
+          (SELECT MAX(time) FROM session_trades WHERE session_trades.session_id = sessions.session_id),
+          (SELECT MAX(time) FROM equity_snapshots WHERE equity_snapshots.session_id = sessions.session_id),
+          sessions.start_time
+        ) < ?
+    `).run(Date.now(), fiveMinAgo);
+  } catch (e) {
+    console.warn('[Database] Error marking abandoned sessions:', e.message);
   }
-  if (marked > 0) console.log(`[Database] Marked ${marked} abandoned session(s)`);
-  return marked;
 }
 
 export function getSessionHistory(limit = 50) {
@@ -1048,6 +1137,43 @@ export function initializeTrainingTables() {
     );
     CREATE INDEX IF NOT EXISTS idx_training_ml_run
       ON training_ml_samples(run_id, time);
+
+    -- Walk-forward validation runs
+    CREATE TABLE IF NOT EXISTS walk_forward_runs (
+      id TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL,
+      status TEXT DEFAULT 'pending',
+      config_json TEXT,
+      total_folds INTEGER DEFAULT 0,
+      completed_folds INTEGER DEFAULT 0,
+      aggregate_results_json TEXT,
+      best_fold_id TEXT
+    );
+
+    -- Walk-forward individual folds
+    CREATE TABLE IF NOT EXISTS walk_forward_folds (
+      id TEXT PRIMARY KEY,
+      wf_run_id TEXT NOT NULL,
+      fold_number INTEGER NOT NULL,
+      train_start INTEGER,
+      train_end INTEGER,
+      test_start INTEGER,
+      test_end INTEGER,
+      train_run_id TEXT,
+      test_run_id TEXT,
+      train_pnl REAL,
+      test_pnl REAL,
+      train_trades INTEGER,
+      test_trades INTEGER,
+      train_win_rate REAL,
+      test_win_rate REAL,
+      overfitting_ratio REAL,
+      learned_state_json TEXT,
+      status TEXT DEFAULT 'pending',
+      FOREIGN KEY (wf_run_id) REFERENCES walk_forward_runs(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_wf_folds_run
+      ON walk_forward_folds(wf_run_id, fold_number);
   `);
   console.log('[Database] Historical training tables initialized');
 }
@@ -1294,4 +1420,176 @@ export function getTrainingMLSampleCount(runId) {
   return getDb().prepare(
     'SELECT COUNT(*) as count FROM training_ml_samples WHERE run_id = ?'
   ).get(runId).count;
+}
+
+// ============================================
+// WALK-FORWARD VALIDATION TABLES
+// ============================================
+
+export function insertWalkForwardRun(run) {
+  return getDb().prepare(`
+    INSERT INTO walk_forward_runs (id, created_at, status, config_json, total_folds, completed_folds)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(run.id, run.created_at || Date.now(), run.status || 'pending',
+         JSON.stringify(run.config || {}), run.total_folds || 0, run.completed_folds || 0);
+}
+
+export function updateWalkForwardRun(id, updates) {
+  const fields = [];
+  const values = [];
+  for (const [key, val] of Object.entries(updates)) {
+    const col = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+    fields.push(`${col} = ?`);
+    values.push(typeof val === 'object' && val !== null ? JSON.stringify(val) : val);
+  }
+  values.push(id);
+  return getDb().prepare(`UPDATE walk_forward_runs SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function getWalkForwardRun(id) {
+  return getDb().prepare('SELECT * FROM walk_forward_runs WHERE id = ?').get(id);
+}
+
+export function getWalkForwardRuns(limit = 20) {
+  return getDb().prepare(
+    'SELECT * FROM walk_forward_runs ORDER BY created_at DESC LIMIT ?'
+  ).all(limit);
+}
+
+export function insertWalkForwardFold(fold) {
+  return getDb().prepare(`
+    INSERT INTO walk_forward_folds (id, wf_run_id, fold_number, train_start, train_end, test_start, test_end, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(fold.id, fold.wf_run_id, fold.fold_number,
+         fold.train_start, fold.train_end, fold.test_start, fold.test_end,
+         fold.status || 'pending');
+}
+
+export function updateWalkForwardFold(id, updates) {
+  const fields = [];
+  const values = [];
+  for (const [key, val] of Object.entries(updates)) {
+    const col = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+    fields.push(`${col} = ?`);
+    values.push(typeof val === 'object' && val !== null ? JSON.stringify(val) : val);
+  }
+  values.push(id);
+  return getDb().prepare(`UPDATE walk_forward_folds SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+}
+
+export function getWalkForwardFolds(wfRunId) {
+  return getDb().prepare(
+    'SELECT * FROM walk_forward_folds WHERE wf_run_id = ? ORDER BY fold_number ASC'
+  ).all(wfRunId);
+}
+
+export function getWalkForwardFold(id) {
+  return getDb().prepare('SELECT * FROM walk_forward_folds WHERE id = ?').get(id);
+}
+
+export function getTrainingMLSamplesByTimeRange(runId, startTime, endTime) {
+  return getDb().prepare(
+    'SELECT * FROM training_ml_samples WHERE run_id = ? AND time >= ? AND time <= ? ORDER BY time ASC'
+  ).all(runId, startTime, endTime);
+}
+
+// ============================================
+// DCA Position CRUD
+// ============================================
+
+export function saveDCAPosition(sessionId, ticker, data) {
+  return getDb().prepare(`
+    INSERT INTO dca_positions (session_id, ticker, total_invested, total_quantity, avg_price, buy_count, last_buy_time, take_profit_price, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+  `).run(sessionId, ticker, data.totalInvested || 0, data.totalQuantity || 0, data.avgPrice || 0, data.buyCount || 0, data.lastBuyTime || Date.now(), data.takeProfitPrice || 0);
+}
+
+export function getDCAPositions(sessionId) {
+  return getDb().prepare(
+    'SELECT * FROM dca_positions WHERE session_id = ? AND status = ?'
+  ).all(sessionId, 'ACTIVE');
+}
+
+export function updateDCAPosition(id, data) {
+  return getDb().prepare(`
+    UPDATE dca_positions SET total_invested = ?, total_quantity = ?, avg_price = ?, buy_count = ?, last_buy_time = ?, take_profit_price = ?, updated_at = ?
+    WHERE id = ?
+  `).run(data.totalInvested, data.totalQuantity, data.avgPrice, data.buyCount, data.lastBuyTime || Date.now(), data.takeProfitPrice || 0, Date.now(), id);
+}
+
+export function closeDCAPosition(id) {
+  return getDb().prepare(
+    'UPDATE dca_positions SET status = ?, updated_at = ? WHERE id = ?'
+  ).run('CLOSED', Date.now(), id);
+}
+
+// ============================================
+// Grid Position CRUD
+// ============================================
+
+export function saveGridState(sessionId, ticker, data) {
+  return getDb().prepare(`
+    INSERT INTO grid_positions (session_id, ticker, grid_low, grid_high, grid_count, levels_json, filled_buys, filled_sells, total_pnl, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+  `).run(sessionId, ticker, data.gridLow, data.gridHigh, data.gridCount || 5, JSON.stringify(data.levels || []), data.filledBuys || 0, data.filledSells || 0, data.totalPnl || 0);
+}
+
+export function getGridStates(sessionId) {
+  return getDb().prepare(
+    'SELECT * FROM grid_positions WHERE session_id = ? AND status = ?'
+  ).all(sessionId, 'ACTIVE');
+}
+
+export function updateGridState(id, data) {
+  return getDb().prepare(`
+    UPDATE grid_positions SET filled_buys = ?, filled_sells = ?, total_pnl = ?, levels_json = ?, updated_at = ?
+    WHERE id = ?
+  `).run(data.filledBuys || 0, data.filledSells || 0, data.totalPnl || 0, JSON.stringify(data.levels || []), Date.now(), id);
+}
+
+export function closeGridState(id) {
+  return getDb().prepare(
+    'UPDATE grid_positions SET status = ?, updated_at = ? WHERE id = ?'
+  ).run('CLOSED', Date.now(), id);
+}
+
+// ============================================
+// Swing Position CRUD
+// ============================================
+
+export function saveSwingPosition(sessionId, ticker, data) {
+  return getDb().prepare(`
+    INSERT INTO swing_positions (session_id, ticker, entry_price, quantity, stop_loss, take_profit, highest_price, trailing_stop, confidence, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
+  `).run(sessionId, ticker, data.entryPrice, data.quantity || 0, data.stopLoss || 0, data.takeProfit || 0, data.highestPrice || data.entryPrice, data.trailingStop || 0, data.confidence || 0);
+}
+
+export function getSwingPositions(sessionId) {
+  return getDb().prepare(
+    'SELECT * FROM swing_positions WHERE session_id = ? AND status = ?'
+  ).all(sessionId, 'ACTIVE');
+}
+
+export function updateSwingPosition(id, data) {
+  return getDb().prepare(`
+    UPDATE swing_positions SET highest_price = ?, trailing_stop = ?, stop_loss = ?, take_profit = ?, updated_at = ?
+    WHERE id = ?
+  `).run(data.highestPrice || 0, data.trailingStop || 0, data.stopLoss || 0, data.takeProfit || 0, Date.now(), id);
+}
+
+export function closeSwingPosition(id) {
+  return getDb().prepare(
+    'UPDATE swing_positions SET status = ?, updated_at = ? WHERE id = ?'
+  ).run('CLOSED', Date.now(), id);
+}
+
+// ============================================
+// Bulk close all active positions for session
+// ============================================
+
+export function closeAllPositionsForSession(sessionId) {
+  const now = Date.now();
+  getDb().prepare('UPDATE dca_positions SET status = ?, updated_at = ? WHERE session_id = ? AND status = ?').run('CLOSED', now, sessionId, 'ACTIVE');
+  getDb().prepare('UPDATE grid_positions SET status = ?, updated_at = ? WHERE session_id = ? AND status = ?').run('CLOSED', now, sessionId, 'ACTIVE');
+  getDb().prepare('UPDATE swing_positions SET status = ?, updated_at = ? WHERE session_id = ? AND status = ?').run('CLOSED', now, sessionId, 'ACTIVE');
 }

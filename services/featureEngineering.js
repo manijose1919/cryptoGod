@@ -9,7 +9,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-export const FEATURE_COUNT = 68;
+export const FEATURE_COUNT = 75;
 
 /**
  * Get all 62 feature names in order
@@ -93,6 +93,14 @@ export function getFeatureNames() {
     'reddit_comment_sentiment',
     'reddit_post_volume_change',
     'market_speed_indicator',
+    // Lagged/Delta features (7)
+    'rsi_14_lag1',
+    'rsi_14_change',
+    'macd_histogram_change',
+    'volume_ratio_change',
+    'bollinger_b_change',
+    'price_acceleration',
+    'atr_change',
   ];
 }
 
@@ -138,6 +146,60 @@ export function buildFeatureVector(ticker, candles, options = {}) {
     features[idx++] = clamp((options.redditPostVolumeChange || 0) / 100, -1, 1); // reddit_post_volume_change
     features[idx++] = options.marketSpeed === 'FAST' ? 1 : 0;              // market_speed_indicator
 
+    // Lagged/Delta features (7)
+    try {
+      const closes = candles.map(c => c.c);
+      const volumes = candles.map(c => c.v);
+
+      // RSI lag1 and change
+      const rsiCurrent = calculateRSI(closes, 14) / 100;
+      const rsiPrev = closes.length >= 16 ? calculateRSI(closes.slice(0, -1), 14) / 100 : rsiCurrent;
+      features[idx++] = rsiPrev;                                          // rsi_14_lag1
+      features[idx++] = rsiCurrent - rsiPrev;                             // rsi_14_change
+
+      // MACD histogram change
+      const macdCurrent = calculateMACD(closes);
+      const macdPrev = closes.length >= 28 ? calculateMACD(closes.slice(0, -1)) : macdCurrent;
+      const atrForNorm = calculateATR(candles, 14) || 1;
+      const histCurrent = macdCurrent.histogram / atrForNorm;
+      const histPrev = macdPrev.histogram / atrForNorm;
+      features[idx++] = histCurrent - histPrev;                           // macd_histogram_change
+
+      // Volume ratio change
+      const volSMA20 = calculateSMA(volumes, 20);
+      const currentVol = volumes[volumes.length - 1];
+      const prevVol = volumes.length >= 2 ? volumes[volumes.length - 2] : currentVol;
+      const volSMA20Prev = volumes.length >= 21 ? calculateSMA(volumes.slice(0, -1), 20) : volSMA20;
+      const volRatioCurr = volSMA20 > 0 ? currentVol / volSMA20 - 1 : 0;
+      const volRatioPrev = volSMA20Prev > 0 ? prevVol / volSMA20Prev - 1 : 0;
+      features[idx++] = volRatioCurr - volRatioPrev;                      // volume_ratio_change
+
+      // Bollinger %B change
+      const bbCurrent = calculateBollingerBands(closes, 20, 2);
+      const currentPrice = closes[closes.length - 1];
+      const bPctCurr = bbCurrent.width > 0 ? (currentPrice - bbCurrent.lower) / bbCurrent.width : 0.5;
+      let bPctPrev = bPctCurr;
+      if (closes.length >= 22) {
+        const bbPrev = calculateBollingerBands(closes.slice(0, -1), 20, 2);
+        const prevPrice = closes[closes.length - 2];
+        bPctPrev = bbPrev.width > 0 ? (prevPrice - bbPrev.lower) / bbPrev.width : 0.5;
+      }
+      features[idx++] = bPctCurr - bPctPrev;                             // bollinger_b_change
+
+      // Price acceleration (2nd derivative)
+      const change5c = closes.length >= 6 ? (closes[closes.length - 1] / closes[closes.length - 6] - 1) : 0;
+      const prevChange5c = closes.length >= 7 ? (closes[closes.length - 2] / closes[closes.length - 7] - 1) : 0;
+      features[idx++] = currentPrice > 0 ? (change5c - prevChange5c) / (currentPrice / closes[0] || 1) : 0; // price_acceleration
+
+      // ATR change (volatility expansion rate)
+      const atrCurrent = calculateATR(candles, 14);
+      const atrPast = candles.length >= 19 ? calculateATR(candles.slice(0, -5), 14) : atrCurrent;
+      features[idx++] = atrCurrent > 0 ? (atrCurrent - atrPast) / atrCurrent : 0; // atr_change
+    } catch (lagErr) {
+      // Fill remaining lagged features with zeros if error
+      while (idx < FEATURE_COUNT) features[idx++] = 0;
+    }
+
     return {
       features,
       featureNames,
@@ -156,6 +218,7 @@ export function buildFeatureVector(ticker, candles, options = {}) {
           options.redditPostVolumeChange || 0,
           options.marketSpeed === 'FAST' ? 1 : 0,
         ],
+        lagged: features.slice(68, 75),
       }
     };
   } catch (err) {

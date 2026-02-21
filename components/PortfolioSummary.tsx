@@ -9,7 +9,7 @@ interface PortfolioSummaryProps {
   tradingMode?: TradingMode;
 }
 
-export const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({ portfolio, watchlistData, tradingMode }) => {
+const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, watchlistData, tradingMode }) => {
   const { cash, initialBudget, positions } = portfolio;
   const isRealMode = tradingMode === 'REAL';
   
@@ -87,3 +87,5 @@ export const PortfolioSummary: React.FC<PortfolioSummaryProps> = ({ portfolio, w
     </div>
   );
 };
+
+export const PortfolioSummary = React.memo(PortfolioSummaryInner);

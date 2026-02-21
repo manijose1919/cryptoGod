@@ -23,7 +23,7 @@ const CACHE_TTL_MS = 5000; // 5 second TTL
 function getCacheKey(candles: Candle[]): string {
     if (candles.length === 0) return 'empty';
     const lastCandle = candles[candles.length - 1];
-    return `${lastCandle.time}_${candles.length}_${lastCandle.close}`;
+    return `${lastCandle.time}_${candles.length}`;
 }
 
 function cleanCache(): void {
@@ -992,10 +992,10 @@ export function calculateSignalScore(candles: Candle[]): SignalScore {
         divergenceSignal * weights.divergence;
 
     // Calculate confidence based on signal agreement
-    const signals = [trendSignal, whaleSignal, confluenceSignal, momentumSignal];
-    const signalSigns = signals.map(s => Math.sign(s));
+    const allSignals = [trendSignal, whaleSignal, confluenceSignal, momentumSignal, breakoutSignal, divergenceSignal];
+    const signalSigns = allSignals.map(s => Math.sign(s));
     const agreementCount = signalSigns.filter(s => s === Math.sign(overall)).length;
-    const confidence = (agreementCount / signals.length) * 100;
+    const confidence = (agreementCount / allSignals.length) * 100;
 
     return {
         overall: Math.max(-100, Math.min(100, overall)),
@@ -1374,8 +1374,9 @@ export function detectMarketRegime(candles: Candle[]): MarketRegime {
     const historicalATRs = atrValues.slice(-100).filter(v => !isNaN(v) && v > 0);
     const sortedATRs = [...historicalATRs].sort((a, b) => a - b);
     const currentATRIndex = sortedATRs.findIndex(v => v >= currentATR);
+    const safeIndex = currentATRIndex === -1 ? sortedATRs.length : currentATRIndex;
     const volatilityPercentile = historicalATRs.length > 0
-        ? (currentATRIndex / historicalATRs.length) * 100
+        ? (safeIndex / historicalATRs.length) * 100
         : 50;
 
     // Determine volatility level
@@ -1675,9 +1676,9 @@ export function calculateOpportunityScore(
     const expectedReturn = currentPrice > 0 ? (currentATR / currentPrice) * 100 * 1.5 : 2;
 
     // Risk/Reward ratio
-    const riskRewardRatio = srLevels.support && srLevels.resistance
-        ? (srLevels.resistance - currentPrice) / (currentPrice - srLevels.support)
-        : 1.5;
+    const downside = currentPrice - (srLevels.support || currentPrice * 0.98);
+    const upside = (srLevels.resistance || currentPrice * 1.02) - currentPrice;
+    const riskRewardRatio = downside > 0 ? upside / downside : 1.5;
 
     // Time decay - how quickly opportunity diminishes
     // High momentum + low volatility = slower decay

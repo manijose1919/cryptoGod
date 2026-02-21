@@ -1,0 +1,95 @@
+import js from '@eslint/js';
+import tsPlugin from '@typescript-eslint/eslint-plugin';
+import tsParser from '@typescript-eslint/parser';
+
+export default [
+  js.configs.recommended,
+  {
+    files: ['**/*.ts', '**/*.tsx'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 2022,
+        sourceType: 'module',
+        ecmaFeatures: { jsx: true },
+      },
+      globals: {
+        window: 'readonly',
+        document: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        setTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearTimeout: 'readonly',
+        clearInterval: 'readonly',
+        process: 'readonly',
+        __dirname: 'readonly',
+        URL: 'readonly',
+        URLSearchParams: 'readonly',
+        Map: 'readonly',
+        Set: 'readonly',
+        Promise: 'readonly',
+        Date: 'readonly',
+        JSON: 'readonly',
+        Math: 'readonly',
+        Number: 'readonly',
+        Error: 'readonly',
+        Array: 'readonly',
+        Object: 'readonly',
+        RegExp: 'readonly',
+        Symbol: 'readonly',
+        Intl: 'readonly',
+        WebSocket: 'readonly',
+        crypto: 'readonly',
+        Buffer: 'readonly',
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tsPlugin,
+    },
+    rules: {
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      'no-console': 'warn',
+      'prefer-const': 'error',
+      'no-var': 'error',
+      'eqeqeq': ['error', 'smart'],
+      'no-throw-literal': 'error',
+    },
+  },
+  {
+    files: ['**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        setTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearTimeout: 'readonly',
+        clearInterval: 'readonly',
+        Date: 'readonly',
+        JSON: 'readonly',
+        Math: 'readonly',
+        Map: 'readonly',
+        Set: 'readonly',
+        Promise: 'readonly',
+        URL: 'readonly',
+        Buffer: 'readonly',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      'no-console': 'off', // Backend files use console for logging
+      'prefer-const': 'error',
+      'no-var': 'error',
+      'eqeqeq': ['error', 'smart'],
+    },
+  },
+  {
+    ignores: ['node_modules/**', 'dist/**', 'data/**', '*.config.js', '*.config.ts', 'vitest.config.ts'],
+  },
+];

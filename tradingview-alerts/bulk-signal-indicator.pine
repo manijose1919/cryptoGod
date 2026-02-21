@@ -1,0 +1,196 @@
+// ============================================
+// Trading Dashboard - All-in-One Multi-Ticker Signal Generator
+// ============================================
+// This indicator monitors all 10 Canadian-allowed crypto tickers
+// and sends BUY/SELL webhook alerts to your trading dashboard.
+//
+// SETUP:
+// 1. Add this indicator to ANY chart in TradingView (e.g., BTCUSD 5m)
+// 2. Create ONE alert: Condition = "Trading Dashboard Signals" → "Any Signal"
+// 3. Set Webhook URL (see below)
+// 4. Done! All 10 tickers are monitored from this single alert.
+//
+// WEBHOOK URL:
+//   http://localhost:3033/api/tradingview/webhook?secret=fef17a49084acd97914b4281b4ef68160a3279f66112d94f7db953bd3e258f26
+//
+// ALERT MESSAGE (paste this into the "Message" field):
+//   {{strategy.order.alert_message}}
+//
+//@version=6
+indicator("Trading Dashboard Signals", overlay=true, max_labels_count=50)
+
+// ============================================
+// SETTINGS
+// ============================================
+rsiLen      = input.int(14, "RSI Length", minval=2)
+emaFast     = input.int(9, "Fast EMA", minval=1)
+emaSlow     = input.int(21, "Slow EMA", minval=1)
+ema200Len   = input.int(200, "Trend EMA", minval=50)
+atrLen      = input.int(14, "ATR Length", minval=1)
+volSmaLen   = input.int(20, "Volume SMA Length", minval=1)
+bbLen       = input.int(20, "Bollinger Band Length", minval=5)
+bbMult      = input.float(2.0, "Bollinger Multiplier", minval=0.5, step=0.1)
+macdFast    = input.int(12, "MACD Fast", minval=1)
+macdSlow    = input.int(26, "MACD Slow", minval=1)
+macdSignal  = input.int(9, "MACD Signal", minval=1)
+
+// Timeframe for scanning (use chart timeframe by default)
+tf = input.timeframe("", "Scan Timeframe (blank = chart)")
+
+// ============================================
+// SIGNAL LOGIC (applied per ticker)
+// ============================================
+// Returns: +1 = BUY, -1 = SELL, 0 = NEUTRAL
+calcSignal(src, vol) =>
+    // RSI
+    rsiVal = ta.rsi(src, rsiLen)
+
+    // EMAs
+    fast = ta.ema(src, emaFast)
+    slow = ta.ema(src, emaSlow)
+    trend = ta.ema(src, ema200Len)
+
+    // MACD
+    [macdLine, signalLine, hist] = ta.macd(src, macdFast, macdSlow, macdSignal)
+
+    // Bollinger Bands
+    basis = ta.sma(src, bbLen)
+    dev = bbMult * ta.stdev(src, bbLen)
+    upperBB = basis + dev
+    lowerBB = basis - dev
+
+    // ATR for volatility context
+    atr = ta.atr(atrLen)
+
+    // Volume confirmation
+    volSma = ta.sma(vol, volSmaLen)
+    volSpike = vol > volSma * 1.5
+
+    // === BUY CONDITIONS ===
+    // EMA crossover + above trend
+    emaCrossUp = ta.crossover(fast, slow) and src > trend
+    // RSI bounce from oversold
+    rsiBounce = ta.crossover(rsiVal, 30)
+    // MACD bullish cross
+    macdBullish = ta.crossover(macdLine, signalLine) and macdLine < 0
+    // Bollinger bounce from lower band
+    bbBounce = ta.crossover(src, lowerBB) and rsiVal < 40
+
+    buyScore = (emaCrossUp ? 1 : 0) + (rsiBounce ? 1 : 0) + (macdBullish ? 1 : 0) + (bbBounce ? 1 : 0)
+    buyConfirmed = buyScore >= 2 or (buyScore >= 1 and volSpike)
+
+    // === SELL CONDITIONS ===
+    // EMA crossunder + below trend
+    emaCrossDown = ta.crossunder(fast, slow) and src < trend
+    // RSI drops from overbought
+    rsiDrop = ta.crossunder(rsiVal, 70)
+    // MACD bearish cross
+    macdBearish = ta.crossunder(macdLine, signalLine) and macdLine > 0
+    // Bollinger rejection from upper band
+    bbReject = ta.crossunder(src, upperBB) and rsiVal > 60
+
+    sellScore = (emaCrossDown ? 1 : 0) + (rsiDrop ? 1 : 0) + (macdBearish ? 1 : 0) + (bbReject ? 1 : 0)
+    sellConfirmed = sellScore >= 2 or (sellScore >= 1 and volSpike)
+
+    signal = buyConfirmed ? 1 : sellConfirmed ? -1 : 0
+    [signal, rsiVal, fast, slow, atr]
+
+// ============================================
+// MULTI-TICKER SCANNING
+// ============================================
+// Fetch close and volume for each ticker on the selected timeframe
+
+// BTC
+[btcClose, btcVol] = request.security("CRYPTO:BTCUSD", tf, [close, volume])
+[btcSig, btcRsi, btcFast, btcSlow, btcAtr] = request.security("CRYPTO:BTCUSD", tf, calcSignal(close, volume))
+
+// ETH
+[ethClose, ethVol] = request.security("CRYPTO:ETHUSD", tf, [close, volume])
+[ethSig, ethRsi, ethFast, ethSlow, ethAtr] = request.security("CRYPTO:ETHUSD", tf, calcSignal(close, volume))
+
+// XRP
+[xrpClose, xrpVol] = request.security("CRYPTO:XRPUSD", tf, [close, volume])
+[xrpSig, xrpRsi, xrpFast, xrpSlow, xrpAtr] = request.security("CRYPTO:XRPUSD", tf, calcSignal(close, volume))
+
+// SOL
+[solClose, solVol] = request.security("CRYPTO:SOLUSD", tf, [close, volume])
+[solSig, solRsi, solFast, solSlow, solAtr] = request.security("CRYPTO:SOLUSD", tf, calcSignal(close, volume))
+
+// ADA
+[adaClose, adaVol] = request.security("CRYPTO:ADAUSD", tf, [close, volume])
+[adaSig, adaRsi, adaFast, adaSlow, adaAtr] = request.security("CRYPTO:ADAUSD", tf, calcSignal(close, volume))
+
+// DOGE
+[dogeClose, dogeVol] = request.security("CRYPTO:DOGEUSD", tf, [close, volume])
+[dogeSig, dogeRsi, dogeFast, dogeSlow, dogeAtr] = request.security("CRYPTO:DOGEUSD", tf, calcSignal(close, volume))
+
+// LINK
+[linkClose, linkVol] = request.security("CRYPTO:LINKUSD", tf, [close, volume])
+[linkSig, linkRsi, linkFast, linkSlow, linkAtr] = request.security("CRYPTO:LINKUSD", tf, calcSignal(close, volume))
+
+// DOT
+[dotClose, dotVol] = request.security("CRYPTO:DOTUSD", tf, [close, volume])
+[dotSig, dotRsi, dotFast, dotSlow, dotAtr] = request.security("CRYPTO:DOTUSD", tf, calcSignal(close, volume))
+
+// AVAX
+[avaxClose, avaxVol] = request.security("CRYPTO:AVAXUSD", tf, [close, volume])
+[avaxSig, avaxRsi, avaxFast, avaxSlow, avaxAtr] = request.security("CRYPTO:AVAXUSD", tf, calcSignal(close, volume))
+
+// BNB
+[bnbClose, bnbVol] = request.security("CRYPTO:BNBUSD", tf, [close, volume])
+[bnbSig, bnbRsi, bnbFast, bnbSlow, bnbAtr] = request.security("CRYPTO:BNBUSD", tf, calcSignal(close, volume))
+
+// ============================================
+// ALERT FIRING
+// ============================================
+// We use alert_message to pass JSON payloads to the webhook
+
+// Helper: only fire on signal CHANGE (not every bar)
+fireAlert(sig, prevSig, ticker, price, rsiVal, timeframeStr) =>
+    if sig != 0 and sig != prevSig
+        signalType = sig > 0 ? "BUY" : "SELL"
+        msg = '{"signal":"' + signalType + '","ticker":"' + ticker + '","price":' + str.tostring(price) + ',"timeframe":"' + timeframeStr + '","source":"PineScript-AllInOne","rsi":' + str.tostring(math.round(rsiVal)) + '}'
+        alert(msg, alert.freq_once_per_bar_close)
+
+tfStr = tf == "" ? timeframe.period : tf
+
+fireAlert(btcSig,  btcSig[1],  "BTCUSD",  btcClose,  btcRsi,  tfStr)
+fireAlert(ethSig,  ethSig[1],  "ETHUSD",  ethClose,  ethRsi,  tfStr)
+fireAlert(xrpSig,  xrpSig[1],  "XRPUSD",  xrpClose,  xrpRsi,  tfStr)
+fireAlert(solSig,  solSig[1],  "SOLUSD",  solClose,  solRsi,  tfStr)
+fireAlert(adaSig,  adaSig[1],  "ADAUSD",  adaClose,  adaRsi,  tfStr)
+fireAlert(dogeSig, dogeSig[1], "DOGEUSD", dogeClose, dogeRsi, tfStr)
+fireAlert(linkSig, linkSig[1], "LINKUSD", linkClose, linkRsi, tfStr)
+fireAlert(dotSig,  dotSig[1],  "DOTUSD",  dotClose,  dotRsi,  tfStr)
+fireAlert(avaxSig, avaxSig[1], "AVAXUSD", avaxClose, avaxRsi, tfStr)
+fireAlert(bnbSig,  bnbSig[1],  "BNBUSD",  bnbClose,  bnbRsi,  tfStr)
+
+// ============================================
+// VISUAL: Table showing all ticker signals
+// ============================================
+var table sigTable = table.new(position.top_right, 4, 11, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast
+    table.cell(sigTable, 0, 0, "Ticker",   text_color=color.white, text_size=size.small)
+    table.cell(sigTable, 1, 0, "Price",    text_color=color.white, text_size=size.small)
+    table.cell(sigTable, 2, 0, "RSI",      text_color=color.white, text_size=size.small)
+    table.cell(sigTable, 3, 0, "Signal",   text_color=color.white, text_size=size.small)
+
+    showRow(row, ticker, price, rsi, sig) =>
+        sigText = sig > 0 ? "BUY" : sig < 0 ? "SELL" : "-"
+        sigColor = sig > 0 ? color.lime : sig < 0 ? color.red : color.gray
+        table.cell(sigTable, 0, row, ticker, text_color=color.white, text_size=size.small)
+        table.cell(sigTable, 1, row, str.tostring(price, "#.##"), text_color=color.white, text_size=size.small)
+        table.cell(sigTable, 2, row, str.tostring(math.round(rsi)), text_color=rsi > 70 ? color.red : rsi < 30 ? color.lime : color.white, text_size=size.small)
+        table.cell(sigTable, 3, row, sigText, text_color=sigColor, text_size=size.small, bgcolor=sig != 0 ? color.new(sigColor, 85) : na)
+
+    showRow(1,  "BTC",  btcClose,  btcRsi,  btcSig)
+    showRow(2,  "ETH",  ethClose,  ethRsi,  ethSig)
+    showRow(3,  "XRP",  xrpClose,  xrpRsi,  xrpSig)
+    showRow(4,  "SOL",  solClose,  solRsi,  solSig)
+    showRow(5,  "ADA",  adaClose,  adaRsi,  adaSig)
+    showRow(6,  "DOGE", dogeClose, dogeRsi, dogeSig)
+    showRow(7,  "LINK", linkClose, linkRsi, linkSig)
+    showRow(8,  "DOT",  dotClose,  dotRsi,  dotSig)
+    showRow(9,  "AVAX", avaxClose, avaxRsi, avaxSig)
+    showRow(10, "BNB",  bnbClose,  bnbRsi,  bnbSig)
