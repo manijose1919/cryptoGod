@@ -12,7 +12,8 @@ const StrategyColumn: React.FC<{
     title: string;
     insights: any[];
     activeTicker: string;
-}> = ({ title, insights, activeTicker }) => {
+    onSelectTicker?: (ticker: string) => void;
+}> = ({ title, insights, activeTicker, onSelectTicker }) => {
     return (
         <div className="bg-gray-900/50 p-3 rounded-lg">
             <h3 className="text-sm font-semibold text-center text-cyan-400 mb-2 uppercase tracking-wider">{title}</h3>
@@ -23,7 +24,7 @@ const StrategyColumn: React.FC<{
                         const numValue = typeof item.value === 'number' ? item.value : 0;
                         const valueColor = numValue < 50 ? 'text-green-400' : 'text-red-400';
                         return (
-                           <li key={item.ticker} className={`flex justify-between items-center text-xs p-2 rounded-md transition-all ${isActive ? 'bg-cyan-600/20 border border-cyan-500' : ''}`}>
+                           <li key={item.ticker} onClick={() => onSelectTicker?.(item.ticker)} className={`flex justify-between items-center text-xs p-2 rounded-md transition-all cursor-pointer hover:bg-gray-800 ${isActive ? 'bg-cyan-600/20 border border-cyan-500' : ''}`}>
                                <div className="flex items-center">
                                    <span className="font-mono text-gray-500 mr-2">{index + 1}.</span>
                                    <span className={`font-bold ${isActive ? 'text-white' : 'text-gray-300'}`}>{item.ticker.replace('USDC', '')}</span>
@@ -54,10 +55,10 @@ export const MarketScanner: React.FC<MarketScannerProps> = ({ insights, activeTi
             </div>
             {insights ? (
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                    <StrategyColumn title="Trend" insights={insights.TREND ?? []} activeTicker={activeTicker} />
-                    <StrategyColumn title="Breakout" insights={insights.BREAKOUT ?? []} activeTicker={activeTicker} />
-                    <StrategyColumn title="Whale Flow" insights={insights.WHALE ?? []} activeTicker={activeTicker} />
-                    <StrategyColumn title="Confluence" insights={insights.CONFLUENCE ?? []} activeTicker={activeTicker} />
+                    <StrategyColumn title="Trend" insights={insights.TREND ?? []} activeTicker={activeTicker} onSelectTicker={onSelectTicker} />
+                    <StrategyColumn title="Breakout" insights={insights.BREAKOUT ?? []} activeTicker={activeTicker} onSelectTicker={onSelectTicker} />
+                    <StrategyColumn title="Whale Flow" insights={insights.WHALE ?? []} activeTicker={activeTicker} onSelectTicker={onSelectTicker} />
+                    <StrategyColumn title="Confluence" insights={insights.CONFLUENCE ?? []} activeTicker={activeTicker} onSelectTicker={onSelectTicker} />
                 </div>
             ) : (
                 <div className="text-center py-8">

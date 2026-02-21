@@ -149,9 +149,9 @@ function analyzeMarketStructure(candles: Candle[]): {
     recentLows.push(Math.min(...slice.map(c => c.low)));
   }
 
-  const higherHighs = recentHighs.every((h, i) => i === 0 || h >= recentHighs[i - 1] * 0.998);
-  const lowerLows = recentLows.every((l, i) => i === 0 || l <= recentLows[i - 1] * 1.002);
-  const higherLows = recentLows.every((l, i) => i === 0 || l >= recentLows[i - 1] * 0.998);
+  const higherHighs = recentHighs.every((h, i) => i === 0 || h >= recentHighs[i - 1] * 1.002);
+  const lowerLows = recentLows.every((l, i) => i === 0 || l <= recentLows[i - 1] * 0.998);
+  const higherLows = recentLows.every((l, i) => i === 0 || l >= recentLows[i - 1] * 1.002);
 
   // Momentum
   const change10 = ((price - closes[closes.length - 11]) / closes[closes.length - 11]) * 100;

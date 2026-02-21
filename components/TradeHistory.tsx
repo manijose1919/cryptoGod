@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import type { Trade, TradingStrategy } from '../types';
+import { exportTradesToCSV } from '../services/exportService';
 
 interface TradeHistoryProps {
     trades: Trade[];
@@ -15,6 +16,7 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
     const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
     const [filterStrategy, setFilterStrategy] = useState<FilterStrategy>('ALL');
     const [filterType, setFilterType] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
+    const [tickerSearch, setTickerSearch] = useState('');
 
     const formatCurrency = (value: number) =>
         new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
@@ -96,6 +98,10 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
         if (filterType !== 'ALL') {
             result = result.filter(t => t.type === filterType);
         }
+        if (tickerSearch.trim()) {
+            const search = tickerSearch.toUpperCase();
+            result = result.filter(t => t.ticker.includes(search));
+        }
 
         // Apply sorting
         result.sort((a, b) => {
@@ -118,7 +124,7 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
         });
 
         return result;
-    }, [trades, filterStrategy, filterType, sortField, sortDirection]);
+    }, [trades, filterStrategy, filterType, tickerSearch, sortField, sortDirection]);
 
     const handleSort = (field: SortField) => {
         if (sortField === field) {
@@ -138,7 +144,16 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
 
     return (
         <div className="glass-card p-6 animate-fade-up">
-            <h2 className="text-xl font-semibold mb-4 gradient-header">Trade History</h2>
+            <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold gradient-header">Trade History</h2>
+                <button
+                    onClick={() => exportTradesToCSV(trades)}
+                    className="text-[10px] px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-gray-300"
+                    title="Export trades to CSV"
+                >
+                    Export CSV
+                </button>
+            </div>
 
             {/* Statistics Bar */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
@@ -168,6 +183,15 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
 
             {/* Filters */}
             <div className="flex flex-wrap gap-3 mb-4">
+                <div className="flex items-center gap-2">
+                    <input
+                        type="text"
+                        placeholder="Search ticker..."
+                        value={tickerSearch}
+                        onChange={e => setTickerSearch(e.target.value)}
+                        className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 w-28"
+                    />
+                </div>
                 <div className="flex items-center gap-2">
                     <label className="text-xs text-gray-400">Strategy:</label>
                     <select

@@ -10,6 +10,9 @@ import type {
   TrainingResults,
   TrainingTrade,
   TrainingEquityPoint,
+  WalkForwardConfig,
+  WalkForwardStatus,
+  WalkForwardRun,
 } from '../types';
 
 const API_BASE = '/api/training';
@@ -111,4 +114,30 @@ export async function applyTrainedState(runId: string, components?: string[]) {
     beforeState: Record<string, unknown>;
     afterState: Record<string, unknown>;
   }>('/apply', { runId, components });
+}
+
+// --- Walk-Forward Validation ---
+
+export async function startWalkForward(config?: WalkForwardConfig) {
+  return apiPost<{ success: boolean; id: string; totalFolds: number }>('/walk-forward/start', config);
+}
+
+export async function stopWalkForward() {
+  return apiPost<{ stopped: boolean; id?: string }>('/walk-forward/stop');
+}
+
+export async function getWalkForwardStatus() {
+  return apiGet<WalkForwardStatus>('/walk-forward/status');
+}
+
+export async function getWalkForwardResults(id: string) {
+  return apiGet<WalkForwardRun & { folds: any[]; config: any }>(`/walk-forward/results/${id}`);
+}
+
+export async function getWalkForwardRuns(limit = 20) {
+  return apiGet<Array<{ id: string; status: string; totalFolds: number; completedFolds: number; aggregateOOS: any; createdAt: number }>>(`/walk-forward/runs?limit=${limit}`);
+}
+
+export async function triggerWalkForwardRetrain(id: string) {
+  return apiPost<{ success: boolean; samplesCopied?: number; reason?: string; message?: string }>(`/walk-forward/retrain/${id}`);
 }

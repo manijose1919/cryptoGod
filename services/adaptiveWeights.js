@@ -44,7 +44,7 @@ for (const s of STRATEGIES) getOrCreateStats(s);
 // RECORDING
 // ============================================
 
-const EMA_ALPHA = 0.1; // Smoothing factor (higher = more recent weight)
+const EMA_ALPHA = 0.3; // Smoothing factor (higher = more recent weight)
 
 /**
  * Record a trade result for a strategy
@@ -114,9 +114,9 @@ function recalculateWeights() {
   for (const item of scores) {
     const stats = strategyStats.get(item.strategy);
     if (stats) {
-      // Beast Mode: 50/50 blend (was 70/30) - more equal opportunity
+      // Adaptive-dominant blend: 75/25 so winning strategies get real allocation
       const adaptiveWeight = item.score / totalScore;
-      stats.weight = adaptiveWeight * 0.5 + BASE_WEIGHT * 0.5;
+      stats.weight = adaptiveWeight * 0.75 + BASE_WEIGHT * 0.25;
     }
   }
 }
@@ -190,7 +190,7 @@ export function getStrategyRanking() {
  */
 export function isStrategyThrottled(strategy) {
   const stats = strategyStats.get(strategy);
-  if (!stats || stats.trades < 15) return false;  // Beast Mode: was 5
+  if (!stats || stats.trades < 8) return false;  // Throttle sooner: block bad strategies after 8 trades
   // Beast Mode: Throttle if weight is less than 15% of average (was 30%)
   return stats.weight < BASE_WEIGHT * 0.15;
 }

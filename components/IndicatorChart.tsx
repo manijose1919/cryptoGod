@@ -1,17 +1,17 @@
 import React from 'react';
 import { AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend } from 'recharts';
-import type { IndicatorData, SRLevels, TradingStrategy, WatchlistData } from '../types';
+import type { Candle, IndicatorData, SRLevels, VolumeProfileData, DivergenceData } from '../types';
 
 interface IndicatorChartProps {
-  candles: any[];
-  tcSeries: any[];
-  breakoutSeries: any[];
-  whaleSeries: any[];
-  momentumSeries: any[];
-  divergenceData: any;
+  candles: Candle[];
+  tcSeries: IndicatorData[];
+  breakoutSeries: IndicatorData[];
+  whaleSeries: IndicatorData[];
+  momentumSeries: IndicatorData[];
+  divergenceData: DivergenceData | null;
   srLevels: SRLevels;
-  volumeProfile: any;
-  trades: any[];
+  volumeProfile: VolumeProfileData | null;
+  trades: Array<{ type: string; ticker: string; price: number; time?: number; pnl?: number }>;
   bollingerBands: { upper: IndicatorData[], middle: IndicatorData[], lower: IndicatorData[] };
   vwap: IndicatorData[];
   ma50: IndicatorData[];
@@ -36,7 +36,7 @@ const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
 };
 
 const IndicatorChartComponent: React.FC<IndicatorChartProps> = ({ 
-    candles, tcSeries, breakoutSeries, whaleSeries, momentumSeries, srLevels, trades, bollingerBands, vwap, ma50, ma200 
+    candles, tcSeries, breakoutSeries, whaleSeries, momentumSeries, srLevels, trades: _trades, bollingerBands, vwap, ma50, ma200
 }) => {
   if (!candles || candles.length === 0) {
     return <div className="flex items-center justify-center h-full text-gray-500">Loading chart data...</div>;

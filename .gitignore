@@ -109,6 +109,24 @@ nul
 ._*
 
 # ============================================
+# AI / Agent Tool Directories
+# ============================================
+.claude/
+.kiro/
+
+# ============================================
+# Scratch / Notes Files
+# ============================================
+Command.txt
+FireHorseProtocol.txt
+code.txt
+gemini-spec-formatted.txt
+moresteps.txt
+nextstep.txt
+next_step_evolution.txt
+metadata.json
+
+# ============================================
 # Miscellaneous
 # ============================================
 *.bak

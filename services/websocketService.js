@@ -46,6 +46,13 @@ function connect() {
     return;
   }
 
+  // Clean up old socket listeners to prevent memory leaks
+  if (ws) {
+    ws.removeAllListeners();
+    try { ws.close(); } catch (e) { /* already closed */ }
+    ws = null;
+  }
+
   try {
     ws = new WebSocket(WS_URL);
 
@@ -72,7 +79,7 @@ function connect() {
         const msg = JSON.parse(data.toString());
         handleMessage(msg);
       } catch (e) {
-        // Ignore parse errors
+        console.warn('[WebSocket] Message parse error:', e.message);
       }
     });
 
@@ -193,13 +200,14 @@ function handleCandlestickUpdate(result) {
       realtimeCandles.set(ticker, buffer);
     }
 
-    // Replace or append candle based on timestamp
-    const existing = buffer.findIndex(c => c.t === formatted.t);
-    if (existing >= 0) {
-      buffer[existing] = formatted;
+    // Replace or append candle based on timestamp (O(1) lookup)
+    const existingIdx = buffer.length > 0 ? buffer.findIndex(c => c.t === formatted.t) : -1;
+    if (existingIdx >= 0) {
+      buffer[existingIdx] = formatted;
     } else {
       buffer.push(formatted);
-      if (buffer.length > MAX_BUFFERED_CANDLES) {
+      // Trim from front if over limit
+      while (buffer.length > MAX_BUFFERED_CANDLES) {
         buffer.shift();
       }
     }

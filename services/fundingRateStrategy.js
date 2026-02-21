@@ -74,4 +74,67 @@ export function getFundingConfidenceAdjustment(signal, tradeDirection = 'LONG') 
   return { adjustment: penalty, reason: `Funding rate opposes ${tradeDirection} (${penalty})` };
 }
 
-export default { getFundingRateSignal, getFundingConfidenceAdjustment };
+/**
+ * Should we block an entry based on extreme funding rate?
+ * Extreme funding in the same direction as the trade = crowded, high reversion risk.
+ * @param {string} ticker - e.g. 'BTCUSD'
+ * @param {string} tradeDirection - 'LONG' or 'SHORT'
+ * @returns {{ blocked: boolean, reason: string }}
+ */
+export function shouldBlockEntryOnFunding(ticker, tradeDirection = 'LONG') {
+  try {
+    const data = getLatestDerivatives(ticker);
+    if (!data || data.funding_rate == null) {
+      return { blocked: false, reason: 'No funding data' };
+    }
+
+    const rate = data.funding_rate;
+
+    // Block LONG entries when funding is very extreme positive (crowded longs)
+    if (rate >= FUNDING_THRESHOLDS.VERY_EXTREME && tradeDirection === 'LONG') {
+      return { blocked: true, reason: `Funding rate ${(rate * 100).toFixed(4)}% too extreme for LONG — crowded longs, high reversion risk` };
+    }
+
+    // Block SHORT entries when funding is very extreme negative (crowded shorts)
+    if (rate <= -FUNDING_THRESHOLDS.VERY_EXTREME && tradeDirection === 'SHORT') {
+      return { blocked: true, reason: `Funding rate ${(rate * 100).toFixed(4)}% too extreme for SHORT — crowded shorts, high reversion risk` };
+    }
+
+    return { blocked: false, reason: 'Funding rate within acceptable range' };
+  } catch (e) {
+    return { blocked: false, reason: `Error checking funding: ${e.message}` };
+  }
+}
+
+/**
+ * Is funding rate contrarian to the current crowd?
+ * Extreme funding rates are one of the most reliable mean-reversion signals.
+ * @param {string} ticker
+ * @returns {{ signal: 'LONG_BIAS'|'SHORT_BIAS'|null, strength: number }}
+ */
+export function isFundingContrarian(ticker) {
+  try {
+    const data = getLatestDerivatives(ticker);
+    if (!data || data.funding_rate == null) {
+      return { signal: null, strength: 0 };
+    }
+
+    const rate = data.funding_rate;
+
+    if (rate >= FUNDING_THRESHOLDS.VERY_EXTREME) {
+      return { signal: 'SHORT_BIAS', strength: 80 };
+    } else if (rate >= FUNDING_THRESHOLDS.EXTREME_POSITIVE) {
+      return { signal: 'SHORT_BIAS', strength: 50 };
+    } else if (rate <= -FUNDING_THRESHOLDS.VERY_EXTREME) {
+      return { signal: 'LONG_BIAS', strength: 80 };
+    } else if (rate <= FUNDING_THRESHOLDS.EXTREME_NEGATIVE) {
+      return { signal: 'LONG_BIAS', strength: 50 };
+    }
+
+    return { signal: null, strength: 0 };
+  } catch (e) {
+    return { signal: null, strength: 0 };
+  }
+}
+
+export default { getFundingRateSignal, getFundingConfidenceAdjustment, shouldBlockEntryOnFunding, isFundingContrarian };

@@ -95,7 +95,7 @@ export function computeStrategyBreakdown(trades: Trade[]): StrategyStats[] {
       avgPnl: stratTrades.length > 0 ? totalPnl / stratTrades.length : 0,
       maxWin: wins.length > 0 ? Math.max(...wins.map(t => t.pnl!)) : 0,
       maxLoss: losses.length > 0 ? Math.min(...losses.map(t => t.pnl!)) : 0,
-      profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Infinity : 0,
+      profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0,
     };
   }).sort((a, b) => b.totalPnl - a.totalPnl);
 }
@@ -138,7 +138,7 @@ export function computeRollingMetrics(trades: Trade[], window: number = 30): Rol
 
     metrics.push({
       timestamp: windowTrades[windowTrades.length - 1].timestamp || Date.now(),
-      sharpe: stdDev > 0 ? mean / stdDev : 0,
+      sharpe: stdDev > 0 ? (mean - 0) / stdDev : 0, // risk-free rate ≈ 0 for intraday
       winRate: (wins / pnls.length) * 100,
       avgPnl: mean,
       tradeIndex: i,

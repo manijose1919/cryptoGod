@@ -21,5 +21,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["."]
+  "include": ["*.ts", "*.tsx", "components/**/*.ts", "components/**/*.tsx", "services/**/*.ts", "services/**/*.tsx", "contexts/**/*.ts", "contexts/**/*.tsx", "hooks/**/*.ts", "hooks/**/*.tsx", "containers/**/*.ts", "containers/**/*.tsx"],
+  "exclude": ["node_modules", "dist", "data", "tests", "*.config.ts", "*.config.js"]
 }

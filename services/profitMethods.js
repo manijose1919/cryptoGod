@@ -12,6 +12,14 @@
  * Uses shorthand candle keys: c, o, h, l, v (matching server.js convention)
  */
 
+import {
+  saveDCAPosition, getDCAPositions, updateDCAPosition, closeDCAPosition,
+  saveGridState, getGridStates, updateGridState, closeGridState,
+  saveSwingPosition, getSwingPositions, updateSwingPosition, closeSwingPosition,
+  closeAllPositionsForSession,
+} from './database.js';
+import { getActiveSessionId } from './sessionPersistence.js';
+
 // ============================================
 // CONFIGURATION (mirrors constants.ts PROFIT_METHODS)
 // ============================================
@@ -1318,6 +1326,117 @@ export function importState(state) {
       methodStats[key].trades = state[key].trades || 0;
       methodStats[key].pnl = state[key].pnl || 0;
     }
+  }
+}
+
+/**
+ * Persist current DCA/Grid/Swing positions to SQLite.
+ * Call after any Map mutation that should survive a restart.
+ */
+export function persistPositionsToDB() {
+  const sessionId = getActiveSessionId();
+  if (!sessionId) return;
+
+  try {
+    // Close all existing active positions for this session, then re-save
+    closeAllPositionsForSession(sessionId);
+
+    for (const [ticker, pos] of dcaPositions) {
+      saveDCAPosition(sessionId, ticker, {
+        totalInvested: pos.totalInvested,
+        totalQuantity: pos.totalQuantity,
+        avgPrice: pos.avgPrice,
+        buyCount: pos.buyCount,
+        lastBuyTime: pos.lastBuyTime,
+        takeProfitPrice: pos.takeProfitPrice || 0,
+      });
+    }
+
+    for (const [ticker, state] of gridStates) {
+      saveGridState(sessionId, ticker, {
+        gridLow: state.config?.lowerBound || 0,
+        gridHigh: state.config?.upperBound || 0,
+        gridCount: state.config?.gridCount || 5,
+        levels: state.levels || [],
+        filledBuys: state.filledBuys || 0,
+        filledSells: state.filledSells || 0,
+        totalPnl: state.totalPnl || 0,
+      });
+    }
+
+    for (const [ticker, pos] of swingPositions) {
+      saveSwingPosition(sessionId, ticker, {
+        entryPrice: pos.entryPrice,
+        quantity: pos.quantity || 0,
+        stopLoss: pos.stopLoss || 0,
+        takeProfit: pos.takeProfit || 0,
+        highestPrice: pos.highestPrice || pos.entryPrice,
+        trailingStop: pos.trailingStop || 0,
+        confidence: pos.confidence || 0,
+      });
+    }
+  } catch (e) {
+    console.error('[ProfitMethods] DB persist error:', e.message);
+  }
+}
+
+/**
+ * Restore DCA/Grid/Swing positions from SQLite on startup.
+ */
+export function restorePositionsFromDatabase(sessionId) {
+  if (!sessionId) return { dca: 0, grid: 0, swing: 0 };
+
+  try {
+    const dcaRows = getDCAPositions(sessionId);
+    for (const row of dcaRows) {
+      dcaPositions.set(row.ticker, {
+        totalInvested: row.total_invested,
+        totalQuantity: row.total_quantity,
+        avgPrice: row.avg_price,
+        buyCount: row.buy_count,
+        lastBuyTime: row.last_buy_time,
+        takeProfitPrice: row.take_profit_price,
+      });
+    }
+
+    const gridRows = getGridStates(sessionId);
+    for (const row of gridRows) {
+      const levels = JSON.parse(row.levels_json || '[]');
+      gridStates.set(row.ticker, {
+        config: {
+          lowerBound: row.grid_low,
+          upperBound: row.grid_high,
+          gridCount: row.grid_count,
+        },
+        levels,
+        filledBuys: row.filled_buys,
+        filledSells: row.filled_sells,
+        totalPnl: row.total_pnl,
+      });
+    }
+
+    const swingRows = getSwingPositions(sessionId);
+    for (const row of swingRows) {
+      swingPositions.set(row.ticker, {
+        entryPrice: row.entry_price,
+        quantity: row.quantity,
+        stopLoss: row.stop_loss,
+        takeProfit: row.take_profit,
+        highestPrice: row.highest_price,
+        trailingStop: row.trailing_stop,
+        confidence: row.confidence,
+        entryTime: row.created_at,
+      });
+    }
+
+    const counts = { dca: dcaRows.length, grid: gridRows.length, swing: swingRows.length };
+    if (counts.dca + counts.grid + counts.swing > 0) {
+      console.log(`[ProfitMethods] Restored: ${counts.dca} DCA, ${counts.grid} Grid, ${counts.swing} Swing positions`);
+    }
+    return counts;
+  } catch (e) {
+    console.error('[ProfitMethods] DB restore error:', e.message);
+    return { dca: 0, grid: 0, swing: 0 };
   }
 }
 

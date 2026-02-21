@@ -41,9 +41,17 @@ import {
   getTrainingEquity as getTrainingEquityFromDb,
 } from './database.js';
 
+import { buildFeatureVector as sharedBuildFeatureVector, FEATURE_COUNT as SHARED_FEATURE_COUNT } from './featureEngineering.js';
+
+// All timeframes for multi-TF training
+const ALL_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w'];
+
 // Fee constants (same as live system)
 const TRADING_FEE_PER_SIDE = 0.00075; // 0.075%
 const TRADING_FEE_ROUND_TRIP = 0.0015; // 0.15%
+
+// Slippage model: realistic spread cost per side
+const SLIPPAGE_PER_SIDE = 0.0005;  // 0.05% spread cost per side
 
 // Config thresholds (same as server.js CONFIG.THRESHOLDS)
 const THRESHOLDS = {
@@ -81,7 +89,7 @@ let activeTraining = null;
  * Create isolated copies of stateful sub-systems.
  * These mirror the live system but don't share any state.
  */
-function createIsolatedState() {
+export function createIsolatedState() {
   return {
     // Adaptive weights per strategy
     adaptiveWeights: {
@@ -503,48 +511,34 @@ function recordTradeToState(state, pnl, strategy, currentTime, tradeContext = {}
 
 /**
  * Build a feature vector for an ML training sample.
+ * v3: Uses shared featureEngineering.js for unified 75-element numeric arrays
+ * compatible with both training and live prediction.
  */
-function buildFeatureVector(candles, ticker, strategy, regime, score, fearGreed, defiTvl) {
-  const lastCandle = candles[candles.length - 1];
-  const tc = calculateTCSeries(candles);
-  const mom = calculateMomentumSeries(candles);
-  const bkout = calculateBreakoutDetectorSeries(candles);
+function buildFeatureVector(candles, ticker, strategy, regime, score, fearGreed, defiTvl, mtfContext = null) {
+  try {
+    // Convert training candle format to featureEngineering format
+    // Training candles have {time, open, high, low, close, volume} + {t, o, h, l, c, v}
+    // featureEngineering expects {c, h, l, o, v} — both formats are already on the candles
 
-  // Price-derived features
-  const closes = candles.slice(-20).map(c => c.close);
-  const highs = candles.slice(-20).map(c => c.high);
-  const lows = candles.slice(-20).map(c => c.low);
-  const volumes = candles.slice(-20).map(c => c.volume);
-  const avgClose = closes.reduce((a, b) => a + b, 0) / closes.length;
-  const avgVol = volumes.reduce((a, b) => a + b, 0) / volumes.length;
-  const priceChange = closes.length >= 2 ? (closes[closes.length - 1] - closes[0]) / closes[0] : 0;
-  const volatility = closes.length >= 2 ? Math.sqrt(closes.reduce((s, c, i) => {
-    if (i === 0) return 0;
-    const ret = Math.log(c / closes[i - 1]);
-    return s + ret * ret;
-  }, 0) / (closes.length - 1)) : 0;
+    const result = sharedBuildFeatureVector(ticker, candles, {
+      sentimentData: {
+        fearGreed: fearGreed || 50,
+      },
+      defiData: {
+        tvlChange: defiTvl || 0,
+      },
+      marketRegime: regime || 'UNKNOWN',
+      lastTradeTime: null,
+      // MTF alignment score from mtfContext if available
+      mtfAlignmentScore: mtfContext ? (mtfContext.tf_agreement || 0) * 20 : null, // 0-5 → 0-100
+    });
 
-  return {
-    // Indicator values
-    tc_value: tc[tc.length - 1] ?? 50,
-    momentum_value: mom[mom.length - 1] ?? 50,
-    breakout_value: bkout[bkout.length - 1] ?? 50,
-    composite_score: score?.compositeScore ?? 0,
-    // Price features
-    price: lastCandle.close,
-    price_change_20: priceChange,
-    volatility_20: volatility,
-    volume_ratio: avgVol > 0 ? lastCandle.volume / avgVol : 1,
-    high_low_range: lastCandle.high - lastCandle.low,
-    // Market context
-    regime: regime || 'UNKNOWN',
-    strategy: strategy || 'ADAPTIVE',
-    fear_greed: fearGreed || 50,
-    defi_tvl: defiTvl || 0,
-    // Time features
-    hour: new Date(lastCandle.time).getUTCHours(),
-    day_of_week: new Date(lastCandle.time).getUTCDay(),
-  };
+    return result.features; // Return the 75-element numeric array
+  } catch (err) {
+    // Fallback: return zeros array if shared function fails
+    console.warn(`[Training] buildFeatureVector fallback for ${ticker}: ${err.message}`);
+    return new Array(SHARED_FEATURE_COUNT).fill(0);
+  }
 }
 
 /**
@@ -741,10 +735,248 @@ function calcEMA(data, period) {
 }
 
 /**
+ * Calculate RSI from an array of close prices.
+ */
+function calcRSI(closes, period = 14) {
+  if (closes.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + (diff > 0 ? diff : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (diff < 0 ? -diff : 0)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+/**
+ * Calculate ATR from candle arrays.
+ */
+function calcATRFromCandles(candles, period = 14) {
+  if (candles.length < period + 1) return 0;
+  let atr = 0;
+  for (let i = 1; i <= period; i++) {
+    const tr = Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i - 1].close),
+      Math.abs(candles[i].low - candles[i - 1].close)
+    );
+    atr += tr;
+  }
+  atr /= period;
+  for (let i = period + 1; i < candles.length; i++) {
+    const tr = Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i - 1].close),
+      Math.abs(candles[i].low - candles[i - 1].close)
+    );
+    atr = (atr * (period - 1) + tr) / period;
+  }
+  return atr;
+}
+
+/**
+ * Binary search to find the index of the latest candle at or before `targetTime`.
+ */
+function binarySearchTime(times, targetTime) {
+  let lo = 0, hi = times.length - 1;
+  if (hi < 0 || times[0] > targetTime) return -1;
+  if (times[hi] <= targetTime) return hi;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (times[mid] <= targetTime) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/**
+ * Build sorted time arrays for O(log n) lookups across all timeframes.
+ */
+function buildCandleIndex(candlesByTF) {
+  const index = {};
+  for (const [tf, tickerMap] of Object.entries(candlesByTF)) {
+    index[tf] = {};
+    for (const [ticker, candles] of Object.entries(tickerMap)) {
+      index[tf][ticker] = {
+        times: candles.map(c => c.time),
+        candles,
+      };
+    }
+  }
+  return index;
+}
+
+/**
+ * Get a window of candles from a given timeframe at or before currentTime.
+ */
+function getCandleWindowForTF(candleIndex, tf, ticker, currentTime, windowSize) {
+  const entry = candleIndex[tf]?.[ticker];
+  if (!entry || entry.times.length === 0) return [];
+  const idx = binarySearchTime(entry.times, currentTime);
+  if (idx < 0) return [];
+  const start = Math.max(0, idx - windowSize + 1);
+  return entry.candles.slice(start, idx + 1);
+}
+
+/**
+ * Get multi-timeframe context for a given ticker at a given time.
+ * Returns 15 cross-timeframe features.
+ */
+function getMTFContext(candleIndex, ticker, currentTime) {
+  const result = {
+    htf_trend_4h: 0,
+    htf_rsi_4h: 50,
+    daily_trend: 0,
+    daily_rsi: 50,
+    daily_atr_pct: 0,
+    weekly_trend: 0,
+    weekly_momentum: 0,
+    m15_rsi: 50,
+    m15_vol_spike: 1,
+    m5_price_accel: 0,
+    m5_spread: 0,
+    tf_agreement: 0,
+    trend_alignment: 0,
+    vol_regime_daily: 0.5,
+    mtf_momentum_score: 0,
+  };
+
+  // --- 4h features ---
+  const candles4h = getCandleWindowForTF(candleIndex, '4h', ticker, currentTime, 30);
+  if (candles4h.length >= 20) {
+    const closes4h = candles4h.map(c => c.close);
+    const ema8 = calcEMA(closes4h, 8);
+    const ema20 = calcEMA(closes4h, 20);
+    if (ema8 !== null && ema20 !== null) {
+      result.htf_trend_4h = ema8 > ema20 ? 1 : ema8 < ema20 ? -1 : 0;
+    }
+    result.htf_rsi_4h = calcRSI(closes4h, 14);
+  }
+
+  // --- Daily features ---
+  const candles1d = getCandleWindowForTF(candleIndex, '1d', ticker, currentTime, 70);
+  if (candles1d.length >= 21) {
+    const closes1d = candles1d.map(c => c.close);
+    const ema8d = calcEMA(closes1d, 8);
+    const ema21d = calcEMA(closes1d, 21);
+    if (ema8d !== null && ema21d !== null) {
+      result.daily_trend = ema8d > ema21d ? 1 : ema8d < ema21d ? -1 : 0;
+    }
+    result.daily_rsi = calcRSI(closes1d, 14);
+
+    // Daily ATR as percentage
+    const atr = calcATRFromCandles(candles1d, 14);
+    const lastClose = closes1d[closes1d.length - 1];
+    result.daily_atr_pct = lastClose > 0 ? (atr / lastClose) * 100 : 0;
+
+    // Volatility regime: ATR percentile rank over 60 day window
+    if (candles1d.length >= 60) {
+      const atrValues = [];
+      for (let i = 14; i < candles1d.length; i++) {
+        const slice = candles1d.slice(Math.max(0, i - 14), i + 1);
+        atrValues.push(calcATRFromCandles(slice, Math.min(14, slice.length - 1)));
+      }
+      const currentATR = atrValues[atrValues.length - 1] || 0;
+      const rank = atrValues.filter(a => a <= currentATR).length / atrValues.length;
+      result.vol_regime_daily = rank;
+    }
+  }
+
+  // --- Weekly features ---
+  const candles1w = getCandleWindowForTF(candleIndex, '1w', ticker, currentTime, 20);
+  if (candles1w.length >= 8) {
+    const closesW = candles1w.map(c => c.close);
+    const ema4w = calcEMA(closesW, 4);
+    const ema8w = calcEMA(closesW, 8);
+    if (ema4w !== null && ema8w !== null) {
+      result.weekly_trend = ema4w > ema8w ? 1 : ema4w < ema8w ? -1 : 0;
+    }
+
+    // Weekly momentum: rate of change over last 4 weeks
+    if (closesW.length >= 5) {
+      const recent = closesW[closesW.length - 1];
+      const past = closesW[closesW.length - 5];
+      result.weekly_momentum = past > 0 ? (recent - past) / past : 0;
+    }
+  }
+
+  // --- 15m features ---
+  const candles15m = getCandleWindowForTF(candleIndex, '15m', ticker, currentTime, 30);
+  if (candles15m.length >= 20) {
+    const closes15m = candles15m.map(c => c.close);
+    result.m15_rsi = calcRSI(closes15m, 14);
+
+    // Volume spike: current vs 20-period avg
+    const vols = candles15m.map(c => c.volume);
+    const avgVol = vols.slice(-20).reduce((a, b) => a + b, 0) / 20;
+    const lastVol = vols[vols.length - 1];
+    result.m15_vol_spike = avgVol > 0 ? lastVol / avgVol : 1;
+  }
+
+  // --- 5m features ---
+  const candles5m = getCandleWindowForTF(candleIndex, '5m', ticker, currentTime, 15);
+  if (candles5m.length >= 12) {
+    const closes5m = candles5m.slice(-12).map(c => c.close);
+    // Price acceleration: 2nd derivative
+    if (closes5m.length >= 3) {
+      const returns = [];
+      for (let i = 1; i < closes5m.length; i++) {
+        returns.push((closes5m[i] - closes5m[i - 1]) / closes5m[i - 1]);
+      }
+      if (returns.length >= 2) {
+        const accel = returns.slice(-3).reduce((s, r, i, a) => {
+          if (i === 0) return 0;
+          return s + (r - a[i - 1]);
+        }, 0) / Math.max(1, returns.slice(-3).length - 1);
+        result.m5_price_accel = accel;
+      }
+    }
+
+    // Micro-volatility: avg (high-low)/close over last 6 candles
+    const last6 = candles5m.slice(-6);
+    if (last6.length >= 3) {
+      const spreads = last6.map(c => c.close > 0 ? (c.high - c.low) / c.close : 0);
+      result.m5_spread = spreads.reduce((a, b) => a + b, 0) / spreads.length;
+    }
+  }
+
+  // --- Cross-timeframe composites ---
+  // TF agreement: count bullish trends (0-5 score)
+  const trendSignals = [
+    result.htf_trend_4h > 0 ? 1 : 0,
+    result.daily_trend > 0 ? 1 : 0,
+    result.weekly_trend > 0 ? 1 : 0,
+    result.m15_rsi > 50 ? 1 : 0,
+    result.htf_rsi_4h > 50 ? 1 : 0,
+  ];
+  result.tf_agreement = trendSignals.reduce((a, b) => a + b, 0);
+
+  // Trend alignment: 1 if 1h-proxy (4h_rsi bullish), 4h, and 1d all agree
+  const hourlyBullish = result.htf_rsi_4h > 50 ? 1 : -1;
+  result.trend_alignment = (hourlyBullish === result.htf_trend_4h && result.htf_trend_4h === result.daily_trend && result.daily_trend !== 0) ? 1 : 0;
+
+  // MTF momentum score: weighted avg of momentum across 15m, 1h, 4h
+  const m15Mom = (result.m15_rsi - 50) / 50; // -1 to 1
+  const h4Mom = (result.htf_rsi_4h - 50) / 50;
+  result.mtf_momentum_score = m15Mom * 0.2 + h4Mom * 0.4 + (result.daily_trend * 0.4);
+
+  return result;
+}
+
+/**
  * Seed isolated state from a previous training run's learned state.
  * This enables iterative training — each run refines the previous run's lessons.
  */
-function seedStateFromRun(seedRunId) {
+export function seedStateFromRun(seedRunId) {
   const learned = getLearnedState(seedRunId);
   if (!learned) {
     console.warn(`[Training] Seed run ${seedRunId} has no learned state, starting fresh`);
@@ -820,15 +1052,22 @@ function seedStateFromRun(seedRunId) {
  * @param {number} [config.startTime] - Start timestamp (ms). Auto-detected if omitted.
  * @param {number} [config.endTime] - End timestamp (ms). Auto-detected if omitted.
  * @param {string} [config.seedRunId] - Previous run ID to seed state from (iterative training).
+ * @param {boolean} [config.evaluationOnly] - If true, state is frozen (no weight updates), only records trades
+ * @param {Object} [config.frozenState] - Pre-built state to import (used with evaluationOnly)
+ * @param {boolean} [config.skipMTF] - If true, skip loading 5m/15m data (saves ~350MB RAM)
+ * @param {boolean} [config._isSubRun] - Internal: don't block on activeTraining check
  */
 export async function startTraining(config = {}) {
-  if (activeTraining && activeTraining.status === 'running') {
+  if (!config._isSubRun && activeTraining && activeTraining.status === 'running') {
     throw new Error('Training already in progress');
   }
 
   const tickers = config.tickers || ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
   const initialCash = config.initialCash || 10000;
   const seedRunId = config.seedRunId || null;
+  const evaluationOnly = config.evaluationOnly || false;
+  const frozenState = config.frozenState || null;
+  const skipMTF = config.skipMTF || false;
   const runId = `train_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
   // Determine time range from available data
@@ -854,10 +1093,16 @@ export async function startTraining(config = {}) {
   // Calculate total steps (1 step = 1 hour across all pairs)
   const totalHours = Math.floor((endTime - startTime) / 3600000);
 
-  // Build isolated state — fresh or seeded from previous run
-  const isolatedState = seedRunId
-    ? seedStateFromRun(seedRunId)
-    : createIsolatedState();
+  // Build isolated state — fresh, seeded, or frozen for evaluation
+  let isolatedState;
+  if (evaluationOnly && frozenState) {
+    // Import frozen state — no mutations will happen during evaluation
+    isolatedState = frozenState;
+  } else if (seedRunId) {
+    isolatedState = seedStateFromRun(seedRunId);
+  } else {
+    isolatedState = createIsolatedState();
+  }
 
   // Save run to DB
   insertTrainingRun({
@@ -897,6 +1142,7 @@ export async function startTraining(config = {}) {
     equity: { peak: initialCash, current: initialCash },
     isolatedState,
     seedRunId,
+    evaluationOnly,
     epoch: seedRunId ? (getTrainingRun(seedRunId)?.config_json ? ((JSON.parse(getTrainingRun(seedRunId).config_json).epoch || 0) + 1) : 1) : 0,
     strategyBreakdown: {},
     recentTrades: [],
@@ -906,41 +1152,40 @@ export async function startTraining(config = {}) {
     startedAt: Date.now(),
   };
 
-  // Pre-load all candle data into memory for speed
-  console.log(`[Training] Loading candle data for ${tickers.length} pairs...`);
-  const candleData = {};
-  const candleData4h = {}; // Higher timeframe for multi-TF confirmation
-  for (const ticker of tickers) {
-    const candles = getHistoricalCandles(ticker, '1h', startTime, endTime, 100000);
-    if (candles.length > 0) {
-      // Convert to {o,h,l,c,v} format (matches live bot candle format)
-      candleData[ticker] = candles.map(c => ({
-        t: c.time,
-        o: c.open,
-        h: c.high,
-        l: c.low,
-        c: c.close,
-        v: c.volume,
-        time: c.time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume,
-      }));
-      console.log(`[Training] ${ticker}: ${candles.length} 1h candles loaded`);
-    }
+  // Pre-load all candle data into memory for speed — ALL timeframes
+  const timeframesToLoad = skipMTF
+    ? ['1h', '4h', '1d', '1w']
+    : ALL_TIMEFRAMES;
 
-    // Load 4h candles for higher-timeframe trend confirmation
-    const candles4h = getHistoricalCandles(ticker, '4h', startTime, endTime, 50000);
-    if (candles4h.length > 0) {
-      candleData4h[ticker] = candles4h.map(c => ({
-        t: c.time, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume,
-        time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
-      }));
-      console.log(`[Training] ${ticker}: ${candles4h.length} 4h candles loaded`);
+  console.log(`[Training] Loading ${timeframesToLoad.length} timeframes for ${tickers.length} pairs...`);
+
+  const candlesByTF = {}; // { '1h': { 'BTCUSD': [...], ... }, '4h': { ... }, ... }
+  const candleData = {}; // 1h reference (primary stepping TF)
+
+  for (const tf of timeframesToLoad) {
+    candlesByTF[tf] = {};
+    const maxCandles = tf === '5m' ? 600000 : tf === '15m' ? 200000 : 100000;
+    for (const ticker of tickers) {
+      const candles = getHistoricalCandles(ticker, tf, startTime, endTime, maxCandles);
+      if (candles.length > 0) {
+        const mapped = candles.map(c => ({
+          t: c.time, o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume,
+          time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+        }));
+        candlesByTF[tf][ticker] = mapped;
+        if (tf === '1h') candleData[ticker] = mapped;
+      }
     }
+    const pairCount = Object.keys(candlesByTF[tf]).length;
+    const totalCandles = Object.values(candlesByTF[tf]).reduce((s, arr) => s + arr.length, 0);
+    console.log(`[Training] ${tf}: ${totalCandles.toLocaleString()} candles across ${pairCount} pairs`);
   }
+
+  // Backward compat: candleData4h reference
+  const candleData4h = candlesByTF['4h'] || {};
+
+  // Build cross-TF index for O(log n) lookups
+  const candleIndex = buildCandleIndex(candlesByTF);
 
   // Build unified timeline (all unique hourly timestamps)
   const timestampSet = new Set();
@@ -953,7 +1198,7 @@ export async function startTraining(config = {}) {
   console.log(`[Training] Starting training run ${runId}: ${timeline.length} timesteps, ${Object.keys(candleData).length} pairs`);
 
   // Run training loop asynchronously
-  runTrainingLoop(runId, timeline, candleData, candleData4h, activeTraining).catch(err => {
+  runTrainingLoop(runId, timeline, candleData, candleData4h, activeTraining, candleIndex).catch(err => {
     console.error(`[Training] Fatal error: ${err.message}`);
     if (activeTraining && activeTraining.runId === runId) {
       activeTraining.status = 'error';
@@ -972,10 +1217,11 @@ export async function startTraining(config = {}) {
 /**
  * Core training loop — processes timeline in chunks.
  */
-async function runTrainingLoop(runId, timeline, candleData, candleData4h, training) {
+async function runTrainingLoop(runId, timeline, candleData, candleData4h, training, candleIndex = null) {
   const portfolio = training.portfolio;
   const state = training.isolatedState;
   const tickers = Object.keys(candleData);
+  const isEvalOnly = training.evaluationOnly || false;
   let lastStepTime = timeline[timeline.length - 1] || Date.now(); // Track for end-of-loop cleanup
 
   // Build index maps for fast candle window lookups
@@ -1019,7 +1265,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
       const candles = candleWindows[ticker];
       if (!candles || candles.length < 2) continue;
 
-      const currentPrice = candles[candles.length - 1].c;
+      const currentPrice = candles[candles.length - 1].c * (1 - SLIPPAGE_PER_SIDE); // Sell slippage
 
       // Update highest price tracking
       if (currentPrice > (position.highestPrice || 0)) {
@@ -1041,15 +1287,17 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
 
         const holdHours = (currentTime - position.entryTime) / 3600000;
 
-        // Record to state WITH learning context
-        recordTradeToState(state, pnl, position.strategy, currentTime, {
-          regime: position.regime,
-          indicatorValues: position.indicatorValues || null,
-          pnlPct: pnlPct / 100, // convert from % to fraction for trade memory
-          holdHours,
-        });
+        // Record to state WITH learning context (skip if evaluation-only)
+        if (!isEvalOnly) {
+          recordTradeToState(state, pnl, position.strategy, currentTime, {
+            regime: position.regime,
+            indicatorValues: position.indicatorValues || null,
+            pnlPct: pnlPct / 100, // convert from % to fraction for trade memory
+            holdHours,
+          });
+        }
 
-        // Stats
+        // Stats (always track, even in eval mode)
         training.stats.totalTrades++;
         training.stats.totalPnl += pnl;
         training.stats.totalFees += sellFee + buyFee;
@@ -1070,10 +1318,11 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         else sb.losses++;
         sb.pnl += pnl;
 
-        // Build ML feature vector
+        // Build ML feature vector with MTF context
+        const mtfCtx = candleIndex ? getMTFContext(candleIndex, ticker, currentTime) : null;
         const features = buildFeatureVector(
           candles, ticker, position.strategy, position.regime,
-          position.score, fearGreed, defiTvl
+          position.score, fearGreed, defiTvl, mtfCtx
         );
 
         const trade = {
@@ -1136,7 +1385,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         if (Object.keys(portfolio.positions).length >= MAX_CONCURRENT_POSITIONS) break;
 
         const { ticker, score, candles } = candidate;
-        const currentPrice = candles[candles.length - 1].c;
+        const currentPrice = candles[candles.length - 1].c * (1 + SLIPPAGE_PER_SIDE); // Buy slippage
 
         // Detect regime
         let regime = 'NORMAL';
@@ -1150,9 +1399,15 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         const entry = evaluateStrategies(candles, regime, state);
         if (!entry) continue;
 
-        // MULTI-TIMEFRAME CONFIRMATION — skip if 4h trend disagrees
-        const htfTrend = getHigherTFTrend(candleData4h, ticker, currentTime);
-        if (htfTrend === 'BEARISH') continue; // Don't buy against higher TF downtrend
+        // MULTI-TIMEFRAME CONFIRMATION — use MTF context or fallback to old 4h check
+        const mtfCtxEntry = candleIndex ? getMTFContext(candleIndex, ticker, currentTime) : null;
+        if (mtfCtxEntry) {
+          // Skip if both 4h and daily trends are bearish
+          if (mtfCtxEntry.htf_trend_4h < 0 && mtfCtxEntry.daily_trend < 0) continue;
+        } else {
+          const htfTrend = getHigherTFTrend(candleData4h, ticker, currentTime);
+          if (htfTrend === 'BEARISH') continue;
+        }
 
         // Capture indicator values for quality filtering + learning
         const tcVal = calculateTCSeries(candles).pop() ?? 50;
@@ -1215,7 +1470,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         const buyFee = currentPrice * (positionSize / currentPrice) * TRADING_FEE_PER_SIDE;
         const quantity = (positionSize - buyFee) / currentPrice;
 
-        const entryFeatures = buildFeatureVector(candles, ticker, entry.strategy, regime, score, fearGreed, defiTvl);
+        const entryFeatures = buildFeatureVector(candles, ticker, entry.strategy, regime, score, fearGreed, defiTvl, mtfCtxEntry);
 
         portfolio.cash -= positionSize;
         portfolio.positions[ticker] = {
@@ -1331,9 +1586,9 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
   }
 
   // --- TRAINING COMPLETE ---
-  // Close all remaining positions at last available price
+  // Close all remaining positions at last available price (with sell slippage)
   for (const [ticker, position] of Object.entries(portfolio.positions)) {
-    const price = position.currentPrice || position.entryPrice;
+    const price = (position.currentPrice || position.entryPrice) * (1 - SLIPPAGE_PER_SIDE);
     const sellFee = price * position.quantity * TRADING_FEE_PER_SIDE;
     const buyFee = position.entryPrice * position.quantity * TRADING_FEE_PER_SIDE;
     const pnl = (price - position.entryPrice) * position.quantity - sellFee - buyFee;
@@ -1341,12 +1596,14 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
 
     const pnlPct = (price - position.entryPrice) / position.entryPrice;
     const holdHrs = (lastStepTime - position.entryTime) / 3600000;
-    recordTradeToState(state, pnl, position.strategy, lastStepTime, {
-      regime: position.regime,
-      indicatorValues: position.indicatorValues,
-      pnlPct,
-      holdHours: holdHrs,
-    });
+    if (!isEvalOnly) {
+      recordTradeToState(state, pnl, position.strategy, lastStepTime, {
+        regime: position.regime,
+        indicatorValues: position.indicatorValues,
+        pnlPct,
+        holdHours: holdHrs,
+      });
+    }
     training.stats.totalTrades++;
     training.stats.totalPnl += pnl;
     if (pnl > 0) training.stats.wins++;

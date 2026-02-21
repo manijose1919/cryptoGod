@@ -7,8 +7,11 @@ import type {
   TrainingRun,
   TrainingResults,
   TrainingEquityPoint,
+  WalkForwardStatus,
+  WalkForwardFold,
 } from '../types';
 import * as api from '../services/historicalTrainingService';
+import { TrainingComparison } from './TrainingComparison';
 
 const NAV_LINKS = [
   { to: '/', label: 'Crypto' },
@@ -46,12 +49,23 @@ export const HistoricalTrainingDashboard: React.FC = () => {
   const [applying, setApplying] = useState(false);
   const [applyResult, setApplyResult] = useState<string | null>(null);
 
+  // Walk-forward state
+  const [wfStatus, setWfStatus] = useState<WalkForwardStatus | null>(null);
+  const [wfRunning, setWfRunning] = useState(false);
+  const [wfTrainMonths, setWfTrainMonths] = useState(12);
+  const [wfTestMonths, setWfTestMonths] = useState(3);
+  const [wfStepMonths, setWfStepMonths] = useState(3);
+  const [wfRuns, setWfRuns] = useState<any[]>([]);
+  const [wfError, setWfError] = useState<string | null>(null);
+  const [wfRetrainResult, setWfRetrainResult] = useState<string | null>(null);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load initial data
   useEffect(() => {
     loadDataSummary();
     loadRuns();
+    loadWfRuns();
     // Check if training is already running
     api.getTrainingStatus().then(status => {
       if (status.active) {
@@ -59,11 +73,18 @@ export const HistoricalTrainingDashboard: React.FC = () => {
         setTrainingStatus(status);
       }
     }).catch(() => {});
+    // Check if walk-forward is running
+    api.getWalkForwardStatus().then(status => {
+      if (status.running) {
+        setWfRunning(true);
+        setWfStatus(status);
+      }
+    }).catch(() => {});
   }, []);
 
-  // Poll training/download status
+  // Poll training/download/walk-forward status
   useEffect(() => {
-    if (training || downloading) {
+    if (training || downloading || wfRunning) {
       pollRef.current = setInterval(async () => {
         try {
           if (training) {
@@ -85,13 +106,21 @@ export const HistoricalTrainingDashboard: React.FC = () => {
               loadDataSummary();
             }
           }
+          if (wfRunning) {
+            const status = await api.getWalkForwardStatus();
+            setWfStatus(status);
+            if (!status.running) {
+              setWfRunning(false);
+              loadWfRuns();
+            }
+          }
         } catch (e) { /* ignore polling errors */ }
       }, 2000);
     }
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [training, downloading]);
+  }, [training, downloading, wfRunning]);
 
   const loadDataSummary = useCallback(async () => {
     try {
@@ -179,6 +208,49 @@ export const HistoricalTrainingDashboard: React.FC = () => {
       setApplyResult(`Error: ${e.message}`);
     } finally {
       setApplying(false);
+    }
+  };
+
+  const loadWfRuns = useCallback(async () => {
+    try {
+      const r = await api.getWalkForwardRuns();
+      setWfRuns(r);
+    } catch (e) { /* ignore */ }
+  }, []);
+
+  const handleStartWF = async () => {
+    try {
+      setWfRunning(true);
+      setWfStatus(null);
+      setWfError(null);
+      await api.startWalkForward({
+        trainMonths: wfTrainMonths,
+        testMonths: wfTestMonths,
+        stepMonths: wfStepMonths,
+        tickers: selectedPairs,
+        initialCash,
+      });
+    } catch (e: any) {
+      setWfError(e.message);
+      setWfRunning(false);
+    }
+  };
+
+  const handleStopWF = async () => {
+    try {
+      await api.stopWalkForward();
+      setWfRunning(false);
+      loadWfRuns();
+    } catch (e) { /* ignore */ }
+  };
+
+  const handleWFRetrain = async (id: string) => {
+    try {
+      setWfRetrainResult(null);
+      const result = await api.triggerWalkForwardRetrain(id);
+      setWfRetrainResult(result.success ? `Copied ${result.samplesCopied} OOS samples for retraining` : `Rejected: ${result.reason}`);
+    } catch (e: any) {
+      setWfRetrainResult(`Error: ${e.message}`);
     }
   };
 
@@ -452,6 +524,29 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             Training Engine
           </h2>
 
+          {/* Training Presets */}
+          <div className="grid grid-cols-3 gap-3">
+            {[
+              { name: 'Conservative', cash: 10000, pairs: ['BTCUSD', 'ETHUSD'], tfs: ['1h', '4h', '1d'], color: 'blue', desc: 'Low risk, major pairs only' },
+              { name: 'Balanced', cash: 10000, pairs: [...ALL_PAIRS].slice(0, 6), tfs: ['15m', '1h', '4h'], color: 'purple', desc: 'Mixed timeframes, 6 pairs' },
+              { name: 'Aggressive', cash: 10000, pairs: [...ALL_PAIRS], tfs: ['5m', '15m', '1h'], color: 'red', desc: 'All pairs, fast timeframes' },
+            ].map(preset => (
+              <button
+                key={preset.name}
+                onClick={() => {
+                  setInitialCash(preset.cash);
+                  setSelectedPairs(preset.pairs);
+                  setSelectedTimeframes(preset.tfs);
+                }}
+                className={`p-3 rounded-lg border border-${preset.color}-500/30 bg-${preset.color}-900/10 hover:bg-${preset.color}-900/30 text-left transition-colors`}
+              >
+                <div className={`text-sm font-semibold text-${preset.color}-300`}>{preset.name}</div>
+                <div className="text-[10px] text-gray-400 mt-1">{preset.desc}</div>
+                <div className="text-[10px] text-gray-500 mt-1">{preset.pairs.length} pairs | {preset.tfs.join(', ')}</div>
+              </button>
+            ))}
+          </div>
+
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <label className="text-xs text-gray-400 block mb-1">Initial Cash ($)</label>
@@ -615,6 +710,9 @@ export const HistoricalTrainingDashboard: React.FC = () => {
             </div>
           )}
         </section>
+
+        {/* Training Comparison */}
+        <TrainingComparison />
 
         {/* Section 3: Results & Apply */}
         <section className="glass-card p-5 space-y-4">
@@ -780,6 +878,216 @@ export const HistoricalTrainingDashboard: React.FC = () => {
           {runs.length === 0 && !training && (
             <div className="text-gray-500 text-sm text-center py-8">
               No training runs yet. Download data and start training above.
+            </div>
+          )}
+        </section>
+
+        {/* Section 4: Walk-Forward Validation */}
+        <section className="glass-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold text-cyan-300 flex items-center gap-2">
+            <span className={`w-2 h-2 rounded-full ${wfRunning ? 'bg-yellow-500 animate-pulse' : 'bg-yellow-500'}`} />
+            Walk-Forward Validation
+          </h2>
+          <p className="text-xs text-gray-400">
+            Train on rolling windows and test out-of-sample to prevent overfitting. Each fold trains on N months, then tests on unseen data.
+          </p>
+
+          {/* Config inputs */}
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Train (months)</label>
+              <input
+                type="number" min={2} max={36} value={wfTrainMonths}
+                onChange={e => setWfTrainMonths(Number(e.target.value))}
+                className="bg-gray-800 text-white text-sm px-2 py-1.5 rounded border border-gray-600 w-20"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Test (months)</label>
+              <input
+                type="number" min={1} max={12} value={wfTestMonths}
+                onChange={e => setWfTestMonths(Number(e.target.value))}
+                className="bg-gray-800 text-white text-sm px-2 py-1.5 rounded border border-gray-600 w-20"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 block mb-1">Step (months)</label>
+              <input
+                type="number" min={1} max={12} value={wfStepMonths}
+                onChange={e => setWfStepMonths(Number(e.target.value))}
+                className="bg-gray-800 text-white text-sm px-2 py-1.5 rounded border border-gray-600 w-20"
+              />
+            </div>
+            <button
+              onClick={wfRunning ? handleStopWF : handleStartWF}
+              disabled={!hasData && !wfRunning}
+              className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
+                wfRunning
+                  ? 'bg-red-600 hover:bg-red-700'
+                  : 'bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-700 disabled:text-gray-500'
+              }`}
+            >
+              {wfRunning ? 'Stop Walk-Forward' : 'Start Walk-Forward'}
+            </button>
+          </div>
+
+          {wfError && (
+            <div className="bg-red-900/30 border border-red-500/50 rounded p-3 text-sm text-red-300">
+              Walk-forward error: {wfError}
+            </div>
+          )}
+
+          {/* Live WF progress */}
+          {wfStatus && wfStatus.running && (
+            <div className="space-y-3">
+              {/* Progress bar */}
+              <div>
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                  <span>
+                    Fold {(wfStatus.currentFold ?? 0) + 1} / {wfStatus.totalFolds}
+                    {wfStatus.currentPhase && ` — ${wfStatus.currentPhase}`}
+                  </span>
+                  <span>Elapsed: {formatDuration((wfStatus as any).elapsed || 0)}</span>
+                </div>
+                <div className="h-3 bg-gray-700 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-yellow-500 to-orange-500 rounded-full transition-all"
+                    style={{ width: `${wfStatus.totalFolds ? ((wfStatus.completedFolds || 0) / wfStatus.totalFolds) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Aggregate OOS stats */}
+              {wfStatus.aggregateOOS && wfStatus.aggregateOOS.totalTrades > 0 && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="glass-card p-3 text-center">
+                    <div className="text-[10px] text-gray-400">OOS Trades</div>
+                    <div className="text-lg font-bold">{wfStatus.aggregateOOS.totalTrades}</div>
+                  </div>
+                  <div className="glass-card p-3 text-center">
+                    <div className="text-[10px] text-gray-400">OOS Win Rate</div>
+                    <div className={`text-lg font-bold ${wfStatus.aggregateOOS.winRate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
+                      {wfStatus.aggregateOOS.winRate.toFixed(1)}%
+                    </div>
+                  </div>
+                  <div className="glass-card p-3 text-center">
+                    <div className="text-[10px] text-gray-400">OOS P&L</div>
+                    <div className={`text-lg font-bold ${wfStatus.aggregateOOS.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      ${wfStatus.aggregateOOS.totalPnl.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Fold table */}
+              {wfStatus.folds && wfStatus.folds.length > 0 && (
+                <div>
+                  <div className="text-xs text-gray-400 mb-2">Fold Results</div>
+                  <div className="max-h-64 overflow-y-auto custom-scrollbar">
+                    <table className="w-full text-xs">
+                      <thead className="text-gray-400 border-b border-gray-700">
+                        <tr>
+                          <th className="text-left py-1 px-2">#</th>
+                          <th className="text-left py-1 px-2">Train Period</th>
+                          <th className="text-right py-1 px-2">Train P&L</th>
+                          <th className="text-right py-1 px-2">Test P&L</th>
+                          <th className="text-right py-1 px-2">OOS Ratio</th>
+                          <th className="text-center py-1 px-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {wfStatus.folds.map((fold: WalkForwardFold, i: number) => (
+                          <tr key={i} className="border-b border-gray-800/50">
+                            <td className="py-1 px-2 text-gray-300">{fold.foldNumber + 1}</td>
+                            <td className="py-1 px-2 text-gray-400 font-mono text-[10px]">
+                              {new Date(fold.trainStart).toLocaleDateString()} → {new Date(fold.testEnd).toLocaleDateString()}
+                            </td>
+                            <td className={`py-1 px-2 text-right ${fold.trainPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {fold.trainPnl ? `$${fold.trainPnl.toFixed(0)}` : '-'}
+                            </td>
+                            <td className={`py-1 px-2 text-right ${fold.testPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {fold.testPnl ? `$${fold.testPnl.toFixed(0)}` : '-'}
+                            </td>
+                            <td className={`py-1 px-2 text-right ${
+                              fold.overfittingRatio >= 0.5 ? 'text-green-400' :
+                              fold.overfittingRatio >= 0.3 ? 'text-yellow-400' : 'text-red-400'
+                            }`}>
+                              {fold.overfittingRatio ? fold.overfittingRatio.toFixed(2) : '-'}
+                            </td>
+                            <td className="py-1 px-2 text-center">
+                              <span className={`inline-block w-2 h-2 rounded-full ${
+                                fold.status === 'completed' ? 'bg-green-500' :
+                                fold.status === 'training' ? 'bg-blue-500 animate-pulse' :
+                                fold.status === 'testing' ? 'bg-yellow-500 animate-pulse' : 'bg-gray-600'
+                              }`} />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Past WF runs */}
+          {wfRuns.length > 0 && !wfRunning && (
+            <div>
+              <div className="text-xs text-gray-400 mb-2">Past Walk-Forward Runs</div>
+              <div className="space-y-2">
+                {wfRuns.map((run: any) => (
+                  <div key={run.id} className="glass-card p-3 flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-mono text-gray-300">{run.id.slice(3, 18)}...</span>
+                      <span className={`ml-2 text-xs ${
+                        run.status === 'completed' ? 'text-green-400' :
+                        run.status === 'failed' ? 'text-red-400' : 'text-gray-400'
+                      }`}>{run.status}</span>
+                      <span className="ml-2 text-[10px] text-gray-500">
+                        {run.completedFolds}/{run.totalFolds} folds
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {run.aggregateOOS && (
+                        <>
+                          <span className="text-xs text-gray-400">{run.aggregateOOS.totalTrades || 0} OOS trades</span>
+                          <span className={`text-xs ${(run.aggregateOOS.winRate || 0) >= 50 ? 'text-green-400' : 'text-red-400'}`}>
+                            {(run.aggregateOOS.winRate || 0).toFixed(1)}% WR
+                          </span>
+                          <span className={`text-xs ${(run.aggregateOOS.totalPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            ${(run.aggregateOOS.totalPnl || 0).toFixed(0)}
+                          </span>
+                        </>
+                      )}
+                      {run.status === 'completed' && (
+                        <button
+                          onClick={() => handleWFRetrain(run.id)}
+                          className="text-xs px-3 py-1 bg-purple-600 hover:bg-purple-700 rounded transition-colors"
+                        >
+                          Retrain ML
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {wfRetrainResult && (
+            <div className={`text-sm p-3 rounded ${
+              wfRetrainResult.startsWith('Error') || wfRetrainResult.startsWith('Rejected')
+                ? 'bg-red-900/30 border border-red-500/50 text-red-300'
+                : 'bg-green-900/30 border border-green-500/50 text-green-300'
+            }`}>
+              {wfRetrainResult}
+            </div>
+          )}
+
+          {!wfRunning && wfRuns.length === 0 && (
+            <div className="text-gray-500 text-sm text-center py-4">
+              No walk-forward runs yet. Configure windows and start above.
             </div>
           )}
         </section>

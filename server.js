@@ -39,7 +39,7 @@ import {
 import persistenceRoutes from './routes/persistence.js';
 import tradingviewRoutes, { injectSignal } from './routes/tradingview.js';
 import { SignalScanner } from './services/signalScanner.js';
-import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, exportState as pmExportState, importState as pmImportState, setSessionStart as pmSetSessionStart, cleanupProfitMethodState } from './services/profitMethods.js';
+import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, exportState as pmExportState, importState as pmImportState, setSessionStart as pmSetSessionStart, cleanupProfitMethodState, persistPositionsToDB, restorePositionsFromDatabase } from './services/profitMethods.js';
 
 // Phase 2-5 Services
 // WebSocket services are accessed dynamically via getWebSocketService()
@@ -59,7 +59,7 @@ import { getMasterSurgeDecision, detectSurge, detectCandlestickPatterns } from '
 import { recordTradeForLearning, shouldTakeTradeAI, getAILearningStatus, restoreFromDatabase as restoreAILearning, getParameterAdjustments } from './services/aiLearningBackend.js';
 import { getOnChainSignals } from './services/onChainBackend.js';
 import { getLearnedState } from './services/historicalTrainingEngine.js';
-import { getTrainingRun } from './services/database.js';
+import { getTrainingRun, pingDatabase } from './services/database.js';
 import { getAssetProfile, getStrategyAssetMatch, getBestStrategyForAsset, getPositionSizeForLiquidity, getRiskAdjustedParams } from './services/assetIntelligenceBackend.js';
 import * as CapitalTierManager from './services/capitalTierManager.js';
 import * as SessionManager from './services/sessionManager.js';
@@ -67,7 +67,7 @@ import * as SessionManager from './services/sessionManager.js';
 // Batch 1: Trading Performance Services
 import { isStrategyEnabledForRegime, filterStrategiesByRegime } from './services/regimeStrategyMap.js';
 import { getMTFAlignmentScore, getMTFConfidencePoints } from './services/mtfConfluence.js';
-import { getFundingRateSignal, getFundingConfidenceAdjustment } from './services/fundingRateStrategy.js';
+import { getFundingRateSignal, getFundingConfidenceAdjustment, shouldBlockEntryOnFunding, isFundingContrarian } from './services/fundingRateStrategy.js';
 
 // Batch 2: Intelligence Layer Services
 import { getOrderBookSignal, getOrderBookConfidenceAdjustment } from './services/orderBookSignals.js';
@@ -97,6 +97,20 @@ import { dataIngestion } from './services/DataIngestionService.js';
 
 // Exchange Adapter System
 import { getExchangeAdapter, setActiveExchange, getActiveExchangeId, listExchanges, setSessionManager as setAdapterSessionManager, getWebSocketService } from './services/exchangeAdapters/index.js';
+
+// Route Modules
+import createMarketRouter from './routes/market.js';
+import createExchangeRouter from './routes/exchange.js';
+import createAuthRouter from './routes/auth.js';
+import createQuestradeRouter from './routes/questrade.js';
+import createSessionsRouter from './routes/sessions.js';
+import createIntelligenceRouter from './routes/intelligence.js';
+import createSentimentRouter from './routes/sentiment.js';
+import createSignalsRouter from './routes/signals.js';
+import createNotificationsRouter from './routes/notifications.js';
+import createConfigRouter from './routes/config.js';
+import createBacktestRouter from './routes/backtest.js';
+import createMultiExchangeRouter from './routes/multiExchange.js';
 
 // Phase 7: Multi-Exchange Data + ML Services
 import {
@@ -270,11 +284,11 @@ function initExchangeWebSocket(tickers, broadcastFn) {
 /** Reconnect WebSocket when exchange is switched */
 function reconnectWebSocketForExchange(tickers) {
     // Close the old WS (try both services to be safe)
-    try { cryptoComWsService.closeWebSocket(); } catch (e) { /* ok */ }
+    try { cryptoComWsService.closeWebSocket(); } catch (e) { console.warn('[WS] Error closing Crypto.com WS:', e.message); }
     try {
         const krakenWs = getWebSocketService('kraken');
         krakenWs.closeWebSocket();
-    } catch (e) { /* ok */ }
+    } catch (e) { console.warn('[WS] Error closing Kraken WS:', e.message); }
 
     // Init the new one
     initExchangeWebSocket(tickers, _broadcastToFrontend);
@@ -314,7 +328,7 @@ const CONFIG = {
     },
 
     MIN_TRADE_SIZE: 1.00,              // Practical minimum for Crypto.com
-    MIN_CANDLES_REQUIRED: 10,          // Beast Mode: 10 (was 15)
+    MIN_CANDLES_REQUIRED: 30,          // Need sufficient data for reliable indicators
 
     // Liquidity filter: reject tickers with insufficient volume
     MIN_AVG_CANDLE_USD_VOLUME: 5000,   // $5K avg per-candle USD volume (from recent 20 candles)
@@ -387,6 +401,16 @@ dataIngestion.on('data', (items) => {
 // ============================================
 const rateLimitStore = new Map();
 
+// Clean up stale IPs every 5 minutes to prevent memory leak
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, requests] of rateLimitStore) {
+        if (requests.length === 0 || requests[requests.length - 1] < now - CONFIG.RATE_LIMIT_WINDOW_MS) {
+            rateLimitStore.delete(ip);
+        }
+    }
+}, 5 * 60 * 1000);
+
 const rateLimit = (req, res, next) => {
     const ip = req.ip || req.connection.remoteAddress;
     const now = Date.now();
@@ -418,7 +442,8 @@ app.use(cors({
         // Allow localhost on any port for development
         if (origin.startsWith('http://localhost:')) return callback(null, true);
         // Allow VPS direct access
-        if (origin.includes('31.97.7.138')) return callback(null, true);
+        const vpsIp = process.env.VPS_IP;
+        if (vpsIp && origin.includes(vpsIp)) return callback(null, true);
         // Allow configured origin
         if (origin === CONFIG.CORS_ORIGIN) return callback(null, true);
         return callback(new Error('Not allowed by CORS'));
@@ -704,6 +729,8 @@ function saveSessionState() {
     setSetting('session_optimizer', JSON.stringify(optExportState()));
     setSetting('session_profit_methods', JSON.stringify(pmExportState()));
     setSetting('session_timestamp', JSON.stringify(Date.now()));
+    // Persist DCA/Grid/Swing positions to SQLite
+    persistPositionsToDB();
   } catch (e) {
     console.log(`[SESSION] Save failed: ${e.message}`);
   }
@@ -744,6 +771,35 @@ function checkLiquidity(candles) {
     // Stale price check: if latest WS price diverges >50% from candle close, skip
     // (catches tokens where candle data and live feed are wildly different)
     return { pass: true, avgUsdVol };
+}
+
+/**
+ * Simple EMA calculation for 1h cross-TF trend check.
+ * Returns null if not enough data.
+ */
+function simpleEMA(closes, period) {
+    if (!closes || closes.length < period) return null;
+    const mult = 2 / (period + 1);
+    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < closes.length; i++) {
+        ema = (closes[i] - ema) * mult + ema;
+    }
+    return ema;
+}
+
+/**
+ * Check 1h trend direction: EMA(9) vs EMA(21).
+ * Returns 'BULLISH', 'BEARISH', or 'NEUTRAL'.
+ */
+function get1hTrend(candles1h) {
+    if (!candles1h || candles1h.length < 21) return 'NEUTRAL';
+    const closes = candles1h.map(c => c.c);
+    const ema9 = simpleEMA(closes, 9);
+    const ema21 = simpleEMA(closes, 21);
+    if (ema9 === null || ema21 === null) return 'NEUTRAL';
+    if (ema9 > ema21) return 'BULLISH';
+    if (ema9 < ema21) return 'BEARISH';
+    return 'NEUTRAL';
 }
 
 // ============================================
@@ -811,24 +867,30 @@ async function tradingBotLoop() {
             if (Math.random() < 0.1) addLog(`[CIRCUIT BREAKER] Paused: ${pauseCheck.reason} (${pauseCheck.remainingMinutes}min left)`, 'WARN');
         }
 
-        // --- MULTI-TIMEFRAME DATA (5m, 15m alongside 1m) ---
+        // --- MULTI-TIMEFRAME DATA (5m, 15m, 1h alongside 1m) ---
         let mtfDataMap = new Map();
+        let data1hMap = new Map(); // 1h candles for cross-TF momentum check
         try {
             const mtfTickers = [...new Set([...positionTickers, ...scanBatch.slice(0, 6)])];
-            const [data5m, data15m] = await Promise.all([
+            const [data5m, data15m, data1h] = await Promise.all([
                 getMultipleMarketData(mtfTickers, '5m'),
                 getMultipleMarketData(mtfTickers, '15m'),
+                getMultipleMarketData(mtfTickers, '1h'),
             ]);
             for (const ticker of mtfTickers) {
                 const candles1m = marketDataMap.get(ticker);
                 const entry5m = data5m.find(d => d.ticker === ticker);
                 const entry15m = data15m.find(d => d.ticker === ticker);
+                const entry1h = data1h.find(d => d.ticker === ticker);
                 if (candles1m) {
                     mtfDataMap.set(ticker, {
                         '1m': candles1m,
                         '5m': entry5m?.candles || [],
                         '15m': entry15m?.candles || [],
                     });
+                }
+                if (entry1h?.candles?.length > 0) {
+                    data1hMap.set(ticker, entry1h.candles);
                 }
             }
         } catch (e) {}
@@ -1168,19 +1230,86 @@ async function tradingBotLoop() {
                     mtfConfidenceAdj = getMTFConfidencePoints(mtfScore.alignmentScore);
                 }
 
-                // Feature 8: Funding rate adjustment
+                // Feature 8: Funding rate adjustment + entry gate
                 let fundingAdj = 0;
                 try {
                     const fundingSignal = getFundingRateSignal(ticker);
                     const fundingResult = getFundingConfidenceAdjustment(fundingSignal, 'LONG');
                     fundingAdj = fundingResult.adjustment;
+
+                    // Funding rate entry gate: block entry if funding is extreme for LONG
+                    if (entryStrategy) {
+                        const fundingBlock = shouldBlockEntryOnFunding(ticker, 'LONG');
+                        if (fundingBlock.blocked) {
+                            logThought({ type: 'SKIP', ticker, action: 'FUNDING_BLOCKED',
+                                confidence: score.compositeScore,
+                                reason: fundingBlock.reason,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                    }
+
+                    // Funding contrarian signal: boost score if contrarian agrees with entry direction
+                    if (entryStrategy) {
+                        const contrarian = isFundingContrarian(ticker);
+                        if (contrarian.signal === 'LONG_BIAS') {
+                            fundingAdj += 5; // Contrarian agrees with LONG entry
+                        }
+                    }
                 } catch (e) {}
+
+                // Cross-timeframe momentum check (1h trend)
+                let htfAdj = 0;
+                if (entryStrategy) {
+                    try {
+                        const candles1h = data1hMap.get(ticker);
+                        const trend1h = get1hTrend(candles1h);
+                        const mtfTfData = mtfDataMap.get(ticker);
+                        const candles15m = mtfTfData?.['15m'];
+                        let trend15m = 'NEUTRAL';
+                        if (candles15m && candles15m.length >= 21) {
+                            const closes15m = candles15m.map(c => c.c);
+                            const ema9_15m = simpleEMA(closes15m, 9);
+                            const ema21_15m = simpleEMA(closes15m, 21);
+                            if (ema9_15m !== null && ema21_15m !== null) {
+                                trend15m = ema9_15m > ema21_15m ? 'BULLISH' : ema9_15m < ema21_15m ? 'BEARISH' : 'NEUTRAL';
+                            }
+                        }
+
+                        if (trend1h === 'BEARISH') {
+                            htfAdj = -8; // Reduce composite score by 8 for bearish 1h
+                        }
+
+                        // If both 1h AND 15m are bearish, skip entry entirely
+                        if (trend1h === 'BEARISH' && trend15m === 'BEARISH') {
+                            logThought({ type: 'SKIP', ticker, action: 'HTF_BEARISH',
+                                confidence: score.compositeScore,
+                                reason: `Both 1h and 15m trends are bearish — skipping entry`,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                    } catch (e) {}
+                }
 
                 // Sentiment confidence adjustment (-10 to +10 range)
                 let sentimentAdj = 0;
                 const sentimentScore = sentimentCache.get(ticker);
                 if (sentimentScore != null) {
                     sentimentAdj = Math.round(sentimentScore * 10); // -1..1 → -10..+10
+                }
+
+                // ML Advisory (A/B tracking) — advisory only, does not block trades
+                let mlAdvice = { available: false, direction: null, confidence: 0 };
+                if (entryStrategy && mlPredictionService?.getMLAdvice) {
+                    try {
+                        mlAdvice = await mlPredictionService.getMLAdvice(ticker, candles, {});
+                        if (mlAdvice.available) {
+                            logThought({ type: 'ML_ADVICE', ticker, action: 'ML_PREDICTION',
+                                confidence: mlAdvice.confidence,
+                                reason: `ML predicts ${mlAdvice.direction} with ${mlAdvice.confidence}% confidence (advisory only)`,
+                                regime: currentRegime });
+                        }
+                    } catch (e) {}
                 }
 
                 // Hard floor: reject any entry with compositeScore below optimizer floor
@@ -1226,17 +1355,20 @@ async function tradingBotLoop() {
                     if (investmentAmount > CONFIG.MIN_TRADE_SIZE) {
                         logThought({
                             type: 'ENTRY_EVAL', ticker, action: 'ENTERING',
-                            confidence: score.compositeScore + mtfConfidenceAdj + fundingAdj + sentimentAdj,
-                            reason: `${entryStrategy} entry [${marketSpeed}/${activeProfile?.timeframeId || 'default'}]: score=${score.compositeScore}, kelly=${(kellyFraction*100).toFixed(1)}%, mtf=${mtfConfidenceAdj}, funding=${fundingAdj}, sentiment=${sentimentAdj}`,
+                            confidence: score.compositeScore + mtfConfidenceAdj + fundingAdj + htfAdj + sentimentAdj,
+                            reason: `${entryStrategy} entry [${marketSpeed}/${activeProfile?.timeframeId || 'default'}]: score=${score.compositeScore}, kelly=${(kellyFraction*100).toFixed(1)}%, mtf=${mtfConfidenceAdj}, funding=${fundingAdj}, htf=${htfAdj}, sentiment=${sentimentAdj}${mlAdvice.available ? `, ml=${mlAdvice.direction}@${mlAdvice.confidence}%` : ''}`,
                             regime: currentRegime,
                             market_speed: marketSpeed,
-                            indicators: { tcValue, compositeScore: score.compositeScore, kellyFraction, mtfConfidenceAdj, fundingAdj, sentimentAdj, investmentAmount, timeframeId: activeProfile?.timeframeId },
+                            indicators: { tcValue, compositeScore: score.compositeScore, kellyFraction, mtfConfidenceAdj, fundingAdj, htfAdj, sentimentAdj, investmentAmount, timeframeId: activeProfile?.timeframeId, mlDirection: mlAdvice.direction, mlConfidence: mlAdvice.confidence },
                         });
                         const volTargets = getDynamicTargets(candles);
                         await handleBuy(ticker, currentPrice, entryStrategy, `Batch scan [${marketSpeed}/${activeProfile?.timeframeId || 'default'}] (score=${score.compositeScore}, sentiment=${sentimentAdj})`, investmentAmount, {
                             compositeScore: score.compositeScore,
                             triggerValue,
                             regime: volTargets.regime,
+                            mlInfluenced: mlAdvice.available,
+                            mlConfidence: mlAdvice.confidence,
+                            mlDirection: mlAdvice.direction,
                         });
                     }
                 }
@@ -1439,6 +1571,9 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 compositeScore: entryMeta.compositeScore || 0,
                 triggerValue: entryMeta.triggerValue || 0,
                 regime: entryMeta.regime || 'NORMAL',
+                mlInfluenced: entryMeta.mlInfluenced || false,
+                mlConfidence: entryMeta.mlConfidence || 0,
+                mlDirection: entryMeta.mlDirection || null,
             };
         }
         portfolio.cash -= (actualCost + buyFee);
@@ -1554,6 +1689,9 @@ const handleSell = async (position, price, reason) => {
             compositeScore: position.compositeScore || 0,
             triggerValue: position.triggerValue || 0,
             regime: position.regime || 'NORMAL',
+            mlInfluenced: position.mlInfluenced || false,
+            mlConfidence: position.mlConfidence || 0,
+            mlDirection: position.mlDirection || null,
         });
         if (portfolio.tradeLog.length > 500) portfolio.tradeLog.splice(0, portfolio.tradeLog.length - 500);
 
@@ -1595,529 +1733,6 @@ const handleSell = async (position, price, reason) => {
         addLog(`SELL order failed for ${position.ticker}: ${error.message}`, 'ERROR');
     }
 };
-
-// ============================================
-// API Endpoints
-// ============================================
-app.get('/api/market-data', async (req, res, next) => {
-    try {
-        const { instrument_name, timeframe, exchange } = req.query;
-        if (!instrument_name || !timeframe) {
-            return res.status(400).json({ message: 'instrument_name and timeframe are required' });
-        }
-
-        // Use specified exchange, or fall back to active exchange
-        const activeExchange = exchange || getActiveExchangeId();
-        if (activeExchange !== 'crypto.com') {
-            const adapter = getExchangeAdapter(activeExchange);
-            const candles = await adapter.getCandles(instrument_name, timeframe, 200);
-            return res.status(200).json({ data: candles });
-        }
-
-        // Crypto.com: use existing getMarketData with SQLite caching
-        const data = await getMarketData(instrument_name, timeframe, 200);
-        res.status(200).json({ data });
-    } catch (error) {
-        next(error);
-    }
-});
-
-app.get('/api/instruments', async (req, res, next) => {
-    try {
-        const { exchange } = req.query;
-
-        if (exchange && exchange !== 'crypto.com') {
-            const adapter = getExchangeAdapter(exchange);
-            const result = await adapter.getInstruments();
-            return res.status(200).json(result);
-        }
-
-        const result = await makePublicRequest('public/get-instruments');
-        res.status(200).json(result);
-    } catch (error) {
-        next(error);
-    }
-});
-
-// ── Exchange Adapter Routes ──
-app.get('/api/exchange/current', (req, res) => {
-    const adapter = getExchangeAdapter();
-    res.json({
-        exchange: adapter.getName(),
-        feePercent: adapter.getFeePercent() * 100,
-        roundTripFeePercent: adapter.getFeePercent() * 200,
-    });
-});
-
-app.post('/api/exchange/switch', (req, res) => {
-    try {
-        const { exchange } = req.body;
-        if (!exchange) return res.status(400).json({ message: 'exchange is required' });
-        const prevExchange = getActiveExchangeId();
-        const newId = setActiveExchange(exchange);
-        const adapter = getExchangeAdapter();
-
-        // Update fee awareness for beast mode and optimizer simulation
-        const fees = getActiveFees();
-        beastSetRoundTripFee(fees.roundTrip * 100);
-        setFeeForSimulation(fees.roundTrip * 100);
-
-        // Reconnect WebSocket to new exchange if changed
-        if (prevExchange !== newId) {
-            // Use Canadian-allowed tickers as fallback when availableTickers is empty (e.g. Kraken)
-            const FALLBACK_TICKERS = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
-            const tickers = availableTickers.length > 0 ? availableTickers : FALLBACK_TICKERS;
-            reconnectWebSocketForExchange(tickers);
-            addLog(`[Exchange] Switched from ${prevExchange} to ${newId}, WebSocket reconnected (${tickers.length} tickers)`, 'INFO');
-        }
-
-        res.json({
-            exchange: newId,
-            name: adapter.getName(),
-            feePercent: adapter.getFeePercent() * 100,
-            roundTripFeePercent: adapter.getFeePercent() * 200,
-        });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/exchange/list', (req, res) => {
-    res.json(listExchanges());
-});
-
-app.post('/api/test-connection', async (req, res, next) => {
-    try {
-        if (publicIp === 'not detected' || publicIp === 'error fetching IP') {
-            await logPublicIp();
-        }
-        res.status(200).json({ message: 'Backend connection successful!', ip: publicIp });
-    } catch (error) {
-        next(error);
-    }
-});
-
-app.post('/api/login', async (req, res, next) => {
-    try {
-        const { apiKey, secretKey } = req.body;
-        if (!apiKey || !secretKey) return res.status(400).json({ message: 'API Key and Secret Key are required.' });
-
-        const sessionId = SessionManager.createSession(apiKey, secretKey);
-        let balanceResult = await makeSignedRequest('private/user-balance', {}, sessionId);
-        
-        const dataArray = balanceResult?.data || [];
-        const topLevel = Array.isArray(dataArray) && dataArray.length > 0 ? dataArray[0] : dataArray;
-
-        let cashBalance = 0;
-        const holdings = {};
-        const positionBalances = topLevel?.position_balances || [];
-        
-        for (const pos of positionBalances) {
-            const currency = pos.instrument_name;
-            const qty = parseFloat(pos.quantity || '0');
-            if (qty <= 0) continue;
-            if (currency === 'USD' || currency === 'USDC') cashBalance += qty;
-            else holdings[currency] = { quantity: qty, usdValue: 0 };
-        }
-
-        const totalBalance = cashBalance; // Simplified for this overwrite
-        portfolio = { cash: cashBalance, initialBudget: totalBalance, positions: {}, holdings };
-        botState.sessionId = sessionId;
-        beastSetSessionBalance(totalBalance);
-        saveSessionState();
-
-        res.status(200).json({ balance: totalBalance, holdings, sessionId, portfolio });
-    } catch (error) {
-        next(error);
-    }
-});
-
-app.post('/api/ai/analyze', async (req, res, next) => {
-    try {
-        const { prompt, ticker, signals, sentiment, marketData } = req.body;
-        
-        let analysis;
-        if (ticker && signals && marketData) {
-            // Specialized analysis
-            analysis = await brain.analyzeTradeOpportunity(ticker, signals, sentiment || {}, marketData);
-        } else if (prompt) {
-            // Generic prompt analysis - handled locally
-            analysis = `Local AI: Received prompt (${prompt.length} chars). Use specific ticker/signals/marketData for trade analysis.`;
-        } else {
-            return res.status(400).json({ message: 'Prompt or ticker/signals/marketData required' });
-        }
-        
-        res.status(200).json({ analysis: typeof analysis === 'string' ? analysis : JSON.stringify(analysis) });
-    } catch (error) {
-        console.error('[AI Analyze Error]:', error.message);
-        res.status(500).json({ message: error.message });
-    }
-});
-
-app.get('/api/status', (req, res) => {
-    res.status(200).json({ portfolio, logs, isBotActive: botState.isActive });
-});
-
-app.get('/api/system/status', (req, res) => {
-    try {
-        res.status(200).json({
-            websocket: getWebSocketStatusProxy(),
-            circuitBreaker: getCircuitBreakerStatus(),
-            adaptiveWeights: getAdaptiveWeightsStatus(),
-            profitMethods: getProfitMethodsStatus(),
-            preTradeAI: getPreTradeAIStatus(),
-            beastMode: getBeastModeStatus(),
-            optimizer: getOptimizerStatus(portfolio.tradeLog),
-            aiLearning: getAILearningStatus(),
-        });
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
-app.get('/api/ws-auth', (req, res) => {
-    try {
-        const apiKey = process.env.SESSION_API_KEY;
-        const secretKey = process.env.SESSION_SECRET_KEY;
-        if (!apiKey || !secretKey) {
-            return res.status(404).json({ message: 'WebSocket auth keys not configured' });
-        }
-        const id = Date.now();
-        const nonce = Date.now();
-        const method = 'public/auth';
-        const sigPayload = method + id + apiKey + nonce;
-        const sig = crypto.createHmac('sha256', secretKey).update(sigPayload).digest('hex');
-        res.status(200).json({ id, method, api_key: apiKey, sig, nonce });
-    } catch (error) {
-        res.status(500).json({ message: 'Failed to generate WebSocket auth', error: error.message });
-    }
-});
-
-// New AI/Brain Endpoints
-app.get('/api/brain/thoughts', (req, res) => {
-    res.status(200).json(brainThoughts);
-});
-
-app.get('/api/feeds/live', async (req, res) => {
-    try {
-        const feeds = await dataIngestion.fetchAllFeeds();
-        res.status(200).json(feeds);
-    } catch (e) {
-        res.status(500).json({ message: 'Failed to fetch feeds' });
-    }
-});
-
-// ============================================
-// Questrade API Routes
-// ============================================
-
-app.post('/api/questrade/auth', async (req, res) => {
-    try {
-        const { refreshToken, isPractice } = req.body;
-        if (refreshToken) {
-            questrade.isPractice = isPractice ?? true;
-        }
-        await questrade.authenticate(refreshToken);
-        // Also reinitialize paper trader when re-authing
-        res.status(200).json({ success: true, status: questrade.getStatus() });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/questrade/status', (req, res) => {
-    res.status(200).json({
-        questrade: questrade.getStatus(),
-        bot: {
-            isActive: questradeBotState.isActive,
-            isPaper: questradeBotState.isPaper,
-            watchlist: questradeBotState.watchlist,
-        },
-        paperTrading: {
-            cash: paperTrader.portfolio.cash,
-            positions: Object.keys(paperTrader.portfolio.positions).length,
-            tradeCount: paperTrader.portfolio.history.length,
-        }
-    });
-});
-
-app.get('/api/questrade/accounts', async (req, res) => {
-    try {
-        const accounts = await questrade.getAccounts();
-        res.status(200).json({ accounts });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/questrade/balance/:accountId', async (req, res) => {
-    try {
-        const data = await questrade.getBalance(req.params.accountId);
-        res.status(200).json(data);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/questrade/positions/:accountId', async (req, res) => {
-    try {
-        const positions = await questrade.getPositions(req.params.accountId);
-        res.status(200).json({ positions });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/questrade/candles', async (req, res) => {
-    try {
-        const { symbol, interval, start, end } = req.query;
-        if (!symbol) return res.status(400).json({ message: 'symbol is required' });
-        const candles = await questrade.getCandlesByTicker(symbol, interval || '1m', start, end);
-        res.status(200).json({ candles });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/questrade/search', async (req, res) => {
-    try {
-        const { prefix } = req.query;
-        if (!prefix) return res.status(400).json({ message: 'prefix is required' });
-        const symbols = await questrade.searchSymbol(prefix);
-        res.status(200).json({ symbols });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/questrade/symbols', async (req, res) => {
-    try {
-        const { exchange } = req.query;
-        if (!exchange) return res.status(400).json({ message: 'exchange is required' });
-        const symbols = await questrade.getSymbolsByExchange(exchange);
-        res.status(200).json({ symbols });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.post('/api/questrade/order', async (req, res) => {
-    try {
-        const { accountId, ticker, side, quantity, orderType, limitPrice } = req.body;
-        if (!ticker || !side || !quantity) {
-            return res.status(400).json({ message: 'ticker, side, and quantity are required' });
-        }
-
-        if (questradeBotState.isPaper) {
-            // Paper trade
-            const trade = await paperTrader.createOrder(ticker, side, quantity, orderType || 'MARKET', limitPrice);
-            res.status(200).json({ success: true, trade, paper: true });
-        } else {
-            // Live trade
-            if (!accountId) return res.status(400).json({ message: 'accountId required for live trading' });
-            const symbolId = await questrade.getSymbolId(ticker);
-            const order = {
-                symbolId,
-                quantity,
-                icebergQuantity: quantity,
-                side: side === 'BUY' ? 'Buy' : 'Sell',
-                orderType: orderType === 'LIMIT' ? 'Limit' : 'Market',
-                timeInForce: 'Day',
-            };
-            if (limitPrice) order.limitPrice = limitPrice;
-            const result = await questrade.placeOrder(accountId, order);
-            res.status(200).json({ success: true, result, paper: false });
-        }
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-// Paper Trading endpoints
-app.get('/api/questrade/paper/summary', async (req, res) => {
-    try {
-        const summary = await paperTrader.getAccountSummary();
-        res.status(200).json(summary);
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.get('/api/questrade/paper/history', (req, res) => {
-    res.status(200).json({ trades: paperTrader.getHistory() });
-});
-
-app.post('/api/questrade/paper/reset', (req, res) => {
-    const { balance } = req.body;
-    paperTrader.reset(balance || 100000);
-    res.status(200).json({ success: true, message: 'Paper trading reset' });
-});
-
-// Questrade Bot Control
-app.post('/api/questrade/bot/start', async (req, res) => {
-    try {
-        const { watchlist, isPaper, accountId } = req.body;
-        if (questradeBotState.isActive) {
-            return res.status(400).json({ message: 'Questrade bot already running' });
-        }
-
-        // Ensure authenticated
-        if (!questrade.isAuthenticated()) {
-            await questrade.authenticate();
-        }
-
-        questradeBotState.isActive = true;
-        questradeBotState.isPaper = isPaper !== false;
-        questradeBotState.accountId = accountId || null;
-        if (watchlist && Array.isArray(watchlist)) {
-            questradeBotState.watchlist = watchlist;
-        }
-
-        // Start bot loop
-        questradeBotState.interval = setInterval(() => questradeBotLoop(), questradeBotState.loopMs);
-        addLog(`[QUESTRADE BOT] Started (${questradeBotState.isPaper ? 'Paper' : 'Live'}) - Watchlist: ${questradeBotState.watchlist.join(', ')}`, 'INFO');
-        res.status(200).json({ success: true, state: questradeBotState });
-    } catch (error) {
-        res.status(400).json({ message: error.message });
-    }
-});
-
-app.post('/api/questrade/bot/stop', (req, res) => {
-    if (questradeBotState.interval) {
-        clearInterval(questradeBotState.interval);
-        questradeBotState.interval = null;
-    }
-    questradeBotState.isActive = false;
-    addLog('[QUESTRADE BOT] Stopped', 'INFO');
-    res.status(200).json({ success: true });
-});
-
-// ============================================
-// Questrade Bot Loop
-// ============================================
-function isMarketOpen() {
-    const now = new Date();
-    // Convert to ET (UTC-5 or UTC-4 during DST)
-    const etOffset = -5; // EST (simplification - doesn't handle DST)
-    const utcHour = now.getUTCHours();
-    const utcMin = now.getUTCMinutes();
-    const etHour = (utcHour + etOffset + 24) % 24;
-    const etMinutes = etHour * 60 + utcMin;
-    const dayOfWeek = now.getUTCDay();
-
-    // Weekend check
-    if (dayOfWeek === 0 || dayOfWeek === 6) return false;
-
-    // Market hours: 9:30 AM - 4:00 PM ET
-    const marketOpen = 9 * 60 + 30; // 570
-    const marketClose = 16 * 60; // 960
-    return etMinutes >= marketOpen && etMinutes < marketClose;
-}
-
-async function questradeBotLoop() {
-    if (!questradeBotState.isActive) return;
-
-    try {
-        if (!isMarketOpen()) {
-            // Log occasionally during off-hours
-            if (Math.random() < 0.01) {
-                addLog('[QUESTRADE BOT] Market closed - waiting', 'INFO');
-            }
-            return;
-        }
-
-        const trader = questradeBotState.isPaper ? paperTrader : questrade;
-        const watchlist = questradeBotState.watchlist;
-
-        for (const ticker of watchlist) {
-            try {
-                // 1. Fetch candles
-                const candles = await questrade.getCandlesByTicker(ticker, '5m');
-                if (!candles || candles.length < 50) continue;
-
-                // 2. Run strategy engine
-                const signals = strategyEngine.evaluate(ticker, candles);
-                if (signals.length === 0) continue;
-
-                // 3. Get best signal
-                const bestSignal = signals.reduce((best, s) =>
-                    s.confidence > best.confidence ? s : best, signals[0]
-                );
-
-                // 4. AI Brain analysis (skip if confidence is very high to save API calls)
-                let aiDecision = { decision: 'YES', confidence: bestSignal.confidence * 100 };
-                if (bestSignal.confidence < 0.8) {
-                    try {
-                        const lastCandle = candles[candles.length - 1];
-                        aiDecision = await brain.analyzeTradeOpportunity(
-                            ticker,
-                            signals,
-                            {},
-                            { price: lastCandle.c, volume: lastCandle.v }
-                        );
-                    } catch (e) {
-                        // AI failure shouldn't block trades
-                    }
-                }
-
-                if (aiDecision.decision === 'NO') continue;
-
-                // 5. Execute trade
-                const lastPrice = candles[candles.length - 1].c;
-                const positionSize = questradeBotState.isPaper
-                    ? Math.floor((paperTrader.portfolio.cash * 0.1) / lastPrice)
-                    : 1; // Conservative for live
-
-                if (positionSize <= 0) continue;
-
-                if (bestSignal.action === 'BUY') {
-                    if (questradeBotState.isPaper) {
-                        await paperTrader.createOrder(ticker, 'BUY', positionSize);
-                    } else if (questradeBotState.accountId) {
-                        const symbolId = await questrade.getSymbolId(ticker);
-                        await questrade.placeOrder(questradeBotState.accountId, {
-                            symbolId,
-                            quantity: positionSize,
-                            side: 'Buy',
-                            orderType: 'Market',
-                            timeInForce: 'Day',
-                        });
-                    }
-                    addLog(`[QUESTRADE BOT] BUY ${positionSize} ${ticker} @ ${lastPrice} (${bestSignal.strategy}: ${bestSignal.reason})`, 'BUY');
-                } else if (bestSignal.action === 'SELL') {
-                    // Check if we have a position to sell
-                    const hasPosition = questradeBotState.isPaper
-                        ? !!paperTrader.portfolio.positions[ticker]
-                        : false; // For live, would check Questrade positions
-
-                    if (hasPosition) {
-                        const pos = paperTrader.portfolio.positions[ticker];
-                        if (questradeBotState.isPaper) {
-                            await paperTrader.createOrder(ticker, 'SELL', pos.quantity);
-                        }
-                        addLog(`[QUESTRADE BOT] SELL ${pos.quantity} ${ticker} @ ${lastPrice} (${bestSignal.strategy}: ${bestSignal.reason})`, 'SELL');
-                    }
-                }
-
-                // Review trade with brain
-                brain.reviewTrade({
-                    ticker,
-                    signal: bestSignal,
-                    price: lastPrice,
-                    timestamp: Date.now(),
-                    paper: questradeBotState.isPaper,
-                });
-
-            } catch (tickerError) {
-                if (Math.random() < 0.1) {
-                    addLog(`[QUESTRADE BOT] Error on ${ticker}: ${tickerError.message}`, 'ERROR');
-                }
-            }
-        }
-    } catch (error) {
-        addLog(`[QUESTRADE BOT] Loop error: ${error.message}`, 'ERROR');
-    }
-}
 
 const logPublicIp = async () => {
     try {
@@ -2180,937 +1795,174 @@ const updateAvailableTickers = async () => {
     }
 };
 
-// ============================================
-// Multi-Exchange Data & ML Routes
-// ============================================
-app.get('/api/exchange-data/:ticker', async (req, res) => {
-    try {
-        const { ticker } = req.params;
-        if (multiExchangeService) {
-            const snapshot = multiExchangeService.getExchangeSnapshot(ticker);
-            if (snapshot) return res.json(snapshot);
-        }
-        // Fallback: query DB directly
-        const dbData = getExchangeSnapshots(ticker, 1);
-        res.json({ ticker, snapshots: dbData.slice(0, 10), source: 'database' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/derivatives/:ticker', async (req, res) => {
-    try {
-        const { ticker } = req.params;
-        if (multiExchangeService) {
-            const data = multiExchangeService.getDerivativesSnapshot(ticker);
-            if (data) return res.json(data);
-        }
-        const dbData = getLatestDerivatives(ticker);
-        res.json(dbData || { ticker, error: 'No derivatives data yet' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/defi/overview', async (req, res) => {
-    try {
-        if (multiExchangeService) {
-            const data = multiExchangeService.getDeFiSnapshot();
-            if (data) return res.json(data);
-        }
-        const dbData = getLatestDeFiSnapshot();
-        res.json(dbData || { error: 'No DeFi data yet' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/sentiment/news/:ticker', async (req, res) => {
-    try {
-        const { ticker } = req.params;
-        const hours = parseInt(req.query.hours) || 24;
-        if (multiExchangeService) {
-            const data = multiExchangeService.getNewsSnapshot(ticker);
-            if (data) return res.json(data);
-        }
-        const dbData = getNewsItems({ ticker, hours, limit: 50 });
-        res.json({ ticker, items: dbData, source: 'database' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/sentiment/social/:ticker', async (req, res) => {
-    try {
-        const { ticker } = req.params;
-        if (multiExchangeService) {
-            const data = multiExchangeService.getSocialSnapshot(ticker);
-            if (data) return res.json(data);
-        }
-        res.json({ ticker, error: 'Social data not available yet' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/sentiment/fear-greed', async (req, res) => {
-    try {
-        if (multiExchangeService) {
-            const data = multiExchangeService.getFearGreed();
-            if (data) return res.json(data);
-        }
-        res.json({ value: 50, classification: 'Neutral', error: 'Fear & Greed not available yet' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Phase 4: Enhanced Sentiment Endpoints
-app.get('/api/sentiment/youtube/:ticker', async (req, res) => {
-    try {
-        if (!youtubeSentimentService) {
-            return res.json({ sentiment: 0, videoCount: 0, enabled: false });
-        }
-        const data = await youtubeSentimentService.getYouTubeSentiment(req.params.ticker);
-        res.json(data);
-    } catch (e) {
-        res.json({ sentiment: 0, videoCount: 0, error: e.message });
-    }
-});
-
-app.get('/api/sentiment/reddit-enhanced/:ticker', async (req, res) => {
-    try {
-        if (!redditSentimentService) {
-            return res.json({ combinedSentiment: 0, signal: 'NEUTRAL', enabled: false });
-        }
-        const data = await redditSentimentService.getEnhancedTickerSentiment(req.params.ticker);
-        res.json(data);
-    } catch (e) {
-        res.json({ combinedSentiment: 0, signal: 'NEUTRAL', error: e.message });
-    }
-});
-
-app.get('/api/sentiment/combined/:ticker', async (req, res) => {
-    try {
-        const ticker = req.params.ticker;
-        const results = {};
-
-        // Fetch all sentiment sources in parallel
-        const [redditData, youtubeData, fearGreed] = await Promise.allSettled([
-            redditSentimentService ? redditSentimentService.getEnhancedTickerSentiment(ticker) : null,
-            youtubeSentimentService ? youtubeSentimentService.getYouTubeSentiment(ticker) : null,
-            multiExchangeService ? Promise.resolve(multiExchangeService.getFearGreed()) : null,
-        ]);
-
-        results.reddit = redditData.status === 'fulfilled' ? redditData.value : null;
-        results.youtube = youtubeData.status === 'fulfilled' ? youtubeData.value : null;
-        results.fearGreed = fearGreed.status === 'fulfilled' ? fearGreed.value : null;
-
-        // Calculate weighted combined score (-1 to 1)
-        let weightedSum = 0, totalWeight = 0;
-        if (results.reddit?.combinedSentiment != null) {
-            weightedSum += results.reddit.combinedSentiment * 0.35;
-            totalWeight += 0.35;
-        }
-        if (results.youtube?.sentiment != null) {
-            weightedSum += results.youtube.sentiment * 0.25;
-            totalWeight += 0.25;
-        }
-        if (results.fearGreed?.value != null) {
-            const fgNorm = (results.fearGreed.value - 50) / 50; // Normalize 0-100 to -1 to 1
-            weightedSum += fgNorm * 0.40;
-            totalWeight += 0.40;
-        }
-
-        const combinedScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
-
-        res.json({
-            ticker,
-            combinedScore: Math.round(combinedScore * 100) / 100,
-            signal: combinedScore > 0.3 ? 'BULLISH' : combinedScore < -0.3 ? 'BEARISH' : 'NEUTRAL',
-            sources: results,
-            timestamp: Date.now(),
-        });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Phase 3: Timeframe Strategy Endpoints
-app.get('/api/timeframe/profiles', (req, res) => {
-    try {
-        if (!timeframeStrategyService) {
-            return res.json({ error: 'Timeframe strategy service not loaded', profiles: [] });
-        }
-        const speed = req.query.speed || 'FAST';
-        const profiles = timeframeStrategyService.getActiveProfilesForBot(speed);
-        res.json({ profiles, allTimeframes: timeframeStrategyService.getAllTimeframes() });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/timeframe/market-speed', async (req, res) => {
-    try {
-        if (!timeframeStrategyService) {
-            return res.json({ speed: 'FAST', error: 'Service not loaded' });
-        }
-        const ticker = req.query.ticker || availableTickers[0] || 'BTCUSD';
-        const candles = await getMarketData(ticker, '1m', 100);
-        const speed = timeframeStrategyService.detectMarketSpeed(candles);
-        res.json({ ticker, speed, candleCount: candles?.length || 0 });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Phase 2: Kraken Minimums Endpoints
-app.get('/api/kraken/minimums', (req, res) => {
-    try {
-        if (!krakenMinimums) {
-            return res.json({ error: 'Kraken minimums not loaded' });
-        }
-        const budget = parseFloat(req.query.budget) || portfolio.cash;
-        const recommended = krakenMinimums.getRecommendedAssetsForTier(budget);
-        res.json({ budget, recommended });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/multi-exchange/status', (req, res) => {
-    try {
-        if (multiExchangeService) {
-            res.json(multiExchangeService.getCollectionStatus());
-        } else {
-            res.json({ isRunning: false, error: 'Multi-exchange service not loaded' });
-        }
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// ML Routes (Phase 2 - will be populated when ML engine is built)
-app.get('/api/ml/status', (req, res) => {
-    try {
-        const latestModel = getLatestMLModel();
-        const accuracy = getMLAccuracyStats();
-        const modelHistory = getMLModelHistory(10);
-        res.json({
-            hasModel: !!latestModel,
-            latestModel: latestModel ? {
-                type: latestModel.model_type,
-                accuracy: latestModel.accuracy,
-                sampleCount: latestModel.sample_count,
-                createdAt: latestModel.created_at
-            } : null,
-            predictionAccuracy: accuracy,
-            modelHistory: modelHistory.map(m => ({ type: m.model_type, accuracy: m.accuracy, samples: m.sample_count, date: m.created_at }))
-        });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/ml/predictions/:ticker', (req, res) => {
-    try {
-        const { ticker } = req.params;
-        const limit = parseInt(req.query.limit) || 50;
-        const predictions = getMLPredictions({ ticker, limit });
-        res.json({ ticker, predictions });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/ml/feature-importance', (req, res) => {
-    try {
-        const latestModel = getLatestMLModel();
-        if (latestModel && latestModel.feature_importance_json) {
-            res.json(JSON.parse(latestModel.feature_importance_json));
-        } else {
-            res.json({ error: 'No model trained yet' });
-        }
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Smart Money / Whale Detection Routes
-app.get('/api/smart-money/:ticker', async (req, res) => {
-    try {
-        const { ticker } = req.params;
-        if (smartMoneyService) {
-            const signal = await smartMoneyService.getSmartMoneySignal(ticker);
-            return res.json(signal);
-        }
-        res.json({ signal: 'NEUTRAL', confidence: 0, summary: 'Smart money service not available' });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// NLP Sentiment Analysis Route
-app.post('/api/nlp/analyze', (req, res) => {
-    try {
-        const { text, texts } = req.body;
-        if (!localNLPService) return res.json({ error: 'NLP service not available' });
-        if (texts && Array.isArray(texts)) {
-            res.json(localNLPService.analyzeMultiple(texts));
-        } else if (text) {
-            res.json(localNLPService.analyzeSentiment(text));
-        } else {
-            res.status(400).json({ error: 'Provide text or texts field' });
-        }
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Adaptive Thresholds Routes
-app.get('/api/adaptive-thresholds', (req, res) => {
-    try {
-        if (adaptiveThresholdsService) {
-            res.json(adaptiveThresholdsService.getThresholdsWithDefaults());
-        } else {
-            res.json({ error: 'Adaptive thresholds not available' });
-        }
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/adaptive-thresholds/reset', (req, res) => {
-    try {
-        if (adaptiveThresholdsService) {
-            adaptiveThresholdsService.resetToDefaults();
-            res.json({ success: true, message: 'Thresholds reset to defaults' });
-        } else {
-            res.json({ error: 'Adaptive thresholds not available' });
-        }
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Self-Teaching Status Route
-app.get('/api/self-teaching/status', (req, res) => {
-    try {
-        if (selfTeachingLoop) {
-            res.json(selfTeachingLoop.getPerformanceReport());
-        } else {
-            res.json({ isRunning: false, error: 'Self-teaching not available' });
-        }
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Order Book Signal Route (Batch 2, Feature 2)
-app.get('/api/orderbook-signal/:ticker', (req, res) => {
-    try {
-        const signal = getOrderBookSignal(req.params.ticker);
-        res.json(signal);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Correlation Matrix Route (Batch 2, Feature 5)
-app.get('/api/correlation-matrix', (req, res) => {
-    try {
-        const timeframe = req.query.timeframe || '5m';
-        const lookback = parseInt(req.query.lookback) || 30;
-        const tickers = availableTickers.slice(0, 10); // Top 10 tickers
-        const result = getCorrelationMatrix(tickers, timeframe, lookback * 60);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Trade Journal Routes (Batch 2, Feature 7)
-app.get('/api/journal', (req, res) => {
-    try {
-        const limit = parseInt(req.query.limit) || 50;
-        const entries = getJournalEntries(limit);
-        res.json({ entries });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/journal/generate', (req, res) => {
-    try {
-        const entry = forceGenerateJournal();
-        res.json(entry);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Telegram Routes (Batch 3, Feature 9)
-app.post('/api/telegram/test', async (req, res) => {
-    try {
-        const result = await sendTestMessage();
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/telegram/status', (req, res) => {
-    res.json(telegramStatus());
-});
-
-// Config Routes (Batch 3, Feature 11)
-app.get('/api/config', (req, res) => {
-    try {
-        const raw = getSetting('trading_config');
-        res.json(raw ? JSON.parse(raw) : {});
-    } catch (e) {
-        res.json({});
-    }
-});
-
-app.post('/api/config', (req, res) => {
-    try {
-        setSetting('trading_config', JSON.stringify(req.body));
-        res.json({ success: true });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Session & Health Routes (Batch 5)
-app.get('/api/health', (req, res) => {
-    const uptime = process.uptime();
-    res.json({
-        status: 'ok',
-        uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`,
-        uptimeSeconds: uptime,
-        memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-        botActive: botState.isActive,
-        positions: Object.keys(portfolio.positions).length,
-    });
-});
-
-app.get('/api/session/status', (req, res) => {
-    res.json(getSessionStatus(portfolio, botState));
-});
-
-app.post('/api/session/pause', (req, res) => {
-    if (botState.isActive) {
-        botState.isActive = false;
-        if (botInterval) { clearInterval(botInterval); botInterval = null; }
-        addLog('[SESSION] Bot paused via API', 'WARN');
-        saveFullState({
-            portfolio, botState,
-            cbExportState, awExportState, beastExportState, pmExportState, optExportState,
-            availableTickers,
-        });
-    }
-    res.json({ success: true, botActive: false });
-});
-
-app.post('/api/session/resume', (req, res) => {
-    if (!botState.isActive) {
-        botState.isActive = true;
-        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
-        addLog('[SESSION] Bot resumed via API', 'INFO');
-    }
-    res.json({ success: true, botActive: true });
-});
 
 // ============================================
-// Session Management (Phase 1: Headless VPS)
+// Route Context + Mounting
 // ============================================
+const ctx = {
+    // In-memory state (live references)
+    get portfolio() { return portfolio; },
+    get botState() { return botState; },
+    get logs() { return logs; },
+    get availableTickers() { return availableTickers; },
+    get botInterval() { return botInterval; },
+    set botInterval(v) { botInterval = v; },
+    get peakValue() { return peakValue; },
+    set peakValue(v) { peakValue = v; },
+    get publicIp() { return publicIp; },
+    CONFIG,
+    QUALITY_TICKERS,
 
-/**
- * POST /api/session/start
- * Start a new trading session (simulation or real).
- * Body: { mode: 'SIMULATION'|'REAL', budget: number, tickers?: string[] }
- */
-app.post('/api/session/start', async (req, res) => {
-    try {
-        const { mode = 'SIMULATION', budget = 10000, tickers, trainedRunId } = req.body;
+    // Core functions
+    addLog,
+    getMarketData,
+    makePublicRequest,
+    makeSignedRequest,
+    saveSessionState,
+    tradingBotLoop,
+    handleBuy,
+    handleSell,
+    updateAvailableTickers,
+    logPublicIp,
+    getActiveFees,
+    getLatestPrice,
 
-        if (botState.isActive) {
-            return res.status(400).json({ error: 'A session is already active. Stop it first.' });
-        }
+    // Exchange adapter
+    getExchangeAdapter,
+    setActiveExchange,
+    getActiveExchangeId,
+    listExchanges,
+    reconnectWebSocketForExchange,
+    getWebSocketStatusProxy,
+    wsConnected,
+    beastSetRoundTripFee,
+    setFeeForSimulation,
+    beastSetSessionBalance,
 
-        if (mode === 'REAL' && !botState.sessionId) {
-            return res.status(400).json({ error: 'Real trading requires API authentication. Call /api/login first.' });
-        }
+    // Session management
+    SessionManager,
+    setActiveSession,
+    getActiveSessionId,
+    setThoughtSessionId,
+    saveFullState,
+    recordEquitySnapshot,
+    recordSessionTradeDetail,
+    getSessionStatus,
+    getTradeHistory,
+    getTradeStats,
+    getEquityCurve,
+    getSessionHistory,
+    getSessionDetail,
+    insertSessionRecord,
+    completeSession,
+    pmSetSessionStart,
 
-        // Generate a session ID
-        const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // State export/import
+    cbExportState,
+    awExportState,
+    beastExportState,
+    pmExportState,
+    optExportState,
+    cbImportState,
+    awImportState,
+    optImportState,
 
-        // Record session in database
-        try { insertSessionRecord(sessionId, Date.now(), budget, mode); } catch(e) { console.error('[SESSION] DB insert failed:', e.message); }
+    // Reset functions
+    fullResetCircuitBreaker,
+    fullResetBeastMode,
+    fullResetWeights,
+    setDailyBalance,
 
-        // Initialize portfolio
-        if (mode === 'SIMULATION') {
-            portfolio.cash = budget;
-            portfolio.initialBudget = budget;
-            portfolio.positions = {};
-            portfolio.holdings = {};
-            // Preserve tradeLog across sessions for optimizer continuity
-            if (!portfolio.tradeLog) portfolio.tradeLog = [];
-        }
-        // For REAL mode, portfolio was already set from /api/login
+    // Status functions
+    getCircuitBreakerStatus,
+    getBeastModeStatus,
+    getAdaptiveWeightsStatus,
+    getOptimizerStatus,
+    getProfitMethodsStatus,
+    getPreTradeAIStatus,
+    getAILearningStatus,
 
-        // Set bot state
-        botState.isActive = true;
-        botState.tradingMode = mode;
-        botState.sessionStartTime = Date.now();
-        pmSetSessionStart(Date.now());
-        botState.settings = {
-            ...botState.settings,
-            riskAmount: botState.settings.riskAmount || 0.15,
-            maxConcurrentTrades: botState.settings.maxConcurrentTrades || 5,
-            sessionProfitGoal: botState.settings.sessionProfitGoal || (budget * 2),
-        };
+    // ML/Thought logger
+    getThoughts,
+    getCurrentFocus,
+    getThoughtStats,
 
-        // Set up session tracking
-        setActiveSession(sessionId, mode);
-        setThoughtSessionId(sessionId);
+    // Optimizer
+    forceOptimize,
+    setTargetOverrides,
+    resetOptimizer,
 
-        // Update available tickers if custom set provided
-        if (tickers && tickers.length > 0) {
-            availableTickers = tickers;
-        } else if (availableTickers.length === 0) {
-            await updateAvailableTickers();
-        }
+    // DB functions
+    pingDatabase,
+    getSetting,
+    setSetting,
+    getLatestMLModel,
+    getMLAccuracyStats,
+    getMLModelHistory,
+    getMLPredictions,
+    getNewsItems,
+    getExchangeSnapshots,
+    getLatestDerivatives,
+    getLatestDeFiSnapshot,
 
-        // Full reset: clear old trade history/streaks so Kelly, compound multiplier,
-        // and strategy weights start fresh (old data was from buggy code)
-        fullResetCircuitBreaker();
-        fullResetBeastMode(portfolio.cash);
-        fullResetWeights();
-        setDailyBalance(portfolio.cash);
-        peakValue = portfolio.cash;
+    // Learned state
+    getLearnedState,
 
-        // Apply trained state from Time Machine if requested
-        if (trainedRunId) {
-            try {
-                const learnedState = getLearnedState(trainedRunId);
-                if (learnedState) {
-                    // Apply adaptive weights
-                    if (learnedState.adaptiveWeights) {
-                        const awState = {};
-                        for (const [strategy, data] of Object.entries(learnedState.adaptiveWeights)) {
-                            awState[strategy] = {
-                                weight: data.weight || 1.0,
-                                wins: data.wins || 0,
-                                losses: data.losses || 0,
-                                totalPnl: data.totalPnl || 0,
-                            };
-                        }
-                        awImportState(awState);
-                    }
-                    // Apply circuit breaker Kelly data
-                    if (learnedState.circuitBreaker) {
-                        cbImportState({
-                            totalTrades: learnedState.circuitBreaker.totalTrades,
-                            totalWins: learnedState.circuitBreaker.totalWins,
-                            totalLosses: learnedState.circuitBreaker.totalLosses,
-                        });
-                    }
-                    // Apply optimizer parameters
-                    if (learnedState.optimizer) {
-                        optImportState(learnedState.optimizer);
-                    }
-                    addLog(`[SESSION] Applied trained state from run ${trainedRunId}`, 'SPECIAL');
-                } else {
-                    addLog(`[SESSION] Warning: No trained state found for run ${trainedRunId}`, 'WARN');
-                }
-            } catch (e) {
-                console.error('[SESSION] Failed to apply trained state:', e.message);
-                addLog(`[SESSION] Failed to apply trained state: ${e.message}`, 'ERROR');
-            }
-        }
+    // Signals
+    getOrderBookSignal,
+    getCorrelationMatrix,
+    getFundingRateSignal,
 
-        // Start the bot loop
-        if (botInterval) clearInterval(botInterval);
-        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
+    // Backtest
+    runBacktest,
+    getAvailableBacktestData,
+    runParameterSweep,
+    runWalkForward,
 
-        addLog(`[SESSION] Started ${mode} session: $${budget} budget, ${availableTickers.length} tickers`, 'INFO');
-        saveSessionState();
+    // Telegram
+    sendTestMessage,
+    telegramStatus,
 
-        // Initial equity snapshot
-        recordEquitySnapshot(portfolio);
+    // Journal
+    getJournalEntries,
+    forceGenerateJournal,
 
-        res.json({
-            success: true,
-            sessionId,
-            mode,
-            budget: portfolio.cash,
-            tickers: availableTickers.slice(0, 20),
-            botActive: true,
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
+    // Questrade & brain
+    questrade,
+    paperTrader,
+    strategyEngine,
+    brain,
+    brainThoughts,
+    questradeBotState,
+    dataIngestion,
 
-/**
- * POST /api/session/stop
- * Stop current session, close all positions, return summary.
- */
-app.post('/api/session/stop', async (req, res) => {
-    try {
-        const wasActive = botState.isActive;
+    // Dynamic services
+    multiExchangeService,
+    smartMoneyService,
+    localNLPService,
+    adaptiveThresholdsService,
+    selfTeachingLoop,
+    youtubeSentimentService,
+    redditSentimentService,
+    timeframeStrategyService,
+    krakenMinimums,
+};
 
-        // Close all open positions at current price
-        const closedPositions = [];
-        for (const [ticker, position] of Object.entries(portfolio.positions)) {
-            const currentPrice = getLatestPrice(ticker) || position.openPrice;
-            try {
-                await handleSell(position, currentPrice, 'SESSION_STOP: Closing all positions');
-                closedPositions.push({ ticker, price: currentPrice, pnl: (currentPrice - position.openPrice) * position.quantity });
-            } catch (e) {
-                addLog(`Failed to close ${ticker}: ${e.message}`, 'ERROR');
-            }
-        }
+// Mount extracted route modules
+app.use('/api', createMarketRouter(ctx));
+app.use('/api', createExchangeRouter(ctx));
+app.use('/api', createAuthRouter(ctx));
+app.use('/api', createQuestradeRouter(ctx));
+app.use('/api', createSessionsRouter(ctx));
+app.use('/api', createIntelligenceRouter(ctx));
+app.use('/api', createSentimentRouter(ctx));
+app.use('/api', createSignalsRouter(ctx));
+app.use('/api', createNotificationsRouter(ctx));
+app.use('/api', createConfigRouter(ctx));
+app.use('/api', createBacktestRouter(ctx));
+app.use('/api', createMultiExchangeRouter(ctx));
 
-        // Stop bot
-        botState.isActive = false;
-        if (botInterval) { clearInterval(botInterval); botInterval = null; }
-
-        // Final equity snapshot
-        recordEquitySnapshot(portfolio);
-
-        // Get session summary
-        const stats = getTradeStats();
-        const equityCurve = getEquityCurve();
-        const sessionStatus = getSessionStatus(portfolio, botState);
-
-        const summary = {
-            success: true,
-            wasActive,
-            closedPositions,
-            finalCash: portfolio.cash,
-            initialBudget: portfolio.initialBudget,
-            totalPnl: portfolio.cash - portfolio.initialBudget,
-            pnlPercent: portfolio.initialBudget > 0
-                ? ((portfolio.cash - portfolio.initialBudget) / portfolio.initialBudget * 100).toFixed(2)
-                : 0,
-            tradeStats: stats,
-            equityCurveLength: equityCurve.length,
-            session: sessionStatus,
-        };
-
-        addLog(`[SESSION] Stopped. Final: $${portfolio.cash.toFixed(2)} (${summary.pnlPercent}%)`, 'WARN');
-
-        // Complete session record in database
-        try {
-            const activeSessionId = getActiveSessionId();
-            if (activeSessionId) {
-                const sellCount = stats?.sells || 0;
-                const winCount = stats?.wins || 0;
-                const wr = sellCount > 0 ? (winCount / sellCount * 100) : 0;
-                completeSession(activeSessionId, Date.now(), portfolio.cash, sellCount, wr, summary.totalPnl);
-            }
-        } catch(e) { console.error('[SESSION] DB complete failed:', e.message); }
-
-        // Save final state
-        saveFullState({
-            portfolio, botState,
-            cbExportState, awExportState, beastExportState, pmExportState, optExportState,
-            availableTickers,
-        });
-
-        res.json(summary);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * GET /api/session/full-status
- * Everything the frontend needs to render the dashboard.
- */
-app.get('/api/session/full-status', (req, res) => {
-    try {
-        const holdingsValue = Object.values(portfolio.positions || {}).reduce(
-            (sum, pos) => sum + ((pos.quantity || 0) * (pos.currentPrice || pos.openPrice || 0)),
-            0
-        );
-        const totalValue = (portfolio.cash || 0) + holdingsValue;
-
-        res.json({
-            // Session info
-            sessionActive: botState.isActive,
-            tradingMode: botState.tradingMode,
-            sessionStartTime: botState.sessionStartTime,
-            uptime: botState.sessionStartTime ? Date.now() - botState.sessionStartTime : 0,
-
-            // Portfolio
-            portfolio: {
-                cash: portfolio.cash,
-                initialBudget: portfolio.initialBudget,
-                holdingsValue,
-                totalValue,
-                pnl: totalValue - (portfolio.initialBudget || 0),
-                pnlPercent: portfolio.initialBudget > 0
-                    ? ((totalValue - portfolio.initialBudget) / portfolio.initialBudget * 100)
-                    : 0,
-                positions: Object.entries(portfolio.positions || {}).map(([ticker, pos]) => ({
-                    ticker,
-                    quantity: pos.quantity,
-                    openPrice: pos.openPrice,
-                    currentPrice: pos.currentPrice || pos.openPrice,
-                    entryStrategy: pos.entryStrategy,
-                    entryTime: pos.entryTime,
-                    unrealizedPnl: ((pos.currentPrice || pos.openPrice) - pos.openPrice) * pos.quantity,
-                    unrealizedPnlPercent: ((pos.currentPrice || pos.openPrice) - pos.openPrice) / pos.openPrice * 100,
-                    highestPrice: pos.highestPrice,
-                    lowestPrice: pos.lowestPrice,
-                })),
-            },
-
-            // Logs (last 50)
-            logs: logs.slice(0, 50),
-
-            // Bot state
-            botState: {
-                isActive: botState.isActive,
-                tradingMode: botState.tradingMode,
-                settings: botState.settings,
-            },
-
-            // Exchange info
-            exchange: {
-                id: getActiveExchangeId(),
-                fees: getActiveFees(),
-                wsConnected: wsConnected(),
-                tickerCount: availableTickers.length,
-            },
-
-            // ML status
-            ml: {
-                currentFocus: getCurrentFocus(),
-                thoughtStats: getThoughtStats(),
-                recentThoughts: getThoughts(10),
-            },
-
-            // Sub-system status
-            circuitBreaker: getCircuitBreakerStatus(),
-            beastMode: getBeastModeStatus(),
-            adaptiveWeights: getAdaptiveWeightsStatus(),
-            optimizer: getOptimizerStatus(portfolio.tradeLog),
-
-            // Session persistence
-            session: getSessionStatus(portfolio, botState),
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * GET /api/session/trades
- * Full trade history for current session.
- */
-app.get('/api/session/trades', (req, res) => {
-    try {
-        const limit = parseInt(req.query.limit) || 500;
-        const trades = getTradeHistory(null, limit);
-        const stats = getTradeStats();
-        res.json({ trades, stats });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * GET /api/session/equity-curve
- * Equity curve data for the current session.
- */
-app.get('/api/session/equity-curve', (req, res) => {
-    try {
-        const curve = getEquityCurve();
-        res.json({ curve });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * GET /api/ml/thoughts
- * ML thought log (last N decisions).
- */
-app.get('/api/ml/thoughts', (req, res) => {
-    try {
-        const limit = parseInt(req.query.limit) || 50;
-        const thoughts = getThoughts(limit);
-        const stats = getThoughtStats();
-        const focus = getCurrentFocus();
-        res.json({ thoughts, stats, focus });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-/**
- * POST /api/session/settings
- * Update bot settings for the active session.
- */
-app.post('/api/session/settings', (req, res) => {
-    try {
-        const { riskAmount, maxConcurrentTrades, sessionProfitGoal, profitGoals } = req.body;
-        if (riskAmount !== undefined) botState.settings.riskAmount = riskAmount;
-        if (maxConcurrentTrades !== undefined) botState.settings.maxConcurrentTrades = maxConcurrentTrades;
-        if (sessionProfitGoal !== undefined) botState.settings.sessionProfitGoal = sessionProfitGoal;
-        if (profitGoals !== undefined) botState.settings.profitGoals = profitGoals;
-        saveSessionState();
-        res.json({ success: true, settings: botState.settings });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// ============================================
-// Session History API (Phase 7: QoL)
-// ============================================
-
-app.get('/api/sessions/history', (req, res) => {
-    try {
-        const limit = parseInt(req.query.limit) || 50;
-        const sessions = getSessionHistory(limit);
-        res.json({ sessions });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.get('/api/sessions/:sessionId/details', (req, res) => {
-    try {
-        const detail = getSessionDetail(req.params.sessionId);
-        if (!detail) return res.status(404).json({ error: 'Session not found' });
-        res.json(detail);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-app.post('/api/sessions/:sessionId/restore', async (req, res) => {
-    try {
-        if (botState.isActive) {
-            return res.status(400).json({ error: 'A session is already active. Stop it first.' });
-        }
-        const detail = getSessionDetail(req.params.sessionId);
-        if (!detail?.session) return res.status(404).json({ error: 'Session not found' });
-        // Use the last equity snapshot's cash, or final_value, or initial_budget
-        const lastSnap = detail.equityCurve.length > 0 ? detail.equityCurve[detail.equityCurve.length - 1] : null;
-        const restoreBudget = lastSnap?.cash || detail.session.final_value || detail.session.initial_budget || 10000;
-        // Forward to session start with the restored budget
-        req.body = { mode: 'SIMULATION', budget: restoreBudget };
-        // Delegate to the start handler by calling the same logic inline
-        const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        try { insertSessionRecord(sessionId, Date.now(), restoreBudget, 'SIMULATION', `Restored from ${req.params.sessionId}`); } catch(e) {}
-        portfolio.cash = restoreBudget;
-        portfolio.initialBudget = restoreBudget;
-        portfolio.positions = {};
-        portfolio.holdings = {};
-        if (!portfolio.tradeLog) portfolio.tradeLog = [];
-        botState.isActive = true;
-        botState.tradingMode = 'SIMULATION';
-        botState.sessionStartTime = Date.now();
-        pmSetSessionStart(Date.now());
-        setActiveSession(sessionId, 'SIMULATION');
-        setThoughtSessionId(sessionId);
-        fullResetCircuitBreaker();
-        fullResetBeastMode(portfolio.cash);
-        fullResetWeights();
-        setDailyBalance(portfolio.cash);
-        peakValue = portfolio.cash;
-        if (botInterval) clearInterval(botInterval);
-        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
-        addLog(`[SESSION] Restored from abandoned session with $${restoreBudget.toFixed(2)} budget`, 'INFO');
-        saveSessionState();
-        recordEquitySnapshot(portfolio);
-        res.json({ success: true, sessionId, budget: restoreBudget, restoredFrom: req.params.sessionId });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Backtest Routes (Batch 4, Feature 1)
-app.post('/api/backtest/run', (req, res) => {
-    try {
-        const result = runBacktest(req.body);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/backtest/available', (req, res) => {
-    try {
-        const data = getAvailableBacktestData();
-        res.json({ data });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/backtest/sweep', (req, res) => {
-    try {
-        const result = runParameterSweep(req.body);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/backtest/walk-forward', (req, res) => {
-    try {
-        const result = runWalkForward(req.body);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Funding Rate Signal Route (Batch 1, Feature 8)
-app.get('/api/funding-rate/:ticker', (req, res) => {
-    try {
-        const signal = getFundingRateSignal(req.params.ticker);
-        res.json(signal);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Parameter Optimizer Routes
-app.get('/api/optimizer/status', (req, res) => {
-    res.json(getOptimizerStatus(portfolio.tradeLog));
-});
-
-app.post('/api/optimizer/force-run', (req, res) => {
-    try {
-        const trades = portfolio.tradeLog || [];
-        const result = forceOptimize(trades);
-        if (result.changed) setTargetOverrides(result.targets);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/optimizer/reset', (req, res) => {
-    try {
-        const result = resetOptimizer();
-        setTargetOverrides(result.targets);
-        addLog('[OPTIMIZER] Reset to defaults via API', 'WARN');
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
+// SPA catch-all (must be AFTER all API routes)
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
@@ -3157,6 +2009,12 @@ const startServer = async () => {
         setDailyBalance(portfolio.cash + restoredHoldings);
 
         console.log(`[Server] Session restored: $${portfolio.cash?.toFixed(2)} cash, ${Object.keys(portfolio.positions).length} positions`);
+
+        // Restore DCA/Grid/Swing positions from database
+        const activeSessionId = getActiveSessionId();
+        if (activeSessionId) {
+            restorePositionsFromDatabase(activeSessionId);
+        }
     }
 
     // Sync exchange fee to beast mode + optimizer at startup
@@ -3285,8 +2143,31 @@ const startServer = async () => {
     });
 };
 
+let isShuttingDown = false;
+
 function gracefulShutdown(signal) {
-    console.log(`[Server] ${signal} received, saving state...`);
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log(`[Server] ${signal} received, shutting down gracefully...`);
+
+    // Force exit after 30 seconds
+    const forceTimer = setTimeout(() => {
+        console.error('[Server] Graceful shutdown timed out after 30s, forcing exit');
+        process.exit(1);
+    }, 30000);
+    forceTimer.unref();
+
+    // Log final portfolio state
+    try {
+        const posCount = Object.keys(portfolio.positions).length;
+        const totalPnl = (portfolio.tradeLog || []).reduce((sum, t) => sum + (t.pnl || 0), 0);
+        console.log(`[Server] Final state: cash=$${portfolio.cash?.toFixed(2)}, positions=${posCount}, trades=${portfolio.tradeLog?.length || 0}, totalPnl=$${totalPnl.toFixed(2)}`);
+    } catch (e) {
+        console.warn('[Server] Could not log final portfolio:', e.message);
+    }
+
+    // Save state
     try {
         stopAutoSave();
         saveFullState({
@@ -3298,8 +2179,21 @@ function gracefulShutdown(signal) {
     } catch (e) {
         console.error('[Server] State save failed:', e.message);
     }
-    getActiveWsService().closeWebSocket();
-    closeDatabase();
+
+    // Close connections
+    try {
+        getActiveWsService().closeWebSocket();
+    } catch (e) {
+        console.warn('[Server] WebSocket close error:', e.message);
+    }
+
+    try {
+        closeDatabase();
+    } catch (e) {
+        console.warn('[Server] Database close error:', e.message);
+    }
+
+    console.log('[Server] Shutdown complete');
     process.exit(0);
 }
 

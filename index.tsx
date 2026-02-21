@@ -11,6 +11,7 @@ import { ReplayDashboard } from './components/ReplayDashboard';
 import { RiskDashboard } from './components/RiskDashboard';
 import { SystemHealthPanel } from './components/SystemHealthPanel';
 import { HistoricalTrainingDashboard } from './components/HistoricalTrainingDashboard';
+import { ComponentErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
 import './ui-theme.css';
 
@@ -57,14 +58,14 @@ root.render(
     <ErrorBoundary>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<App />} />
-          <Route path="/stocks" element={<QuestradeDashboard />} />
-          <Route path="/performance" element={<PerformanceDashboard />} />
-          <Route path="/backtest" element={<BacktestDashboard />} />
-          <Route path="/replay" element={<ReplayDashboard />} />
-          <Route path="/risk" element={<RiskDashboard />} />
-          <Route path="/system" element={<SystemHealthPanel />} />
-          <Route path="/training" element={<HistoricalTrainingDashboard />} />
+          <Route path="/" element={<ComponentErrorBoundary componentName="App"><App /></ComponentErrorBoundary>} />
+          <Route path="/stocks" element={<ComponentErrorBoundary componentName="QuestradeDashboard"><QuestradeDashboard /></ComponentErrorBoundary>} />
+          <Route path="/performance" element={<ComponentErrorBoundary componentName="PerformanceDashboard"><PerformanceDashboard /></ComponentErrorBoundary>} />
+          <Route path="/backtest" element={<ComponentErrorBoundary componentName="BacktestDashboard"><BacktestDashboard /></ComponentErrorBoundary>} />
+          <Route path="/replay" element={<ComponentErrorBoundary componentName="ReplayDashboard"><ReplayDashboard /></ComponentErrorBoundary>} />
+          <Route path="/risk" element={<ComponentErrorBoundary componentName="RiskDashboard"><RiskDashboard /></ComponentErrorBoundary>} />
+          <Route path="/system" element={<ComponentErrorBoundary componentName="SystemHealthPanel"><SystemHealthPanel /></ComponentErrorBoundary>} />
+          <Route path="/training" element={<ComponentErrorBoundary componentName="HistoricalTrainingDashboard"><HistoricalTrainingDashboard /></ComponentErrorBoundary>} />
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>

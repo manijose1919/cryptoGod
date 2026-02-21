@@ -46,7 +46,7 @@ export function setRoundTripFee(fee) {
 
 // Per-ticker regime cache
 const regimeCache = new Map(); // ticker -> { regime, timestamp, ema10, ema30, rsi }
-const REGIME_CACHE_TTL = 30000; // 30s cache
+const REGIME_CACHE_TTL = 60000; // 60s cache - prevents regime ping-ponging
 
 // ============================================
 // EMA HELPER
@@ -129,13 +129,13 @@ export function getMarketRegime(candles, ticker = '') {
   const ema30Prev = ema30[ema30.length - 6];
 
   // EMA slope: is ema10 rising/falling relative to ema30?
-  const ema10Slope = (ema10Now - ema10Prev) / ema10Prev * 100;
-  const spread = (ema10Now - ema30Now) / ema30Now * 100;
+  const ema10Slope = ema10Prev !== 0 ? (ema10Now - ema10Prev) / ema10Prev * 100 : 0;
+  const spread = ema30Now !== 0 ? (ema10Now - ema30Now) / ema30Now * 100 : 0;
 
   let regime;
-  if (spread > 0.1 && ema10Slope > 0 && rsi > 45) {
+  if (spread > 0.2 && ema10Slope > 0.05 && rsi > 50) {
     regime = 'UPTREND';
-  } else if (spread < -0.1 && ema10Slope < 0 && rsi < 55) {
+  } else if (spread < -0.2 && ema10Slope < -0.05 && rsi < 50) {
     regime = 'DOWNTREND';
   } else {
     regime = 'SIDEWAYS';
@@ -173,7 +173,7 @@ export function getStrategyPool(regime) {
     case 'SIDEWAYS':
       return ['GRID', 'PAIR_LONG', 'ARB', 'MM', 'DCA', 'CONFLUENCE', 'DIVERGENCE'];
     case 'DOWNTREND':
-      return ['DCA', 'GRID', 'DIVERGENCE', 'ADAPTIVE'];
+      return ['DIVERGENCE', 'ADAPTIVE', 'MEAN_REVERSION'];
     default:
       return ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];
   }
@@ -359,7 +359,7 @@ export function checkDynamicExit(position, currentPrice, candles) {
 
   // --- TRAILING STOP ---
   // Activates once position reached +2% profit after fees from peak (was 0.5% — too tight)
-  const trailActivation = 2.0;
+  const trailActivation = 1.0; // Activate trailing stop earlier to protect gains
   const highestPrice = position.highestPrice || position.openPrice;
   const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
   const highFeeAdj = highPnl - roundTripFeePercent;
@@ -378,24 +378,46 @@ export function checkDynamicExit(position, currentPrice, candles) {
   }
 
   // Stop loss (raw - stop loss is from entry, not fee-adjusted)
-  if (pnlPercent <= -targets.stopLossPct) {
+  // Stop loss is also fee-adjusted: actual loss = price move + fees
+  const feeAdjustedSL = targets.stopLossPct + roundTripFeePercent;
+  if (pnlPercent <= -feeAdjustedSL) {
     return {
       shouldExit: true,
-      reason: `[BEAST-SL] ${pnlPercent.toFixed(2)}% <= -${targets.stopLossPct}% stop (${targets.regime})`,
+      reason: `[BEAST-SL] ${pnlPercent.toFixed(2)}% <= -${feeAdjustedSL.toFixed(2)}% stop (${targets.regime}, includes ${roundTripFeePercent}% fees)`,
       pnlPercent,
     };
   }
 
-  // Time-based exit: 4h and must be down >1.5% (was 30min — too aggressive, training used 48h max hold)
-  if (holdMinutes > 240 && pnlPercent < -1.5) {
+  // Time-based exit: stale positions - exit if losing after 4h OR breakeven after 8h
+  if ((holdMinutes > 240 && pnlPercent < -0.5) || (holdMinutes > 480 && feeAdjustedPnl < 0.1)) {
     return {
       shouldExit: true,
-      reason: `[BEAST-TIME] Stale position: ${pnlPercent.toFixed(2)}% raw, ${holdMinutes.toFixed(0)}min`,
+      reason: `[BEAST-TIME] Stale position: ${pnlPercent.toFixed(2)}% raw (${feeAdjustedPnl.toFixed(2)}% after fees), ${holdMinutes.toFixed(0)}min`,
       pnlPercent,
     };
   }
 
   return { shouldExit: false, reason: '', pnlPercent };
+}
+
+/**
+ * Check if account has exceeded max drawdown from peak
+ * @param {number} maxDrawdownPercent - Maximum allowed drawdown (default 15%)
+ * @returns {{ shouldStop: boolean, drawdownPercent: number, reason: string }}
+ */
+export function checkMaxDrawdown(maxDrawdownPercent = 15) {
+  if (streakState.peakBalance <= 0 || streakState.currentBalance <= 0) {
+    return { shouldStop: false, drawdownPercent: 0, reason: '' };
+  }
+  const drawdownPercent = ((streakState.peakBalance - streakState.currentBalance) / streakState.peakBalance) * 100;
+  if (drawdownPercent >= maxDrawdownPercent) {
+    return {
+      shouldStop: true,
+      drawdownPercent,
+      reason: `[BEAST-MAXDD] Drawdown ${drawdownPercent.toFixed(2)}% from peak ($${streakState.peakBalance.toFixed(2)}) exceeds ${maxDrawdownPercent}% limit`,
+    };
+  }
+  return { shouldStop: false, drawdownPercent, reason: '' };
 }
 
 /**

@@ -30,6 +30,14 @@ import {
   insertMLFeatures,
   initializeTrainingTables,
 } from '../services/database.js';
+import {
+  startWalkForward,
+  stopWalkForward,
+  getWalkForwardStatus,
+  getWalkForwardResults,
+  getWalkForwardRunsList,
+  triggerMLRetrain,
+} from '../services/walkForwardEngine.js';
 
 // Import live system state transfer functions
 import { importState as awImportState, exportState as awExportState } from '../services/adaptiveWeights.js';
@@ -313,6 +321,99 @@ router.post('/apply', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ============================================
+// WALK-FORWARD VALIDATION
+// ============================================
+
+/**
+ * POST /api/training/walk-forward/start — Start walk-forward validation
+ * Body: { trainMonths?: number, testMonths?: number, stepMonths?: number, tickers?: string[], initialCash?: number }
+ */
+router.post('/walk-forward/start', async (req, res) => {
+  try {
+    const result = await startWalkForward(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/training/walk-forward/stop — Stop active walk-forward
+ */
+router.post('/walk-forward/stop', (req, res) => {
+  const result = stopWalkForward();
+  res.json(result);
+});
+
+/**
+ * GET /api/training/walk-forward/status — Get walk-forward progress
+ */
+router.get('/walk-forward/status', (req, res) => {
+  res.json(getWalkForwardStatus());
+});
+
+/**
+ * GET /api/training/walk-forward/results/:id — Get WF run results
+ */
+router.get('/walk-forward/results/:id', (req, res) => {
+  const results = getWalkForwardResults(req.params.id);
+  if (!results) {
+    return res.status(404).json({ error: 'Walk-forward run not found' });
+  }
+  res.json(results);
+});
+
+/**
+ * GET /api/training/walk-forward/runs — List all WF runs
+ */
+router.get('/walk-forward/runs', (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  res.json(getWalkForwardRunsList(limit));
+});
+
+/**
+ * POST /api/training/walk-forward/retrain/:id — Trigger ML retrain from WF results
+ */
+router.post('/walk-forward/retrain/:id', async (req, res) => {
+  try {
+    const result = await triggerMLRetrain(req.params.id);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+/**
+ * GET /api/training/progress-stream — SSE endpoint for real-time training progress
+ */
+router.get('/progress-stream', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const interval = setInterval(() => {
+    try {
+      const status = getTrainingStatus();
+      res.write(`data: ${JSON.stringify(status)}\n\n`);
+
+      // Stop streaming if training is done
+      if (!status.active && status.status !== 'running') {
+        clearInterval(interval);
+        res.end();
+      }
+    } catch {
+      clearInterval(interval);
+      res.end();
+    }
+  }, 1000);
+
+  req.on('close', () => {
+    clearInterval(interval);
+  });
 });
 
 export default router;
