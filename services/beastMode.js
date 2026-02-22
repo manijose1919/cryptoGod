@@ -331,7 +331,9 @@ export function getDynamicTargets(candles) {
     }
   }
 
-  return { takeProfitPct: Math.max(tp, feeFloor), stopLossPct: sl, regime, optimized };
+  // Defense-in-depth: SL must never be tighter than fees + 0.8% breathing room
+  const minSL = roundTripFeePercent + 0.8;
+  return { takeProfitPct: Math.max(tp, feeFloor), stopLossPct: Math.max(sl, minSL), regime, optimized };
 }
 
 /**
