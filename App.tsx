@@ -1,12 +1,12 @@
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import { RealTradingModal } from './components/RealTradingModal';
 import SessionReconnect from './components/SessionReconnect';
 import SessionHistory from './components/SessionHistory';
 import { ToastProvider } from './components/ToastNotification';
 import { TradingProvider, useTradingContext } from './contexts/TradingContext';
-import { SettingsProvider } from './contexts/SettingsContext';
-import { MarketDataProvider } from './contexts/MarketDataContext';
+import { SettingsProvider, useSettingsContext } from './contexts/SettingsContext';
+import { MarketDataProvider, useMarketDataContext } from './contexts/MarketDataContext';
 import { useMarketData } from './hooks/useMarketData';
 import { useIndicators } from './hooks/useIndicators';
 import { useLearning } from './hooks/useLearning';
@@ -24,8 +24,10 @@ function AppContent() {
         isSessionHistoryOpen, setIsSessionHistoryOpen,
         showReconnect, setShowReconnect, isBotActive,
         setIsVPSReconnect, setIsTradingActive, setIsBotActive,
-        setIsScannerActive, setIsLoading, addLog,
+        setIsScannerActive, setIsLoading, addLog, isTradingActive,
     } = useTradingContext();
+    const { setUnlimitedTrades } = useSettingsContext();
+    const { setLearningState } = useMarketDataContext();
 
     useMarketData();
     const { handleRunMonteCarlo } = useIndicators();
@@ -38,6 +40,25 @@ function AppContent() {
     } = useSessionActions();
 
     useKeyboardShortcuts(toggleBot);
+
+    // Poll AI learning state from backend
+    useEffect(() => {
+        if (!isTradingActive) return;
+        const fetchLearning = async () => {
+            try {
+                const res = await fetch('/api/system/status');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.aiLearning) setLearningState(data.aiLearning);
+                }
+            } catch {
+                // Silently handle fetch errors
+            }
+        };
+        fetchLearning();
+        const interval = setInterval(fetchLearning, 10000);
+        return () => clearInterval(interval);
+    }, [isTradingActive, setLearningState]);
 
     if (isLoading) {
         return (
@@ -90,6 +111,7 @@ function AppContent() {
                             setIsTradingActive(true);
                             setIsBotActive(true);
                             setIsScannerActive(true);
+                            setUnlimitedTrades(true);
                             setIsLoading(false);
                             addLog('Reconnected to active backend session (VPS mode)', 'SPECIAL');
                         }}

@@ -14,7 +14,7 @@ export function useSessionActions() {
         sessionStartTime, setSessionStartTime, setSystemLog, isTradingActive,
         setShowReconnect, setCheckingSession,
     } = useTradingContext();
-    const { setTicker } = useSettingsContext();
+    const { setTicker, setUnlimitedTrades } = useSettingsContext();
 
     // Check for active backend session on mount
     useEffect(() => {
@@ -68,6 +68,28 @@ export function useSessionActions() {
                     });
                 }
 
+                // Sync trades from backend
+                try {
+                    const tradesRes = await fetch('/api/session/trades?limit=200');
+                    if (tradesRes.ok) {
+                        const tradesData = await tradesRes.json();
+                        if (tradesData.trades?.length > 0) {
+                            setTrades(tradesData.trades.map((t: any) => ({
+                                id: t.id, ticker: t.ticker, type: t.type, price: t.price,
+                                quantity: t.quantity, pnl: t.pnl, strategy: t.strategy,
+                                time: t.time, reason: t.reason,
+                            })));
+                        }
+                    }
+                } catch {
+                    // Silently handle trade sync errors
+                }
+
+                // Restore unlimitedTrades setting from backend
+                if (data.botState?.settings?.unlimitedTrades) {
+                    setUnlimitedTrades(true);
+                }
+
                 if (!data.sessionActive && isBotActiveRef.current) {
                     setIsBotActive(false);
                     addLog('Session ended on backend', 'WARN');
@@ -80,7 +102,7 @@ export function useSessionActions() {
         pollBackend();
         const botInterval = setInterval(pollBackend, pollInterval);
         return () => clearInterval(botInterval);
-    }, [isBotActive, isTradingActive, addLog, setPortfolio, setSystemLog, setIsBotActive, isBotActiveRef]);
+    }, [isBotActive, isTradingActive, addLog, setPortfolio, setTrades, setSystemLog, setIsBotActive, setUnlimitedTrades, isBotActiveRef]);
 
     const handleStartSimulation = useCallback(async (budget: number, selectedTicker: string) => {
         addLog(`Starting SIMULATION session with $${budget} for ${selectedTicker}`);

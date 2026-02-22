@@ -233,7 +233,7 @@ export default function createSessionsRouter(ctx) {
                 sessionActive: ctx.botState.isActive,
                 tradingMode: ctx.botState.tradingMode,
                 sessionStartTime: ctx.botState.sessionStartTime,
-                uptime: ctx.botState.sessionStartTime ? Date.now() - ctx.botState.sessionStartTime : 0,
+                uptime: ctx.botState.sessionStartTime ? Math.max(0, Date.now() - ctx.botState.sessionStartTime) : 0,
 
                 portfolio: {
                     cash: ctx.portfolio.cash,
@@ -323,11 +323,12 @@ export default function createSessionsRouter(ctx) {
         sessionProfitGoal: { type: 'number', min: 0 },
     }), (req, res) => {
         try {
-            const { riskAmount, maxConcurrentTrades, sessionProfitGoal, profitGoals } = req.body;
+            const { riskAmount, maxConcurrentTrades, sessionProfitGoal, profitGoals, unlimitedTrades } = req.body;
             if (riskAmount !== undefined) ctx.botState.settings.riskAmount = riskAmount;
             if (maxConcurrentTrades !== undefined) ctx.botState.settings.maxConcurrentTrades = maxConcurrentTrades;
             if (sessionProfitGoal !== undefined) ctx.botState.settings.sessionProfitGoal = sessionProfitGoal;
             if (profitGoals !== undefined) ctx.botState.settings.profitGoals = profitGoals;
+            if (unlimitedTrades !== undefined) ctx.botState.settings.unlimitedTrades = !!unlimitedTrades;
             ctx.saveSessionState();
             res.json({ success: true, settings: ctx.botState.settings });
         } catch (error) {
