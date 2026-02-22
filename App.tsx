@@ -1,5 +1,5 @@
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { RealTradingModal } from './components/RealTradingModal';
 import SessionReconnect from './components/SessionReconnect';
 import SessionHistory from './components/SessionHistory';
@@ -25,6 +25,7 @@ function AppContent() {
         showReconnect, setShowReconnect, isBotActive,
         setIsVPSReconnect, setIsTradingActive, setIsBotActive,
         setIsScannerActive, setIsLoading, addLog, isTradingActive,
+        tradingMode,
     } = useTradingContext();
     const { setUnlimitedTrades } = useSettingsContext();
     const { setLearningState } = useMarketDataContext();
@@ -40,6 +41,15 @@ function AppContent() {
     } = useSessionActions();
 
     useKeyboardShortcuts(toggleBot);
+
+    // Unified start handler: REAL mode opens auth modal, SIMULATION starts session
+    const handleStart = useCallback((budget: number, ticker: string) => {
+        if (tradingMode === 'REAL') {
+            setIsAuthModalOpen(true);
+        } else {
+            handleStartSimulation(budget, ticker);
+        }
+    }, [tradingMode, handleStartSimulation, setIsAuthModalOpen]);
 
     // Poll AI learning state from backend
     useEffect(() => {
@@ -131,7 +141,7 @@ function AppContent() {
 
             <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 p-4">
                 <LeftPanel
-                    onStart={handleStartSimulation}
+                    onStart={handleStart}
                     toggleBot={toggleBot}
                     onCloseAll={handleCloseAllPositions}
                     onStopSession={handleStopSession}
