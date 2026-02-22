@@ -115,9 +115,10 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
 
   const portfolio = status.portfolio || { initialBudget: 0, pnl: 0, pnlPercent: 0, totalValue: 0, positions: [] };
   const exchange = status.exchange || { id: 'unknown', wsConnected: false };
+  const uptime = status.uptime || 0;
 
-  const dailyRate = status.uptime > 0 && portfolio.initialBudget > 0
-    ? (portfolio.pnl / portfolio.initialBudget * 100) / (status.uptime / 86400000)
+  const dailyRate = uptime > 0 && portfolio.initialBudget > 0
+    ? (portfolio.pnl / portfolio.initialBudget * 100) / (uptime / 86400000)
     : 0;
 
   const estimatedDaysToDouble = dailyRate > 0
@@ -152,17 +153,17 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-gray-800/50 rounded-lg p-3">
           <div className="text-xs text-gray-400">Session Uptime</div>
-          <div className="text-sm font-bold text-white">{formatUptime(status.uptime)}</div>
+          <div className="text-sm font-bold text-white">{formatUptime(uptime)}</div>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">
           <div className="text-xs text-gray-400">Portfolio Value</div>
-          <div className="text-sm font-bold text-white">${portfolio.totalValue.toFixed(2)}</div>
+          <div className="text-sm font-bold text-white">${(portfolio.totalValue || 0).toFixed(2)}</div>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">
           <div className="text-xs text-gray-400">Total P&L</div>
           <div className="text-sm font-bold">
-            <AnimatedNumber value={portfolio.pnl} showSign />
-            <span className="text-xs ml-1">(<AnimatedNumber value={portfolio.pnlPercent} format="percent" showSign />)</span>
+            <AnimatedNumber value={portfolio.pnl || 0} showSign />
+            <span className="text-xs ml-1">(<AnimatedNumber value={portfolio.pnlPercent || 0} format="percent" showSign />)</span>
           </div>
         </div>
         <div className="bg-gray-800/50 rounded-lg p-3">
@@ -204,10 +205,10 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
                   <span className="text-gray-500">{pos.entryStrategy}</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-gray-400">${pos.currentPrice.toFixed(2)}</span>
-                  <span className={pos.unrealizedPnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-                    {pos.unrealizedPnl >= 0 ? '+' : ''}${pos.unrealizedPnl.toFixed(2)}
-                    <span className="text-[10px] ml-1">({pos.unrealizedPnlPercent.toFixed(2)}%)</span>
+                  <span className="text-gray-400">${(pos.currentPrice || 0).toFixed(2)}</span>
+                  <span className={(pos.unrealizedPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                    {(pos.unrealizedPnl || 0) >= 0 ? '+' : ''}${(pos.unrealizedPnl || 0).toFixed(2)}
+                    <span className="text-[10px] ml-1">({(pos.unrealizedPnlPercent || 0).toFixed(2)}%)</span>
                   </span>
                 </div>
               </div>
