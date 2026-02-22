@@ -117,6 +117,8 @@ function waitForTrainingComplete(runId, maxWaitMs = 3600000) {
  * @param {number} config.stepMonths - Step forward in months (default 3)
  * @param {string[]} config.tickers - Tickers to use
  * @param {number} config.initialCash - Starting cash per fold (default 10000)
+ * @param {string} [config.seedRunId] - Training run ID to seed the first fold from (iterative walk-forward)
+ * @param {boolean} [config.skipMTF] - If true, skip loading 5m/15m data (saves RAM)
  */
 export async function startWalkForward(config = {}) {
   if (activeWF && activeWF.status === 'running') {
@@ -128,6 +130,8 @@ export async function startWalkForward(config = {}) {
   const stepMonths = config.stepMonths || 3;
   const tickers = config.tickers || ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
   const initialCash = config.initialCash || 10000;
+  const seedRunId = config.seedRunId || null;
+  const skipMTF = config.skipMTF || false;
 
   // Determine data range from 1h candles
   let earliestTime = Infinity;
@@ -155,7 +159,7 @@ export async function startWalkForward(config = {}) {
     id: wfId,
     created_at: Date.now(),
     status: 'running',
-    config: { trainMonths, testMonths, stepMonths, tickers, initialCash },
+    config: { trainMonths, testMonths, stepMonths, tickers, initialCash, seedRunId, skipMTF },
     total_folds: foldWindows.length,
     completed_folds: 0,
   });
@@ -179,7 +183,7 @@ export async function startWalkForward(config = {}) {
   activeWF = {
     id: wfId,
     status: 'running',
-    config: { trainMonths, testMonths, stepMonths, tickers, initialCash },
+    config: { trainMonths, testMonths, stepMonths, tickers, initialCash, seedRunId, skipMTF },
     totalFolds: foldWindows.length,
     completedFolds: 0,
     currentFold: 0,
@@ -200,7 +204,7 @@ export async function startWalkForward(config = {}) {
   console.log(`[WalkForward] Starting run ${wfId}: ${foldWindows.length} folds, ${trainMonths}mo train / ${testMonths}mo test / ${stepMonths}mo step`);
 
   // Run the walk-forward loop asynchronously
-  runWalkForwardLoop(wfId, foldWindows, tickers, initialCash).catch(err => {
+  runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedRunId, skipMTF).catch(err => {
     console.error(`[WalkForward] Fatal error: ${err.message}`);
     if (activeWF && activeWF.id === wfId) {
       activeWF.status = 'failed';
@@ -219,8 +223,8 @@ export async function startWalkForward(config = {}) {
 /**
  * Core walk-forward loop — runs each fold sequentially.
  */
-async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash) {
-  let previousRunId = null; // Seed each fold from the previous
+async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedRunId = null, skipMTF = false) {
+  let previousRunId = seedRunId || null; // Seed first fold from prior WF's best (or null)
   let oosTradesTotal = 0;
   let oosWinsTotal = 0;
   let oosPnlTotal = 0;
@@ -250,6 +254,7 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash) {
         endTime: fw.trainEnd,
         seedRunId: previousRunId || undefined,
         evaluationOnly: false,
+        skipMTF,
         _isSubRun: true,
       });
 
@@ -307,6 +312,7 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash) {
         endTime: fw.testEnd,
         evaluationOnly: true,
         frozenState,
+        skipMTF,
         _isSubRun: true,
       });
 
