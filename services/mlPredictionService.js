@@ -488,6 +488,13 @@ export function checkRetrainNeeded() {
  *
  * @returns {Object} Status information
  */
+/**
+ * Get the underlying ML engine instance (for ML gatekeeper integration)
+ */
+export function getMLEngine() {
+  return mlEngine;
+}
+
 export function getMLStatus() {
   try {
     const modelStatus = mlEngine?.getModelStatus() || {};

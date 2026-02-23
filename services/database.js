@@ -412,6 +412,92 @@ export function initializeDatabase() {
       ON swing_positions(session_id, status);
   `);
 
+  // ============================================
+  // ML Pipeline Tables (4-Layer System)
+  // ============================================
+  db.exec(`
+    -- System config persistence (feature flags)
+    CREATE TABLE IF NOT EXISTS system_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+
+    -- Genetic strategy genomes
+    CREATE TABLE IF NOT EXISTS genetic_genomes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      genome_id TEXT NOT NULL UNIQUE,
+      generation INTEGER DEFAULT 0,
+      genome_json TEXT NOT NULL,
+      fitness REAL DEFAULT 0,
+      win_rate REAL DEFAULT 0,
+      trade_count INTEGER DEFAULT 0,
+      root_indicator TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000),
+      updated_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_genetic_genomes_fitness
+      ON genetic_genomes(fitness DESC);
+
+    -- Genetic evolution log
+    CREATE TABLE IF NOT EXISTS genetic_evolution_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      generation INTEGER NOT NULL,
+      population_size INTEGER,
+      best_fitness REAL,
+      avg_fitness REAL,
+      best_genome_id TEXT,
+      mutations INTEGER DEFAULT 0,
+      crossovers INTEGER DEFAULT 0,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+
+    -- Adversarial model metadata
+    CREATE TABLE IF NOT EXISTS adversarial_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      model_type TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('BULL', 'BEAR')),
+      sample_count INTEGER DEFAULT 0,
+      accuracy REAL DEFAULT 0,
+      last_trained_at INTEGER,
+      config_json TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+
+    -- Portfolio correlation snapshots
+    CREATE TABLE IF NOT EXISTS portfolio_correlation_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      matrix_json TEXT NOT NULL,
+      ticker_list TEXT NOT NULL,
+      avg_correlation REAL DEFAULT 0,
+      hhi REAL DEFAULT 0,
+      effective_positions REAL DEFAULT 0,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_correlation_snapshots_time
+      ON portfolio_correlation_snapshots(created_at DESC);
+
+    -- ML Gatekeeper decision log
+    CREATE TABLE IF NOT EXISTS ml_gatekeeper_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      ml_confidence REAL,
+      tier TEXT,
+      rule_strategy TEXT,
+      rule_strength REAL,
+      adversarial_consensus TEXT,
+      correlation_multiplier REAL,
+      final_size_multiplier REAL,
+      reason TEXT,
+      actual_outcome TEXT,
+      was_correct INTEGER,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gatekeeper_log_time
+      ON ml_gatekeeper_log(created_at DESC);
+  `);
+
   console.log(`[Database] Initialized SQLite at ${dbPath}`);
   return db;
 }
@@ -1592,4 +1678,104 @@ export function closeAllPositionsForSession(sessionId) {
   getDb().prepare('UPDATE dca_positions SET status = ?, updated_at = ? WHERE session_id = ? AND status = ?').run('CLOSED', now, sessionId, 'ACTIVE');
   getDb().prepare('UPDATE grid_positions SET status = ?, updated_at = ? WHERE session_id = ? AND status = ?').run('CLOSED', now, sessionId, 'ACTIVE');
   getDb().prepare('UPDATE swing_positions SET status = ?, updated_at = ? WHERE session_id = ? AND status = ?').run('CLOSED', now, sessionId, 'ACTIVE');
+}
+
+// ============================================
+// ML PIPELINE TABLES (4-Layer System)
+// ============================================
+
+// --- Genetic Genomes ---
+export function insertGeneticGenome(genome) {
+  return getDb().prepare(`
+    INSERT OR REPLACE INTO genetic_genomes (genome_id, generation, genome_json, fitness, win_rate, trade_count, root_indicator, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(genome.genome_id, genome.generation || 0, genome.genome_json,
+         genome.fitness || 0, genome.win_rate || 0, genome.trade_count || 0,
+         genome.root_indicator || '', Date.now());
+}
+
+export function getGeneticGenomes(limit = 50) {
+  return getDb().prepare(
+    'SELECT * FROM genetic_genomes ORDER BY fitness DESC LIMIT ?'
+  ).all(limit);
+}
+
+export function clearGeneticGenomes() {
+  return getDb().prepare('DELETE FROM genetic_genomes').run();
+}
+
+export function insertGeneticEvolutionLog(log) {
+  return getDb().prepare(`
+    INSERT INTO genetic_evolution_log (generation, population_size, best_fitness, avg_fitness, best_genome_id, mutations, crossovers)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(log.generation, log.population_size || 0, log.best_fitness || 0,
+         log.avg_fitness || 0, log.best_genome_id || '', log.mutations || 0, log.crossovers || 0);
+}
+
+// --- Adversarial Models ---
+export function insertAdversarialModel(model) {
+  return getDb().prepare(`
+    INSERT INTO adversarial_models (model_type, role, sample_count, accuracy, last_trained_at, config_json)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(model.model_type || 'ensemble', model.role, model.sample_count || 0,
+         model.accuracy || 0, model.last_trained_at || Date.now(),
+         JSON.stringify(model.config || {}));
+}
+
+export function getLatestAdversarialModels() {
+  return getDb().prepare(`
+    SELECT * FROM adversarial_models ORDER BY created_at DESC LIMIT 2
+  `).all();
+}
+
+// --- Portfolio Correlation Snapshots ---
+export function insertCorrelationSnapshot(snapshot) {
+  return getDb().prepare(`
+    INSERT INTO portfolio_correlation_snapshots (matrix_json, ticker_list, avg_correlation, hhi, effective_positions)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(JSON.stringify(snapshot.matrix), snapshot.ticker_list,
+         snapshot.avg_correlation || 0, snapshot.hhi || 0, snapshot.effective_positions || 0);
+}
+
+export function getLatestCorrelationSnapshot() {
+  return getDb().prepare(
+    'SELECT * FROM portfolio_correlation_snapshots ORDER BY created_at DESC LIMIT 1'
+  ).get();
+}
+
+// --- ML Gatekeeper Log ---
+export function insertGatekeeperDecision(decision) {
+  return getDb().prepare(`
+    INSERT INTO ml_gatekeeper_log (ticker, decision, ml_confidence, tier, rule_strategy, rule_strength, adversarial_consensus, correlation_multiplier, final_size_multiplier, reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(decision.ticker, decision.decision, decision.ml_confidence || 0,
+         decision.tier || '', decision.rule_strategy || '', decision.rule_strength || 0,
+         decision.adversarial_consensus || '', decision.correlation_multiplier || 1,
+         decision.final_size_multiplier || 1, decision.reason || '');
+}
+
+export function resolveGatekeeperDecision(id, actualOutcome, wasCorrect) {
+  return getDb().prepare(
+    'UPDATE ml_gatekeeper_log SET actual_outcome = ?, was_correct = ? WHERE id = ?'
+  ).run(actualOutcome, wasCorrect ? 1 : 0, id);
+}
+
+export function getGatekeeperStats(limit = 200) {
+  return getDb().prepare(`
+    SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN decision = 'PROCEED' THEN 1 ELSE 0 END) as allowed,
+      SUM(CASE WHEN decision = 'BLOCK' THEN 1 ELSE 0 END) as blocked,
+      SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END) as correct,
+      SUM(CASE WHEN was_correct = 0 THEN 1 ELSE 0 END) as incorrect,
+      AVG(ml_confidence) as avg_confidence,
+      ROUND(CAST(SUM(CASE WHEN was_correct = 1 THEN 1 ELSE 0 END) AS REAL) / NULLIF(COUNT(CASE WHEN was_correct IS NOT NULL THEN 1 END), 0) * 100, 2) as accuracy_pct
+    FROM (SELECT * FROM ml_gatekeeper_log ORDER BY created_at DESC LIMIT ?)
+  `).get(limit);
+}
+
+export function getRecentGatekeeperDecisions(limit = 100) {
+  return getDb().prepare(
+    'SELECT * FROM ml_gatekeeper_log ORDER BY created_at DESC LIMIT ?'
+  ).all(limit);
 }
