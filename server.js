@@ -886,10 +886,10 @@ async function tradingBotLoop() {
 
         // --- DYNAMIC MARKET SCANNING ---
         const positionTickers = Object.keys(portfolio.positions);
-        
-        // Filter to quality tickers only, fallback to first 50 if no matches
-        const qualityTickers = availableTickers.filter(t => QUALITY_TICKERS.includes(t));
-        const tickerPool = qualityTickers.length > 0 ? qualityTickers : availableTickers.slice(0, 50);
+
+        // Always scan QUALITY_TICKERS (the curated list), regardless of session ticker selection
+        // This ensures the bot scans all supported pairs even if session was started with just 1 ticker
+        const tickerPool = QUALITY_TICKERS.length > 0 ? QUALITY_TICKERS : availableTickers.slice(0, 50);
         const BATCH_SIZE = 20;
         const cycleIndex = Math.floor(Date.now() / 1000) % Math.max(1, Math.ceil(tickerPool.length / BATCH_SIZE));
         const scanBatch = tickerPool.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
