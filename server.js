@@ -2274,14 +2274,12 @@ const startServer = async () => {
         console.warn('[Server] Correlation engine init failed:', e.message);
     }
 
-    // Initialize genetic population (lazy — only if enabled)
-    if (getFlag('GENETIC_ENABLED')) {
-        try {
-            const pop = getGeneticPopulation();
-            console.log('[Server] Genetic population initialized:', pop.getStatus().populationSize, 'genomes');
-        } catch (e) {
-            console.warn('[Server] Genetic engine init failed:', e.message);
-        }
+    // Initialize genetic population (always, for when toggled on)
+    try {
+        const pop = getGeneticPopulation();
+        console.log('[Server] Genetic population initialized:', pop.getStatus().populationSize, 'genomes');
+    } catch (e) {
+        console.warn('[Server] Genetic engine init failed:', e.message);
     }
 
     // Initialize adaptive thresholds
