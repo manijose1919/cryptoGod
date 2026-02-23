@@ -1002,6 +1002,36 @@ class MLEngine {
   }
 
   /**
+   * Clone this MLEngine instance (creates a new engine with same config)
+   * Used for creating Bear model from Bull model structure.
+   * Note: the clone is untrained — you must call train() on it separately.
+   * @returns {MLEngine} New MLEngine instance with same config
+   */
+  clone() {
+    return new MLEngine({ ...this.config });
+  }
+
+  /**
+   * Get comprehensive model stats for monitoring
+   * @returns {object} Model stats
+   */
+  getModelStats() {
+    return {
+      isTrained: this.isTrained,
+      trainedAt: this.trainedAt,
+      accuracy: this.accuracy,
+      validationAccuracy: this.validationAccuracy,
+      sampleCount: this.sampleCount,
+      modelWeights: this.modelWeights,
+      featureImportance: this.featureImportance,
+      hasRandomForest: !!this.randomForest,
+      hasGradientBoosted: !!this.gradientBoosted,
+      hasLogisticRegression: !!this.logisticRegression,
+      config: this.config,
+    };
+  }
+
+  /**
    * Get feature importance with names
    * @param {string[]} featureNames - Array of feature names
    * @returns {object} Feature name -> importance mapping

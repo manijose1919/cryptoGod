@@ -125,6 +125,13 @@ import {
     insertSessionRecord, completeSession, markAbandonedSessions, getSessionHistory, getSessionDetail
 } from './services/database.js';
 
+// ML Pipeline (4-Layer System)
+import { initSystemConfig, getAllFlags, setFlags, getFlag, killAll as killAllSystems } from './services/systemConfig.js';
+import * as mlGatekeeper from './services/mlGatekeeper.js';
+import * as portfolioCorrelationEngine from './services/portfolioCorrelationEngine.js';
+import * as adversarialBrains from './services/adversarialBrains.js';
+import { getPopulation as getGeneticPopulation } from './services/geneticStrategyEngine.js';
+
 let multiExchangeService = null;
 let mlPredictionService = null;
 let selfTeachingLoop = null;
@@ -478,6 +485,39 @@ try {
 } catch (e) {
     console.warn('[Server] Training routes not available:', e.message);
 }
+
+// ML Pipeline System Config API
+app.get('/api/system-config', (req, res) => {
+    try {
+        const flags = getAllFlags();
+        const stats = {
+            flags,
+            gatekeeper: mlGatekeeper.getGatekeeperStats(),
+            correlation: portfolioCorrelationEngine.getCorrelationStatus(),
+            adversarial: adversarialBrains.getAdversarialStatus(),
+            genetic: (() => { try { return getGeneticPopulation().getStatus(); } catch(e) { return { enabled: false }; } })(),
+        };
+        res.json(stats);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/system-config', express.json(), (req, res) => {
+    try {
+        const updates = req.body;
+        if (updates.killAll) {
+            killAllSystems();
+            return res.json({ success: true, message: 'All systems disabled', flags: getAllFlags() });
+        }
+        if (updates.flags) {
+            setFlags(updates.flags);
+        }
+        res.json({ success: true, flags: getAllFlags() });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // Clean expired sessions periodically
 setInterval(() => {
@@ -1316,6 +1356,86 @@ async function tradingBotLoop() {
                     } catch (e) {}
                 }
 
+                // ===== ML PIPELINE (4-Layer System) =====
+                // Layer 1: Genetic signals → become ML features
+                let geneticSignals = [];
+                let pipelineResult = null;
+                if (entryStrategy) {
+                    // Compute indicator snapshots needed for pipeline
+                    const momValue = calculateMomentumSeries(candles).pop() ?? 50;
+                    const bkoutValue = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
+                    const adpValue = calculateAdaptiveTCSeries(candles).pop() ?? 50;
+                    const whaleValue = calculateWhaleMoneyFlowSeries(candles).pop() ?? 50;
+                    const trendDash = calculateTrendDashboard(candles);
+                    const bullishCount = trendDash ? Object.values(trendDash).filter(v => v === true || v === 'BULLISH' || v === 'UP').length : 0;
+
+                    try {
+                        if (getFlag('GENETIC_ENABLED')) {
+                            const genPop = getGeneticPopulation();
+                            const genIndicators = {
+                                tc: tcValue,
+                                momentum: momValue,
+                                breakout: bkoutValue,
+                                adaptive: adpValue,
+                                whale: whaleValue,
+                                divergence: 0,
+                                rsi: 50,
+                                macd_histogram: 0,
+                                bollinger_b: 0.5,
+                                volume_ratio: 1,
+                                atr_norm: 0,
+                                regime_score: currentRegime === 'UPTREND' ? 1 : currentRegime === 'DOWNTREND' ? -1 : 0,
+                            };
+                            geneticSignals = genPop.getTopSignals(genIndicators);
+                        }
+                    } catch (e) {}
+
+                    // Layer 2: ML Gatekeeper — build strategy signals for feature vector
+                    try {
+                        const strategySignals = {
+                            trend: (tcValue < 40) ? (40 - tcValue) / 40 : -(tcValue - 40) / 60,
+                            momentum: (momValue - 50) / 50,
+                            breakout: (bkoutValue - 50) / 50,
+                            adaptive: (50 - adpValue) / 50,
+                            whale: (whaleValue - 50) / 50,
+                            confluence: Math.min(1, bullishCount / 5),
+                            divergence: 0,
+                            agreementCount: [
+                                tcValue < 40, momValue > 50, bkoutValue > 40,
+                                adpValue < 45, whaleValue > 48, bullishCount >= 2,
+                            ].filter(Boolean).length,
+                        };
+
+                        // Find the strongest strategy candidate's strength from stratCandidates
+                        const bestStrength = score.compositeScore / 100;
+
+                        pipelineResult = mlGatekeeper.evaluateEntry(
+                            ticker, candles, entryStrategy, bestStrength,
+                            { strategySignals, geneticSignals }
+                        );
+
+                        if (pipelineResult && !pipelineResult.proceed) {
+                            logThought({
+                                type: 'SKIP', ticker, action: 'ML_GATEKEEPER_BLOCKED',
+                                confidence: pipelineResult.confidence,
+                                reason: pipelineResult.reason,
+                                regime: currentRegime,
+                            });
+                            entryStrategy = null;
+                        } else if (pipelineResult) {
+                            logThought({
+                                type: 'ML_PIPELINE', ticker, action: 'ML_GATEKEEPER_PASS',
+                                confidence: pipelineResult.confidence,
+                                reason: `${pipelineResult.tier}: ${pipelineResult.reason} (size×${pipelineResult.sizeMultiplier.toFixed(2)})`,
+                                regime: currentRegime,
+                            });
+                        }
+                    } catch (e) {
+                        // ML gatekeeper error — fail open
+                    }
+                }
+                // ===== END ML PIPELINE =====
+
                 // Hard floor: reject any entry with adjusted compositeScore below optimizer floor
                 const adjustedComposite = score.compositeScore + htfAdj + fundingAdj;
                 if (entryStrategy && adjustedComposite < optParams.compositeScoreFloor) {
@@ -1357,23 +1477,54 @@ async function tradingBotLoop() {
                     // Re-cap after sentiment adjustment so boost can't exceed tier limits
                     investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
 
-                    if (investmentAmount > CONFIG.MIN_TRADE_SIZE) {
+                    // ML Pipeline: apply gatekeeper size multiplier
+                    if (pipelineResult && pipelineResult.sizeMultiplier !== 1.0) {
+                        investmentAmount *= pipelineResult.sizeMultiplier;
+                    }
+
+                    // Layer 4: Portfolio Correlation Engine — size based on portfolio-level risk
+                    try {
+                        if (getFlag('CORRELATION_ENGINE_ENABLED')) {
+                            const corrResult = portfolioCorrelationEngine.evaluateEntry(
+                                ticker, investmentAmount, portfolio.positions, totalValue
+                            );
+                            if (!corrResult.allowed) {
+                                logThought({
+                                    type: 'SKIP', ticker, action: 'CORRELATION_BLOCKED',
+                                    confidence: score.compositeScore,
+                                    reason: corrResult.reason,
+                                    regime: currentRegime,
+                                });
+                                entryStrategy = null;
+                                investmentAmount = 0;
+                            } else if (corrResult.sizeMultiplier !== 1.0) {
+                                investmentAmount *= corrResult.sizeMultiplier;
+                                investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
+                            }
+                        }
+                    } catch (e) {}
+
+                    if (entryStrategy && investmentAmount > CONFIG.MIN_TRADE_SIZE) {
+                        const pipelineTier = pipelineResult?.tier || 'N/A';
+                        const pipelineMult = pipelineResult?.sizeMultiplier?.toFixed(2) || '1.00';
                         logThought({
                             type: 'ENTRY_EVAL', ticker, action: 'ENTERING',
                             confidence: score.compositeScore + mtfConfidenceAdj + fundingAdj + htfAdj + sentimentAdj,
-                            reason: `${entryStrategy} entry [${marketSpeed}/${activeProfile?.timeframeId || 'default'}]: score=${score.compositeScore}, kelly=${(kellyFraction*100).toFixed(1)}%, mtf=${mtfConfidenceAdj}, funding=${fundingAdj}, htf=${htfAdj}, sentiment=${sentimentAdj}${mlAdvice.available ? `, ml=${mlAdvice.direction}@${mlAdvice.confidence}%` : ''}`,
+                            reason: `${entryStrategy} entry [${marketSpeed}/${activeProfile?.timeframeId || 'default'}]: score=${score.compositeScore}, kelly=${(kellyFraction*100).toFixed(1)}%, mtf=${mtfConfidenceAdj}, funding=${fundingAdj}, htf=${htfAdj}, sentiment=${sentimentAdj}, pipeline=${pipelineTier}×${pipelineMult}${mlAdvice.available ? `, ml=${mlAdvice.direction}@${mlAdvice.confidence}%` : ''}`,
                             regime: currentRegime,
                             market_speed: marketSpeed,
-                            indicators: { tcValue, compositeScore: score.compositeScore, kellyFraction, mtfConfidenceAdj, fundingAdj, htfAdj, sentimentAdj, investmentAmount, timeframeId: activeProfile?.timeframeId, mlDirection: mlAdvice.direction, mlConfidence: mlAdvice.confidence },
+                            indicators: { tcValue, compositeScore: score.compositeScore, kellyFraction, mtfConfidenceAdj, fundingAdj, htfAdj, sentimentAdj, investmentAmount, timeframeId: activeProfile?.timeframeId, mlDirection: mlAdvice.direction, mlConfidence: mlAdvice.confidence, pipelineTier, pipelineMult },
                         });
                         const volTargets = getDynamicTargets(candles);
-                        await handleBuy(ticker, currentPrice, entryStrategy, `Batch scan [${marketSpeed}/${activeProfile?.timeframeId || 'default'}] (score=${score.compositeScore}, sentiment=${sentimentAdj})`, investmentAmount, {
+                        await handleBuy(ticker, currentPrice, entryStrategy, `Batch scan [${marketSpeed}/${activeProfile?.timeframeId || 'default'}] (score=${score.compositeScore}, pipeline=${pipelineTier})`, investmentAmount, {
                             compositeScore: score.compositeScore,
                             triggerValue,
                             regime: volTargets.regime,
-                            mlInfluenced: mlAdvice.available,
-                            mlConfidence: mlAdvice.confidence,
+                            mlInfluenced: mlAdvice.available || (pipelineResult?.tier !== 'DISABLED'),
+                            mlConfidence: pipelineResult?.confidence || mlAdvice.confidence,
                             mlDirection: mlAdvice.direction,
+                            pipelineTier,
+                            pipelineSizeMultiplier: pipelineResult?.sizeMultiplier || 1,
                         });
                     }
                 }
@@ -1417,6 +1568,13 @@ async function tradingBotLoop() {
 
         // Record equity snapshot AFTER price update for accuracy
         recordEquitySnapshot(portfolio);
+
+        // Update correlation matrix periodically
+        try {
+            if (getFlag('CORRELATION_ENGINE_ENABLED') && portfolioCorrelationEngine.isMatrixStale() && marketDataMap.size >= 2) {
+                portfolioCorrelationEngine.updateCorrelationMatrix(marketDataMap);
+            }
+        } catch (e) {}
 
         saveSessionState();
     } catch (error) {
@@ -2075,13 +2233,54 @@ const startServer = async () => {
         }
     }
 
+    // Initialize ML Pipeline (4-Layer System)
+    try {
+        initSystemConfig();
+        console.log('[Server] System config initialized');
+    } catch (e) {
+        console.warn('[Server] System config init failed:', e.message);
+    }
+
     // Initialize ML prediction engine
     if (mlPredictionService) {
         try {
             await mlPredictionService.initializeML();
             console.log('[Server] ML prediction engine initialized');
+
+            // Wire ML engine into gatekeeper
+            if (mlPredictionService.getMLEngine) {
+                const engine = mlPredictionService.getMLEngine();
+                if (engine) mlGatekeeper.init(engine);
+            }
         } catch (e) {
             console.warn('[Server] ML init failed (will retry on data):', e.message);
+        }
+    }
+
+    // Initialize adversarial brains
+    try {
+        adversarialBrains.init();
+        mlGatekeeper.setAdversarialBrains(adversarialBrains);
+        console.log('[Server] Adversarial brains initialized');
+    } catch (e) {
+        console.warn('[Server] Adversarial brains init failed:', e.message);
+    }
+
+    // Initialize portfolio correlation engine
+    try {
+        portfolioCorrelationEngine.init();
+        console.log('[Server] Portfolio correlation engine initialized');
+    } catch (e) {
+        console.warn('[Server] Correlation engine init failed:', e.message);
+    }
+
+    // Initialize genetic population (lazy — only if enabled)
+    if (getFlag('GENETIC_ENABLED')) {
+        try {
+            const pop = getGeneticPopulation();
+            console.log('[Server] Genetic population initialized:', pop.getStatus().populationSize, 'genomes');
+        } catch (e) {
+            console.warn('[Server] Genetic engine init failed:', e.message);
         }
     }
 

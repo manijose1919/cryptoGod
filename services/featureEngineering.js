@@ -9,7 +9,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-export const FEATURE_COUNT = 75;
+export const FEATURE_COUNT = 83;
 
 /**
  * Get all 62 feature names in order
@@ -101,6 +101,15 @@ export function getFeatureNames() {
     'bollinger_b_change',
     'price_acceleration',
     'atr_change',
+    // Strategy signal features (8) — cross-strategy agreement signals
+    'strategy_trend_signal',
+    'strategy_momentum_signal',
+    'strategy_breakout_signal',
+    'strategy_adaptive_signal',
+    'strategy_whale_signal',
+    'strategy_confluence_signal',
+    'strategy_divergence_signal',
+    'strategy_agreement_count',
   ];
 }
 
@@ -197,6 +206,21 @@ export function buildFeatureVector(ticker, candles, options = {}) {
       features[idx++] = atrCurrent > 0 ? (atrCurrent - atrPast) / atrCurrent : 0; // atr_change
     } catch (lagErr) {
       // Fill remaining lagged features with zeros if error
+      while (idx < 75) features[idx++] = 0;
+    }
+
+    // Strategy signal features (8) — provided by caller via options
+    try {
+      const ss = options.strategySignals || {};
+      features[idx++] = clamp(ss.trend || 0, -1, 1);          // strategy_trend_signal
+      features[idx++] = clamp(ss.momentum || 0, -1, 1);       // strategy_momentum_signal
+      features[idx++] = clamp(ss.breakout || 0, -1, 1);       // strategy_breakout_signal
+      features[idx++] = clamp(ss.adaptive || 0, -1, 1);       // strategy_adaptive_signal
+      features[idx++] = clamp(ss.whale || 0, -1, 1);          // strategy_whale_signal
+      features[idx++] = clamp(ss.confluence || 0, -1, 1);     // strategy_confluence_signal
+      features[idx++] = clamp(ss.divergence || 0, -1, 1);     // strategy_divergence_signal
+      features[idx++] = clamp((ss.agreementCount || 0) / 7, 0, 1); // strategy_agreement_count (normalized)
+    } catch (stratErr) {
       while (idx < FEATURE_COUNT) features[idx++] = 0;
     }
 
@@ -219,6 +243,7 @@ export function buildFeatureVector(ticker, candles, options = {}) {
           options.marketSpeed === 'FAST' ? 1 : 0,
         ],
         lagged: features.slice(68, 75),
+        strategySignals: features.slice(75, 83),
       }
     };
   } catch (err) {
