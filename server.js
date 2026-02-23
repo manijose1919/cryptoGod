@@ -570,13 +570,25 @@ const addLog = (message, type = 'INFO') => {
 };
 
 // ============================================
+// Timeout Utility (hang protection)
+// ============================================
+function withTimeout(promise, ms, label = 'operation') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout: ${label} exceeded ${ms}ms`)), ms)
+        )
+    ]);
+}
+
+// ============================================
 // Crypto.com API Logic
 // ============================================
 async function makePublicRequest(method, params = {}) {
     const url = new URL(`${CONFIG.API_BASE_URL}${method}`);
     url.search = new URLSearchParams(params).toString();
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
     const data = await response.json();
 
     if (data.code != 0) {
@@ -655,7 +667,8 @@ async function makeSignedRequest(method, params = {}, sessionId = null) {
             params,
             sig,
             nonce
-        })
+        }),
+        signal: AbortSignal.timeout(15000),
     });
 
     const data = await response.json();
@@ -850,10 +863,12 @@ function get1hTrend(candles1h) {
 // Trading Bot Loop (Optimized for Large Universes)
 // ============================================
 let botLoopRunning = false;
+let botLoopStartTime = 0;
 async function tradingBotLoop() {
     if (!botState.isActive) return;
     if (botLoopRunning) return; // prevent overlapping async iterations
     botLoopRunning = true;
+    botLoopStartTime = Date.now();
 
     try {
         const { sessionProfitGoal, riskAmount, profitGoals } = botState.settings;
@@ -1581,6 +1596,7 @@ async function tradingBotLoop() {
         console.error(`Bot loop error: ${error.message}`);
     } finally {
         botLoopRunning = false;
+        botLoopStartTime = 0;
     }
 }
 
@@ -1627,13 +1643,13 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                     const limitPrice = price * (1 + 0.0001); // best bid + 0.01%
                     const vol = notional / limitPrice;
 
-                    const limitOrder = await adapter.placeLimitBuyOrder(ticker, limitPrice, vol, botState.sessionId);
+                    const limitOrder = await withTimeout(adapter.placeLimitBuyOrder(ticker, limitPrice, vol, botState.sessionId), 20000, 'placeLimitBuyOrder');
 
                     // Wait up to 10s for fill
                     let filled = false;
                     for (let i = 0; i < 5; i++) {
                         await new Promise(r => setTimeout(r, 2000));
-                        const status = await adapter.getOrderStatus(limitOrder.orderId, botState.sessionId);
+                        const status = await withTimeout(adapter.getOrderStatus(limitOrder.orderId, botState.sessionId), 10000, 'getOrderStatus');
                         if (status.status === 'closed' || status.filledQty >= vol * 0.95) {
                             quantity = status.filledQty || vol;
                             avgPrice = status.avgPrice || limitPrice;
@@ -1645,11 +1661,11 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
 
                     // If not fully filled, check for partial fill before cancelling
                     if (!filled) {
-                        const finalStatus = await adapter.getOrderStatus(limitOrder.orderId, botState.sessionId);
+                        const finalStatus = await withTimeout(adapter.getOrderStatus(limitOrder.orderId, botState.sessionId), 10000, 'getOrderStatus');
                         partialFillQty = finalStatus.filledQty || 0;
                         partialFillCost = partialFillQty * (finalStatus.avgPrice || limitPrice);
 
-                        await adapter.cancelOrder(limitOrder.orderId, botState.sessionId);
+                        await withTimeout(adapter.cancelOrder(limitOrder.orderId, botState.sessionId), 15000, 'cancelOrder');
 
                         if (partialFillQty > 0) {
                             // Reduce notional by what was already filled
@@ -1678,7 +1694,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
             }
 
             if (!usedLimit) {
-                const orderResult = await adapter.placeBuyOrder(ticker, notional, botState.sessionId);
+                const orderResult = await withTimeout(adapter.placeBuyOrder(ticker, notional, botState.sessionId), 20000, 'placeBuyOrder');
                 const marketQty = orderResult.quantity || (notional / price);
                 const marketPrice = orderResult.avgPrice || price;
 
@@ -1787,7 +1803,7 @@ const handleSell = async (position, price, reason) => {
         } else {
             // Real: route through exchange adapter — must succeed before we update portfolio
             const adapter = getExchangeAdapter();
-            const orderResult = await adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs);
+            const orderResult = await withTimeout(adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs), 20000, 'placeSellOrder');
             avgPrice = parseFloat(orderResult.avgPrice) || price;
         }
 
@@ -1899,7 +1915,7 @@ const handleSell = async (position, price, reason) => {
 
 const logPublicIp = async () => {
     try {
-        const response = await fetch('https://api.ipify.org?format=json');
+        const response = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(5000) });
         const data = await response.json();
         publicIp = data.ip;
     } catch (error) {
@@ -2401,5 +2417,37 @@ function gracefulShutdown(signal) {
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// ============================================
+// Bot Loop Watchdog (hang recovery)
+// ============================================
+const BOT_LOOP_MAX_DURATION_MS = 60000; // 60s max per loop iteration
+setInterval(() => {
+    if (botLoopRunning && botLoopStartTime > 0) {
+        const elapsed = Date.now() - botLoopStartTime;
+        if (elapsed > BOT_LOOP_MAX_DURATION_MS) {
+            console.error(`[WATCHDOG] Bot loop stuck for ${(elapsed / 1000).toFixed(0)}s — force-resetting botLoopRunning`);
+            try { addLog(`[WATCHDOG] Bot loop hung for ${(elapsed / 1000).toFixed(0)}s, force-reset to unblock`, 'ERROR'); } catch (e) {}
+            botLoopRunning = false;
+            botLoopStartTime = 0;
+        }
+    }
+}, 10000);
+
+// ============================================
+// Process Crash Handlers
+// ============================================
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[CRASH-GUARD] Unhandled Promise rejection:', reason);
+    try { addLog(`[CRASH-GUARD] Unhandled rejection: ${reason}`, 'ERROR'); } catch (e) {}
+    // Don't exit — watchdog will recover if bot loop is stuck
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('[CRASH-GUARD] Uncaught exception:', error);
+    try { addLog(`[CRASH-GUARD] Uncaught exception: ${error.message}`, 'ERROR'); } catch (e) {}
+    try { saveSessionState(); } catch (e) {}
+    process.exit(1); // Let PM2/systemd restart clean
+});
 
 startServer();

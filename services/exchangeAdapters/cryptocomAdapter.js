@@ -55,7 +55,7 @@ export async function makePublicRequest(method, params = {}) {
     const url = new URL(`${API_BASE_URL}${method}`);
     url.search = new URLSearchParams(params).toString();
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
     const data = await response.json();
 
     if (data.code != 0) {
@@ -91,7 +91,8 @@ export async function makeSignedRequest(method, params = {}, sessionId = null) {
     const response = await fetch(`${API_BASE_URL}${method}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, method, api_key: apiKey, params, sig, nonce })
+        body: JSON.stringify({ id, method, api_key: apiKey, params, sig, nonce }),
+        signal: AbortSignal.timeout(15000),
     });
 
     const data = await response.json();
