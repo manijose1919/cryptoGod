@@ -329,7 +329,7 @@ router.post('/apply', async (req, res) => {
 
 /**
  * POST /api/training/walk-forward/start — Start walk-forward validation
- * Body: { trainMonths?: number, testMonths?: number, stepMonths?: number, tickers?: string[], initialCash?: number, seedRunId?: string, skipMTF?: boolean }
+ * Body: { trainMonths?: number, testMonths?: number, stepMonths?: number, tickers?: string[], initialCash?: number, seedRunId?: string, skipMTF?: boolean, selectivity?: 'normal'|'high' }
  */
 router.post('/walk-forward/start', async (req, res) => {
   try {

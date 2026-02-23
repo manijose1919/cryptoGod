@@ -82,6 +82,30 @@ const ENTRY_COOLDOWN_STEPS = 4;  // Check entry every 4 hours minimum gap
 // Chunk size for yielding to event loop
 const CHUNK_SIZE = 200;
 
+// Selectivity presets — controls how picky the entry filters are
+const SELECTIVITY_PRESETS = {
+  normal: {
+    minOppScore: MIN_OPP_SCORE,           // 20
+    minRegimeStrategyWR: 0.38,            // REGIME_STRATEGY_MIN_WINRATE
+    minBinWR: 0.35,
+    regimeGate: null,                     // no regime restriction
+    minStrategiesAgreeing: 1,
+    qualityConfidenceFloor: 0,            // all pass
+    minMemoryTradesForGate: 100,
+    entryCooldownSteps: 1,                // every candle
+  },
+  high: {
+    minOppScore: 55,
+    minRegimeStrategyWR: 0.55,
+    minBinWR: 0.50,
+    regimeGate: ['STRONG_UP', 'UP'],      // only bullish regimes
+    minStrategiesAgreeing: 2,
+    qualityConfidenceFloor: 0.55,
+    minMemoryTradesForGate: 50,
+    entryCooldownSteps: 4,                // every 4th candle
+  },
+};
+
 // Active training state
 let activeTraining = null;
 
@@ -216,12 +240,16 @@ function recordToTradeMemory(memory, strategy, regime, indicatorValues, pnl, pnl
  * Quality filter: should we enter this trade based on past outcomes?
  * Returns { allow: boolean, reason: string, confidence: number }
  */
-function evaluateTradeQuality(memory, strategy, regime, indicatorValues) {
+function evaluateTradeQuality(memory, strategy, regime, indicatorValues, selParams = null) {
+  const minMemory = selParams?.minMemoryTradesForGate ?? 100;
+  const minRSWR = selParams?.minRegimeStrategyWR ?? REGIME_STRATEGY_MIN_WINRATE;
+  const minBWR = selParams?.minBinWR ?? 0.35;
+
   const totalMemoryTrades = Object.values(memory.regimeStrategy)
     .reduce((s, rs) => s + rs.wins + rs.losses, 0);
 
   // Need minimum history before filtering
-  if (totalMemoryTrades < 100) {
+  if (totalMemoryTrades < minMemory) {
     return { allow: true, reason: 'insufficient_data', confidence: 0.5 };
   }
 
@@ -234,8 +262,8 @@ function evaluateTradeQuality(memory, strategy, regime, indicatorValues) {
       const winRate = rs.wins / total;
       const avgPnl = rs.totalPnl / total;
 
-      // Block if win rate is terrible OR if average PnL is significantly negative
-      if (winRate < REGIME_STRATEGY_MIN_WINRATE || (total >= 30 && avgPnl < -0.5)) {
+      // Block if win rate is below threshold OR if average PnL is significantly negative
+      if (winRate < minRSWR || (total >= 30 && avgPnl < -0.5)) {
         return {
           allow: false,
           reason: `${rsKey} WR=${(winRate * 100).toFixed(0)}% avgPnL=$${avgPnl.toFixed(2)} (${total} samples)`,
@@ -257,14 +285,14 @@ function evaluateTradeQuality(memory, strategy, regime, indicatorValues) {
       if (binData && binData.wins + binData.losses >= 10) {
         binChecks++;
         const binWR = binData.wins / (binData.wins + binData.losses);
-        if (binWR < 0.35) binBad++;
+        if (binWR < minBWR) binBad++;
       }
     }
     // If majority of checked bins are bad, skip
     if (binChecks >= 2 && binBad > binChecks * 0.6) {
       return {
         allow: false,
-        reason: `${binBad}/${binChecks} indicator bins below 35% WR`,
+        reason: `${binBad}/${binChecks} indicator bins below ${(minBWR * 100).toFixed(0)}% WR`,
         confidence: 0.3,
       };
     }
@@ -544,7 +572,7 @@ function buildFeatureVector(candles, ticker, strategy, regime, score, fearGreed,
 /**
  * Evaluate all strategies for entry and return the best one.
  */
-function evaluateStrategies(candles, regime, state) {
+function evaluateStrategies(candles, regime, state, minStrategiesRequired = 1) {
   if (candles.length < MIN_CANDLES_REQUIRED) return null;
 
   const tcValue = calculateTCSeries(candles).pop() ?? 50;
@@ -610,7 +638,7 @@ function evaluateStrategies(candles, regime, state) {
     candidates.push({ strategy: 'CONFLUENCE', value: bullishCount, strength: strength * w });
   }
 
-  if (candidates.length === 0) return null;
+  if (candidates.length < minStrategiesRequired) return null;
   candidates.sort((a, b) => b.strength - a.strength);
   return candidates[0];
 }
@@ -1068,6 +1096,7 @@ export async function startTraining(config = {}) {
   const evaluationOnly = config.evaluationOnly || false;
   const frozenState = config.frozenState || null;
   const skipMTF = config.skipMTF || false;
+  const selectivity = SELECTIVITY_PRESETS[config.selectivity] || SELECTIVITY_PRESETS.normal;
   const runId = `train_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
   // Determine time range from available data
@@ -1149,6 +1178,7 @@ export async function startTraining(config = {}) {
     equityBuffer: [],    // Buffer for batch DB inserts
     tradeBuffer: [],     // Buffer for batch DB inserts
     mlSampleBuffer: [],  // Buffer for batch DB inserts
+    selectivity,
     startedAt: Date.now(),
   };
 
@@ -1195,7 +1225,8 @@ export async function startTraining(config = {}) {
   const timeline = Array.from(timestampSet).sort((a, b) => a - b);
   activeTraining.progress.totalSteps = timeline.length;
 
-  console.log(`[Training] Starting training run ${runId}: ${timeline.length} timesteps, ${Object.keys(candleData).length} pairs`);
+  const selName = config.selectivity || 'normal';
+  console.log(`[Training] Starting training run ${runId}: ${timeline.length} timesteps, ${Object.keys(candleData).length} pairs, selectivity=${selName}`);
 
   // Run training loop asynchronously
   runTrainingLoop(runId, timeline, candleData, candleData4h, activeTraining, candleIndex).catch(err => {
@@ -1362,6 +1393,13 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
     }
 
     // --- ENTRY LOGIC ---
+    const sel = training.selectivity;
+
+    // Entry cooldown — skip entry evaluation on non-cooldown steps
+    if (sel.entryCooldownSteps > 1 && stepIdx % sel.entryCooldownSteps !== 0) {
+      // Skip entry evaluation this step
+    } else {
+
     const openSlots = MAX_CONCURRENT_POSITIONS - Object.keys(portfolio.positions).length;
     const isPaused = state.circuitBreaker.pausedUntil > currentTime;
 
@@ -1374,7 +1412,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         if (!candles || candles.length < MIN_CANDLES_REQUIRED) continue;
 
         const score = calculateOpportunityScore(candles, ticker);
-        if (score.compositeScore > MIN_OPP_SCORE) {
+        if (score.compositeScore > sel.minOppScore) {
           candidates.push({ ticker, score, candles });
         }
       }
@@ -1396,8 +1434,11 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
           regime = regimeObj?.trend || 'NORMAL';
         } catch (e) {}
 
-        // Evaluate strategies
-        const entry = evaluateStrategies(candles, regime, state);
+        // Regime gate — only allow entries in specified regimes
+        if (sel.regimeGate && !sel.regimeGate.includes(regime)) continue;
+
+        // Evaluate strategies (require minStrategiesAgreeing)
+        const entry = evaluateStrategies(candles, regime, state, sel.minStrategiesAgreeing);
         if (!entry) continue;
 
         // MULTI-TIMEFRAME CONFIRMATION — use MTF context or fallback to old 4h check
@@ -1423,8 +1464,10 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         // QUALITY FILTER — skip entries that historically lose
         let qualityMultiplier = 1.0;
         if (state.tradeMemory) {
-          const quality = evaluateTradeQuality(state.tradeMemory, entry.strategy, regime, indicatorValues);
+          const quality = evaluateTradeQuality(state.tradeMemory, entry.strategy, regime, indicatorValues, sel);
           if (!quality.allow) continue; // Skip bad setups
+          // Confidence floor — reject trades with low confidence
+          if (sel.qualityConfidenceFloor > 0 && quality.confidence < sel.qualityConfidenceFloor) continue;
           qualityMultiplier = 0.5 + quality.confidence; // 0.5x to 1.5x
         }
 
@@ -1509,6 +1552,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         });
       }
     }
+    } // end entry cooldown else
 
     // Update current prices for open positions
     for (const [ticker, pos] of Object.entries(portfolio.positions)) {
