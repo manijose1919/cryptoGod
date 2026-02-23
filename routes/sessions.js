@@ -30,11 +30,18 @@ export default function createSessionsRouter(ctx) {
     });
 
     // POST /session/resume
-    router.post('/session/resume', (req, res) => {
+    router.post('/session/resume', async (req, res) => {
         if (!ctx.botState.isActive) {
             ctx.botState.isActive = true;
             ctx.botInterval = setInterval(ctx.tradingBotLoop, ctx.CONFIG.BOT_INTERVAL_MS);
             ctx.addLog('[SESSION] Bot resumed via API', 'INFO');
+        }
+        // Ensure we have a full ticker list, not just session-saved subset
+        if (ctx.availableTickers.length < 10) {
+            try {
+                await ctx.updateAvailableTickers();
+                ctx.addLog(`[SESSION] Refreshed tickers: ${ctx.availableTickers.length} available`, 'INFO');
+            } catch (e) {}
         }
         res.json({ success: true, botActive: true });
     });
@@ -82,11 +89,18 @@ export default function createSessionsRouter(ctx) {
             ctx.setActiveSession(sessionId, mode);
             ctx.setThoughtSessionId(sessionId);
 
-            if (tickers && tickers.length > 0) {
-                ctx.availableTickers.length = 0;
-                ctx.availableTickers.push(...tickers);
-            } else if (ctx.availableTickers.length === 0) {
+            // Always ensure we have a full ticker list for scanning
+            // User-selected tickers are stored for display but don't restrict the bot's scan pool
+            if (ctx.availableTickers.length < 10) {
                 await ctx.updateAvailableTickers();
+            }
+            // Merge in any user-selected tickers that might not be in the exchange list
+            if (tickers && tickers.length > 0) {
+                for (const t of tickers) {
+                    if (!ctx.availableTickers.includes(t)) {
+                        ctx.availableTickers.push(t);
+                    }
+                }
             }
 
             ctx.fullResetCircuitBreaker();
