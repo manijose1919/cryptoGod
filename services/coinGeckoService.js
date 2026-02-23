@@ -3,8 +3,12 @@ import fetch from 'node-fetch';
 // Rate limiting tracker
 let requestCount = 0;
 let lastResetTime = Date.now();
-const MAX_REQUESTS_PER_MINUTE = 10;
+const MAX_REQUESTS_PER_MINUTE = 5; // CoinGecko free tier: ~10-30/min, stay well under
 const RESET_INTERVAL = 60000; // 1 minute
+
+// 429 backoff tracker
+let backoffUntil = 0;
+let consecutiveBackoffs = 0;
 
 // Cache storage
 const cache = new Map();
@@ -40,10 +44,19 @@ function toGeckoId(ticker) {
 }
 
 /**
- * Check and enforce rate limiting
+ * Check and enforce rate limiting (includes 429 backoff)
  */
 function checkRateLimit() {
   const now = Date.now();
+
+  // Respect 429 backoff period
+  if (now < backoffUntil) {
+    const waitSec = Math.ceil((backoffUntil - now) / 1000);
+    if (waitSec % 30 === 0 || waitSec > 60) { // Log sparingly during backoff
+      console.log(`[CoinGecko] In 429 backoff, ${waitSec}s remaining`);
+    }
+    return false;
+  }
 
   // Reset counter if minute has passed
   if (now - lastResetTime >= RESET_INTERVAL) {
@@ -60,6 +73,27 @@ function checkRateLimit() {
 
   requestCount++;
   return true;
+}
+
+/**
+ * Trigger exponential backoff on 429 response
+ */
+function trigger429Backoff() {
+  consecutiveBackoffs++;
+  // 2min, 4min, 8min, max 10min
+  const backoffMs = Math.min(2 * 60000 * Math.pow(2, consecutiveBackoffs - 1), 10 * 60000);
+  backoffUntil = Date.now() + backoffMs;
+  console.warn(`[CoinGecko] 429 received — backing off for ${Math.ceil(backoffMs / 60000)}min (attempt #${consecutiveBackoffs})`);
+}
+
+/**
+ * Reset backoff counter on successful request
+ */
+function resetBackoff() {
+  if (consecutiveBackoffs > 0) {
+    consecutiveBackoffs = 0;
+    console.log(`[CoinGecko] Backoff cleared — requests succeeding again`);
+  }
 }
 
 /**
@@ -90,7 +124,15 @@ function setCache(key, data, ttl) {
 }
 
 /**
- * Make API request with rate limiting and error handling
+ * Return stale cache entry (ignoring TTL) as fallback
+ */
+function getStaleCache(key) {
+  const cached = cache.get(key);
+  return cached ? cached.data : null;
+}
+
+/**
+ * Make API request with rate limiting, 429 backoff, and error handling
  */
 async function makeRequest(url, cacheKey, ttl) {
   try {
@@ -100,33 +142,37 @@ async function makeRequest(url, cacheKey, ttl) {
       return cached;
     }
 
-    // Check rate limit
+    // Check rate limit (includes 429 backoff)
     if (!checkRateLimit()) {
-      console.log(`[CoinGecko] Rate limit hit, returning cached data or null`);
-      return null;
+      return getStaleCache(cacheKey);
     }
 
-    // Make request
+    // Make request with timeout
     const response = await fetch(url, {
-      headers: {
-        'Accept': 'application/json'
-      }
+      headers: { 'Accept': 'application/json' },
+      signal: AbortSignal.timeout(15000),
     });
+
+    if (response.status === 429) {
+      trigger429Backoff();
+      return getStaleCache(cacheKey);
+    }
 
     if (!response.ok) {
       console.error(`[CoinGecko] API error: ${response.status} ${response.statusText}`);
-      return null;
+      return getStaleCache(cacheKey);
     }
 
     const data = await response.json();
 
-    // Cache the result
+    // Success — cache the result and clear backoff
     setCache(cacheKey, data, ttl);
+    resetBackoff();
 
     return data;
   } catch (error) {
     console.error(`[CoinGecko] Request failed:`, error.message);
-    return null;
+    return getStaleCache(cacheKey);
   }
 }
 
