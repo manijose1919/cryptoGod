@@ -47,7 +47,7 @@ async function krakenPublicRequest(endpoint, params = {}) {
         url.searchParams.set(key, String(val));
     }
 
-    const response = await fetch(url.toString());
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
     const data = await response.json();
 
     if (data.error && data.error.length > 0) {
@@ -87,6 +87,7 @@ async function krakenPrivateRequest(endpoint, params = {}) {
             'API-Sign': signature,
         },
         body: postData,
+        signal: AbortSignal.timeout(15000),
     });
 
     const data = await response.json();
