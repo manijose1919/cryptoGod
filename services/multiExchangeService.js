@@ -239,6 +239,8 @@ async function fetchCoinGeckoSocial() {
       console.error(`[MultiExchange] CoinGecko social error for ${ticker}:`, err.message);
       errorCounts[ticker].coingecko++;
     }
+    // Space out requests to avoid burst-triggering CoinGecko 429s
+    await new Promise(r => setTimeout(r, 12000));
   }
 }
 
@@ -487,19 +489,26 @@ export async function startDataCollection(ticker = 'BTCUSD') {
     }
   }, 5000);
 
-  // CoinGecko: start after 10s
+  // CoinGecko: stagger startup to avoid burst 429s
   setTimeout(() => {
     if (coinGeckoService && isRunning) {
-      fetchCoinGeckoMarket(); // Initial fetch
+      fetchCoinGeckoMarket(); // Initial market fetch
       intervals.coingecko_market = setInterval(fetchCoinGeckoMarket, 600000);
-
-      fetchCoinGeckoSocial(); // Initial fetch
-      intervals.coingecko_social = setInterval(fetchCoinGeckoSocial, 600000);
-
-      fetchFearGreed(); // Initial fetch
-      intervals.fear_greed = setInterval(fetchFearGreed, 1800000);
     }
   }, 10000);
+
+  setTimeout(() => {
+    if (coinGeckoService && isRunning) {
+      fetchCoinGeckoSocial(); // Initial social fetch (staggered 30s after market)
+      intervals.coingecko_social = setInterval(fetchCoinGeckoSocial, 600000);
+    }
+  }, 40000);
+
+  setTimeout(() => {
+    if (!isRunning) return;
+    fetchFearGreed(); // Initial fetch
+    intervals.fear_greed = setInterval(fetchFearGreed, 1800000);
+  }, 15000);
 
   // DeFiLlama: start after 15s
   setTimeout(() => {
