@@ -136,7 +136,8 @@ export function useMarketData() {
     useEffect(() => {
         if (!isTradingActive) return;
         if (isVPSReconnect) {
-            addLog('VPS reconnect mode — skipping candle initialization, using session polling only.', 'INFO');
+            addLog('VPS reconnect mode — skipping candle initialization, connecting WebSocket only.', 'INFO');
+            connectWebSocket([]);
             setIsLoading(false);
             return;
         }
