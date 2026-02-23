@@ -5,12 +5,13 @@
  * Runs N sequential walk-forward validations, each seeded from the best fold
  * of the previous run. Targets 80-90% OOS win rate.
  *
- * Usage: node iterative-training.js [--iterations 10] [--port 3033] [--target-wr 80]
+ * Usage: node iterative-training.js [--iterations 10] [--port 3033] [--target-wr 80] [--selectivity high]
  */
 
 const BASE_URL = `http://localhost:${parseArg('--port', 3033)}`;
 const MAX_ITERATIONS = parseInt(parseArg('--iterations', 10));
 const TARGET_WIN_RATE = parseFloat(parseArg('--target-wr', 80));
+const SELECTIVITY = parseArg('--selectivity', 'normal'); // 'normal' or 'high'
 const POLL_INTERVAL_MS = 30000; // 30s between status checks
 
 const TICKERS = [
@@ -25,6 +26,7 @@ const WF_CONFIG = {
   tickers: TICKERS,
   initialCash: 10000,
   skipMTF: true, // Skip 5m/15m — only 8 days of data
+  selectivity: SELECTIVITY,
 };
 
 function parseArg(flag, defaultVal) {
@@ -181,6 +183,7 @@ async function main() {
   log(`Iterations: ${MAX_ITERATIONS}`);
   log(`Pairs: ${TICKERS.join(', ')}`);
   log(`Config: ${WF_CONFIG.trainMonths}mo train / ${WF_CONFIG.testMonths}mo test / ${WF_CONFIG.stepMonths}mo step`);
+  log(`Selectivity: ${SELECTIVITY}`);
   log(`Server: ${BASE_URL}`);
   log('');
 
