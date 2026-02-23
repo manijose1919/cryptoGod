@@ -8,34 +8,34 @@ import { getSetting, setSetting } from './database.js';
 
 // Default flags — used when no persisted value exists
 const DEFAULT_FLAGS = {
-  // System A: ML Gatekeeper
+  // System A: ML Gatekeeper — HARD_GATE: ML decides, no fallback
   ML_GATEKEEPER_ENABLED: true,
-  ML_GATEKEEPER_MODE: 'SOFT_GATE',       // 'ADVISORY' | 'SOFT_GATE' | 'HARD_GATE'
-  ML_MIN_CONFIDENCE_TO_BLOCK: 60,
-  ML_MIN_CONFIDENCE_TO_OVERRIDE: 75,
-  ML_AUTO_DOWNGRADE_THRESHOLD: 0.52,      // revert to ADVISORY if accuracy < 52%
-  ML_AUTO_DOWNGRADE_WINDOW: 100,          // over last 100 trades
+  ML_GATEKEEPER_MODE: 'HARD_GATE',       // 'ADVISORY' | 'SOFT_GATE' | 'HARD_GATE'
+  ML_MIN_CONFIDENCE_TO_BLOCK: 55,
+  ML_MIN_CONFIDENCE_TO_OVERRIDE: 65,
+  ML_AUTO_DOWNGRADE_THRESHOLD: 0,         // DISABLED — no auto-downgrade, learn or die
+  ML_AUTO_DOWNGRADE_WINDOW: 100,
 
-  // System B: Genetic Strategy Evolution
-  GENETIC_ENABLED: false,                 // off until validated in walk-forward
+  // System B: Genetic Strategy Evolution — ON
+  GENETIC_ENABLED: true,
   GENETIC_POPULATION_SIZE: 50,
   GENETIC_MAX_DEPTH: 4,
-  GENETIC_MIN_TRADES_TO_ACTIVATE: 200,
+  GENETIC_MIN_TRADES_TO_ACTIVATE: 0,      // No minimum — active immediately
   GENETIC_MUTATION_RATE: 0.10,
   GENETIC_ELITISM_COUNT: 5,
   GENETIC_TOP_K_SIGNALS: 5,
 
   // System C: Portfolio Correlation Engine
-  CORRELATION_ENGINE_ENABLED: true,       // safe — only reduces sizes
+  CORRELATION_ENGINE_ENABLED: true,
   CORRELATION_BLOCK_THRESHOLD: 0.90,
   CORRELATION_REDUCE_THRESHOLD: 0.75,
   CORRELATION_MAX_CLUSTER_ALLOC: 0.40,
   CORRELATION_UPDATE_INTERVAL_MS: 300000,
 
-  // System D: Adversarial Dual-Brain
-  ADVERSARIAL_ENABLED: false,             // off until both models trained
-  ADVERSARIAL_MIN_MARGIN: 15,
-  ADVERSARIAL_MIN_SAMPLES: 200,
+  // System D: Adversarial Dual-Brain — ON, no minimum samples
+  ADVERSARIAL_ENABLED: true,
+  ADVERSARIAL_MIN_MARGIN: 10,             // Lower margin threshold — more aggressive
+  ADVERSARIAL_MIN_SAMPLES: 0,             // No minimum — active as soon as trained
 };
 
 // In-memory cache of current flags (seeded from defaults, overwritten by DB on init)

@@ -59,9 +59,12 @@ export function trainBoth(features2D, labels, options = {}) {
   }
 
   const minSamples = getFlag('ADVERSARIAL_MIN_SAMPLES');
-  if (features2D.length < minSamples) {
+  if (minSamples > 0 && features2D.length < minSamples) {
     console.log(`[AdversarialBrains] Not enough samples (${features2D.length} < ${minSamples}), skipping training`);
     return { success: false, reason: `Need ${minSamples} samples, have ${features2D.length}` };
+  }
+  if (features2D.length < 10) {
+    return { success: false, reason: `Need at least 10 samples, have ${features2D.length}` };
   }
 
   console.log(`[AdversarialBrains] Training both brains on ${features2D.length} samples...`);
@@ -131,7 +134,7 @@ export function evaluateConsensus(features) {
   }
 
   const minSamples = getFlag('ADVERSARIAL_MIN_SAMPLES');
-  if (bullSampleCount < minSamples || bearSampleCount < minSamples) {
+  if (minSamples > 0 && (bullSampleCount < minSamples || bearSampleCount < minSamples)) {
     return {
       bullConfidence: 50,
       bearConfidence: 50,

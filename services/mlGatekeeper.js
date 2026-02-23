@@ -282,14 +282,17 @@ export function recordOutcome(ticker, tier, wasCorrect) {
 
 /**
  * Check if we should auto-downgrade to ADVISORY mode
+ * DISABLED: threshold=0 means no auto-downgrade — ML learns or dies trying
  */
 function checkAutoDowngrade() {
   const threshold = getFlag('ML_AUTO_DOWNGRADE_THRESHOLD');
+  if (threshold <= 0) return; // Auto-downgrade disabled
+
   const window = getFlag('ML_AUTO_DOWNGRADE_WINDOW');
 
   // Need resolved decisions
   const resolved = rollingDecisions.filter(d => d.actualOutcome);
-  if (resolved.length < window / 2) return; // Not enough data
+  if (resolved.length < window / 2) return;
 
   const recent = resolved.slice(-window);
   const correct = recent.filter(d => d.actualOutcome === 'CORRECT').length;
@@ -300,9 +303,8 @@ function checkAutoDowngrade() {
     setFlag('ML_GATEKEEPER_MODE', 'ADVISORY');
     wasAutoDowngraded = true;
   } else if (accuracy >= threshold + 0.05 && wasAutoDowngraded) {
-    // Auto-restore if accuracy recovers
-    console.log(`[MLGatekeeper] Auto-restore: accuracy ${(accuracy*100).toFixed(1)}% recovered — restoring SOFT_GATE`);
-    setFlag('ML_GATEKEEPER_MODE', 'SOFT_GATE');
+    console.log(`[MLGatekeeper] Auto-restore: accuracy ${(accuracy*100).toFixed(1)}% recovered — restoring HARD_GATE`);
+    setFlag('ML_GATEKEEPER_MODE', 'HARD_GATE');
     wasAutoDowngraded = false;
   }
 }
