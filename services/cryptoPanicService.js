@@ -3,6 +3,9 @@
 
 import fetch from 'node-fetch';
 
+// API key (free tier — register at https://cryptopanic.com/developers/api/)
+const API_KEY = process.env.CRYPTOPANIC_API_KEY || '';
+
 // Cache configuration
 const CACHE_TTL_NEWS = 5 * 60 * 1000; // 5 minutes
 const CACHE_TTL_FEAR_GREED = 30 * 60 * 1000; // 30 minutes
@@ -51,27 +54,29 @@ function isCacheValid(cache, ttl) {
  */
 export async function getLatestNews(ticker = null, limit = 20) {
   try {
+    // Skip if no API key configured (free endpoint was deprecated)
+    if (!API_KEY) {
+      return newsCache.data || null;
+    }
+
     const currency = tickerToCurrency(ticker);
 
     // Check cache
     if (isCacheValid(newsCache, CACHE_TTL_NEWS) && newsCache.ticker === ticker) {
-      console.log('[CryptoPanic] Returning cached news');
       return newsCache.data;
     }
 
-    // Build URL
-    let url = 'https://cryptopanic.com/api/free/v1/posts/?public=true';
+    // Build URL with auth token
+    let url = `https://cryptopanic.com/api/v1/posts/?auth_token=${API_KEY}&public=true`;
     if (currency) {
       url += `&currencies=${currency}`;
     }
-
-    console.log(`[CryptoPanic] Fetching news from: ${url}`);
 
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'TradingDashboard/1.0'
       },
-      timeout: 10000
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
@@ -111,7 +116,8 @@ export async function getLatestNews(ticker = null, limit = 20) {
       ticker
     };
 
-    console.log(`[CryptoPanic] Fetched ${news.length} news items`);
+    // Log only occasionally to reduce noise
+    if (Math.random() < 0.1) console.log(`[CryptoPanic] Fetched ${news.length} news items`);
     return news;
 
   } catch (error) {
@@ -135,7 +141,7 @@ export async function getFearGreedIndex() {
     console.log('[CryptoPanic] Fetching Fear & Greed Index');
 
     const response = await fetch('https://api.alternative.me/fng/?limit=10', {
-      timeout: 10000
+      signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
