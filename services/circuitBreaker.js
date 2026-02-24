@@ -33,6 +33,8 @@ const CIRCUIT_BREAKER_CONFIG = {
 };
 
 let pauseCount = 0;  // For escalating pauses
+let peakBalance = 0;  // Track peak balance for drawdown-adaptive Kelly
+let currentBalance = 0;  // Current portfolio value
 
 // ============================================
 // CIRCUIT BREAKER
@@ -163,26 +165,41 @@ export function fullResetCircuitBreaker() {
 // ============================================
 
 /**
+ * Set current balance for drawdown-adaptive Kelly tracking
+ */
+export function setCurrentBalance(balance) {
+  currentBalance = balance;
+  if (balance > peakBalance) {
+    peakBalance = balance;
+  }
+}
+
+/**
  * Calculate Kelly fraction from trade history
+ * Uses rolling 50-trade window + drawdown-adaptive fraction
  * Returns recommended position size as fraction of portfolio (0 to 1)
  */
-export function calculateKellyFraction(minTrades = 20) {  // Need sufficient sample for statistical significance
+export function calculateKellyFraction(minTrades = 20) {
   const completedTrades = tradeHistory.filter(t => t.pnl !== 0);
-  if (completedTrades.length < minTrades) {
+
+  // Use rolling 50-trade window for more responsive Kelly
+  const recentTrades = completedTrades.slice(-50);
+
+  if (recentTrades.length < minTrades) {
     return {
       kellyFull: 0.1,       // Default conservative 10%
       kellyHalf: 0.05,
       kellyQuarter: 0.025,
       recommended: 0.05,    // Use half-Kelly by default
       confidence: 'LOW',
-      stats: { trades: completedTrades.length, minRequired: minTrades },
+      stats: { trades: recentTrades.length, minRequired: minTrades },
     };
   }
 
-  const wins = completedTrades.filter(t => t.pnl > 0);
-  const losses = completedTrades.filter(t => t.pnl < 0);
+  const wins = recentTrades.filter(t => t.pnl > 0);
+  const losses = recentTrades.filter(t => t.pnl < 0);
 
-  const winRate = wins.length / completedTrades.length;
+  const winRate = wins.length / recentTrades.length;
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
   const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 1;
 
@@ -193,13 +210,25 @@ export function calculateKellyFraction(minTrades = 20) {  // Need sufficient sam
   const kellyHalf = kellyFull / 2;
   const kellyQuarter = kellyFull / 4;
 
+  // Drawdown-adaptive Kelly fraction
+  let kellyMultiplier = 0.5;  // Default: half-Kelly
+  let drawdownPct = 0;
+  if (peakBalance > 0 && currentBalance > 0) {
+    drawdownPct = (peakBalance - currentBalance) / peakBalance;
+    if (drawdownPct > 0.05) {
+      kellyMultiplier = 0.25;  // Quarter-Kelly during >5% drawdown
+    } else if (drawdownPct > 0.03) {
+      kellyMultiplier = 0.33;  // Third-Kelly during >3% drawdown
+    }
+  }
+
   // Confidence based on sample size
   let confidence = 'LOW';
-  if (completedTrades.length >= 50) confidence = 'HIGH';
-  else if (completedTrades.length >= 20) confidence = 'MEDIUM';
+  if (recentTrades.length >= 50) confidence = 'HIGH';
+  else if (recentTrades.length >= 20) confidence = 'MEDIUM';
 
-  // Beast Mode: Cap at 40% max position size (was 25%)
-  const recommended = Math.min(0.40, kellyHalf);
+  // Cap at 40% max position size, apply drawdown-adaptive multiplier
+  const recommended = Math.min(0.40, kellyFull * kellyMultiplier);
 
   return {
     kellyFull: Math.min(1, kellyFull),
@@ -207,12 +236,15 @@ export function calculateKellyFraction(minTrades = 20) {  // Need sufficient sam
     kellyQuarter: Math.min(0.25, kellyQuarter),
     recommended,
     confidence,
+    drawdownPct: (drawdownPct * 100).toFixed(2),
+    kellyMultiplier,
     stats: {
-      trades: completedTrades.length,
+      trades: recentTrades.length,
+      totalTrades: completedTrades.length,
       winRate: (winRate * 100).toFixed(1) + '%',
       avgWin: avgWin.toFixed(4),
       avgLoss: avgLoss.toFixed(4),
-      profitFactor: avgLoss > 0 ? (avgWin * wins.length / (avgLoss * losses.length)).toFixed(2) : 'N/A',
+      profitFactor: avgLoss > 0 ? (avgWin * wins.length / (avgLoss * (losses.length || 1))).toFixed(2) : 'N/A',
       expectancy: ((winRate * avgWin) - ((1 - winRate) * avgLoss)).toFixed(4),
     },
   };
@@ -235,7 +267,7 @@ export function getKellyPositionSize(portfolioValue) {
  */
 export function getStrategyKelly(strategy, portfolioValue) {
   const stratTrades = tradeHistory.filter(t => t.strategy === strategy && t.pnl !== 0);
-  if (stratTrades.length < 5) {
+  if (stratTrades.length < 10) {
     return { amount: portfolioValue * 0.05, fraction: 0.05, confidence: 'LOW' };
   }
 

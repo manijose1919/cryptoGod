@@ -18,8 +18,8 @@ const DEFAULT_FLAGS = {
 
   // System B: Genetic Strategy Evolution — ON
   GENETIC_ENABLED: true,
-  GENETIC_POPULATION_SIZE: 50,
-  GENETIC_MAX_DEPTH: 4,
+  GENETIC_POPULATION_SIZE: 100,
+  GENETIC_MAX_DEPTH: 6,
   GENETIC_MIN_TRADES_TO_ACTIVATE: 0,      // No minimum — active immediately
   GENETIC_MUTATION_RATE: 0.10,
   GENETIC_ELITISM_COUNT: 5,
@@ -36,6 +36,17 @@ const DEFAULT_FLAGS = {
   ADVERSARIAL_ENABLED: true,
   ADVERSARIAL_MIN_MARGIN: 10,             // Lower margin threshold — more aggressive
   ADVERSARIAL_MIN_SAMPLES: 0,             // No minimum — active as soon as trained
+
+  // Performance Upgrades — ML & Analytics
+  FEATURE_SELECTION_ENABLED: true,
+  LSTM_ENABLED: true,
+  REGIME_MODELS_ENABLED: true,
+  ONCHAIN_DATA_ENABLED: true,
+  SHAP_ENABLED: true,
+  HYPERPARAM_TUNING_ENABLED: true,
+  MONTE_CARLO_ENABLED: true,
+  SMART_EXECUTION_ENABLED: true,
+  PORTFOLIO_OPTIMIZER_ENABLED: true,
 };
 
 // In-memory cache of current flags (seeded from defaults, overwritten by DB on init)

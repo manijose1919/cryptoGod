@@ -20,11 +20,19 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - PYTHONUNBUFFERED=1
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=12288
     volumes:
       - db-data:/app/data
       - ./models:/app/models
       - ./logs:/app/logs
-    restart: always
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3033/api/health/ml"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
@@ -52,7 +60,7 @@ services:
       - "6379:6379"
     command: >
       redis-server
-      --maxmemory 2gb
+      --maxmemory 4gb
       --maxmemory-policy allkeys-lru
       --appendonly yes
       --appendfsync everysec

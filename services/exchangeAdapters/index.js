@@ -61,7 +61,7 @@ export function listExchanges() {
 /** Get the WebSocket service for the active (or specified) exchange */
 export function getWebSocketService(exchangeId) {
     const id = exchangeId || activeExchangeId;
-    return wsServices[id] || wsServices['crypto.com'];
+    return wsServices[id];
 }
 
 export { setSessionManager };

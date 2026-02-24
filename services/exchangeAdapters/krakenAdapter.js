@@ -398,6 +398,18 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             fee: parseFloat(order.fee || '0'),
         };
     }
+
+    async getOrderBook(ticker, depth = 10) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPublicRequest('Depth', { pair, count: depth });
+        const keys = Object.keys(result);
+        const data = result[keys[0]] || {};
+        // Kraken format: {asks: [[price, volume, timestamp], ...], bids: [...]}
+        // Normalize to Crypto.com format: [[price, qty, count], ...]
+        const bids = (data.bids || []).map(l => [l[0], l[1], 1]);
+        const asks = (data.asks || []).map(l => [l[0], l[1], 1]);
+        return { bids, asks };
+    }
 }
 
 export const krakenAdapter = new KrakenAdapter();

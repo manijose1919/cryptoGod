@@ -194,6 +194,15 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
     getFeePercent() {
         return 0.00075;
     }
+
+    async getOrderBook(ticker, depth = 10) {
+        const instrument_name = this.formatTicker(ticker);
+        const result = await makePublicRequest('public/get-book', {
+            instrument_name, depth: String(depth)
+        });
+        // Crypto.com returns {bids: [[price, qty, count], ...], asks: [...]}
+        return { bids: result.data?.[0]?.bids || [], asks: result.data?.[0]?.asks || [] };
+    }
 }
 
 export const cryptoComAdapter = new CryptoComAdapter();

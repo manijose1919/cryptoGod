@@ -695,11 +695,11 @@ class LogisticRegression {
 class MLEngine {
   constructor(config = {}) {
     this.config = {
-      nTrees: config.nTrees || 50,
+      nTrees: config.nTrees || 150,         // Scaled up from 50 for 16GB RAM
       maxDepth: config.maxDepth || 10,
       learningRate: config.learningRate || 0.1,
       minSamples: config.minSamples || 5,
-      nEstimators: config.nEstimators || 100,
+      nEstimators: config.nEstimators || 250, // Scaled up from 100 for 16GB RAM
       seed: config.seed || 42
     };
 
@@ -707,26 +707,38 @@ class MLEngine {
     this.randomForest = null;
     this.gradientBoosted = null;
     this.logisticRegression = null;
+    this.lstmModel = null;  // LSTM sequence model (Upgrade #8)
 
     this.isTrained = false;
     this.trainedAt = null;
     this.accuracy = 0;
     this.validationAccuracy = 0;
     this.sampleCount = 0;
-    this.modelWeights = { rf: 0, gb: 0, lr: 0 };
+    this.modelWeights = { rf: 0, gb: 0, lr: 0, lstm: 0 };
     this.featureImportance = null;
+    this.cvFolds = null;
+    this.cvAccuracies = null;
+
+    // Upgrade #5: Confidence Calibration
+    this.calibrationMap = null;  // Array of {rawProb, calibratedProb} breakpoints
+
+    // Upgrade #4: Feature Selection
+    this.selectedFeatureIndices = null;  // If set, only use these feature indices
   }
 
   /**
    * Train the ensemble on labeled data
    * @param {number[][]} features2D - N samples x M features
    * @param {number[]} labels - 0 (DOWN) or 1 (UP)
-   * @param {object} options - { validationSplit: 0.2, modelType: 'ensemble' }
+   * @param {object} options - { validationSplit, modelType, crossValidate, nFolds, purgeGap }
    * @returns {object} Training metrics
    */
   train(features2D, labels, options = {}) {
     const validationSplit = options.validationSplit || 0.2;
     const modelType = options.modelType || 'ensemble';
+    const crossValidate = options.crossValidate || false;
+    const nFolds = options.nFolds || 5;
+    const purgeGap = options.purgeGap || 5;
 
     if (features2D.length !== labels.length) {
       throw new Error('Features and labels must have same length');
@@ -739,22 +751,199 @@ class MLEngine {
       row.map(val => isNaN(val) || !isFinite(val) ? 0 : val)
     );
 
-    // Scale features
+    // Scale features on ALL data (consistent scaling across folds)
     const scaledFeatures = this.scaler.fitTransform(cleanedFeatures);
 
-    // Split train/validation
+    // Calculate class weights from full label distribution
+    const classWeights = calculateClassWeights(labels);
+
+    const n = scaledFeatures.length;
+    const useCrossValidation = crossValidate && n >= 200;
+
+    // ========================================================================
+    // PATH A: Walk-Forward Cross-Validation (≥200 samples)
+    // ========================================================================
+    if (useCrossValidation) {
+      console.log(`[MLEngine] Walk-forward CV: ${nFolds} folds, ${n} samples, purgeGap=${purgeGap}`);
+
+      // Expanding-window fold boundaries
+      // Fold 0: train [0..40%],  val (40%+gap .. 55%]
+      // Fold 1: train [0..55%],  val (55%+gap .. 65%]
+      // Fold 2: train [0..65%],  val (65%+gap .. 75%]
+      // Fold 3: train [0..75%],  val (75%+gap .. 85%]
+      // Fold 4: train [0..85%],  val (85%+gap .. 100%]
+      const foldBoundaries = [
+        { trainEnd: 0.40, valStart: 0.40, valEnd: 0.55 },
+        { trainEnd: 0.55, valStart: 0.55, valEnd: 0.65 },
+        { trainEnd: 0.65, valStart: 0.65, valEnd: 0.75 },
+        { trainEnd: 0.75, valStart: 0.75, valEnd: 0.85 },
+        { trainEnd: 0.85, valStart: 0.85, valEnd: 1.00 },
+      ];
+
+      const cvAccuracies = [];
+      let validFolds = 0;
+      const allOofPredictions = [];  // Out-of-fold predictions for calibration
+      const allOofLabels = [];
+
+      for (let fold = 0; fold < nFolds; fold++) {
+        const bounds = foldBoundaries[fold];
+        const trainEndIdx = Math.floor(n * bounds.trainEnd);
+        const valStartIdx = Math.floor(n * bounds.valStart) + purgeGap;
+        const valEndIdx = Math.floor(n * bounds.valEnd);
+
+        // Check minimum sizes
+        if (trainEndIdx < 50 || (valEndIdx - valStartIdx) < 15) {
+          console.log(`[MLEngine] CV fold ${fold}: skipped (train=${trainEndIdx}, val=${valEndIdx - valStartIdx})`);
+          continue;
+        }
+
+        const foldTrainFeatures = scaledFeatures.slice(0, trainEndIdx);
+        const foldTrainLabels = labels.slice(0, trainEndIdx);
+        const foldValFeatures = scaledFeatures.slice(valStartIdx, valEndIdx);
+        const foldValLabels = labels.slice(valStartIdx, valEndIdx);
+
+        if (foldValFeatures.length < 15) {
+          console.log(`[MLEngine] CV fold ${fold}: skipped after purge gap (val=${foldValFeatures.length})`);
+          continue;
+        }
+
+        const foldWeights = foldTrainLabels.map(label => classWeights[label]);
+        const foldResult = this._evaluateFold(foldTrainFeatures, foldTrainLabels, foldValFeatures, foldValLabels, foldWeights);
+
+        cvAccuracies.push(foldResult);
+        validFolds++;
+
+        // Collect OOF predictions for calibration
+        if (foldResult.oofPredictions) {
+          allOofPredictions.push(...foldResult.oofPredictions);
+          allOofLabels.push(...foldValLabels);
+        }
+
+        console.log(`[MLEngine] CV fold ${fold}: RF=${foldResult.rfAcc.toFixed(3)}, GB=${foldResult.gbAcc.toFixed(3)}, LR=${foldResult.lrAcc.toFixed(3)}`);
+      }
+
+      // Need at least 2 valid folds for meaningful averaging
+      if (validFolds < 2) {
+        console.log('[MLEngine] Insufficient valid CV folds, falling back to single split');
+        return this._trainSingleSplit(scaledFeatures, labels, classWeights, modelType);
+      }
+
+      // Average per-model accuracies across folds → ensemble weights
+      const avgRF = cvAccuracies.reduce((s, f) => s + f.rfAcc, 0) / validFolds;
+      const avgGB = cvAccuracies.reduce((s, f) => s + f.gbAcc, 0) / validFolds;
+      const avgLR = cvAccuracies.reduce((s, f) => s + f.lrAcc, 0) / validFolds;
+
+      // LSTM weight is 0 unless externally set after training
+      const totalAcc = avgRF + avgGB + avgLR;
+      this.modelWeights = {
+        rf: totalAcc > 0 ? avgRF / totalAcc : 1 / 3,
+        gb: totalAcc > 0 ? avgGB / totalAcc : 1 / 3,
+        lr: totalAcc > 0 ? avgLR / totalAcc : 1 / 3,
+        lstm: 0  // Set externally if LSTM is trained
+      };
+
+      // Averaged validation accuracy across folds (weighted ensemble estimate)
+      this.validationAccuracy = avgRF * this.modelWeights.rf + avgGB * this.modelWeights.gb + avgLR * this.modelWeights.lr;
+
+      // Build calibration map from OOF predictions (Upgrade #5)
+      if (allOofPredictions.length >= 200) {
+        this._buildCalibrationMap(allOofPredictions, allOofLabels);
+        if (this.calibrationMap) {
+          console.log(`[MLEngine] Calibration map built: ${this.calibrationMap.length} bins from ${allOofPredictions.length} OOF predictions`);
+        }
+      }
+
+      console.log(`[MLEngine] CV weights: RF=${this.modelWeights.rf.toFixed(3)}, GB=${this.modelWeights.gb.toFixed(3)}, LR=${this.modelWeights.lr.toFixed(3)}`);
+      console.log(`[MLEngine] CV avgValAcc=${this.validationAccuracy.toFixed(3)} (${validFolds} folds)`);
+
+      // Train final models on ALL data for maximum prediction power
+      const allWeights = labels.map(label => classWeights[label]);
+
+      console.log('[MLEngine] Training final models on all data...');
+      this.randomForest = new RandomForest({
+        nTrees: this.config.nTrees,
+        maxDepth: this.config.maxDepth,
+        minSamples: this.config.minSamples,
+        seed: this.config.seed
+      });
+      this.randomForest.fit(scaledFeatures, labels, allWeights);
+
+      this.gradientBoosted = new GradientBoostedTrees({
+        nEstimators: this.config.nEstimators,
+        learningRate: this.config.learningRate,
+        maxDepth: this.config.maxDepth,
+        minSamples: this.config.minSamples,
+        seed: this.config.seed + 1
+      });
+      this.gradientBoosted.fit(scaledFeatures, labels, allWeights);
+
+      this.logisticRegression = new LogisticRegression({
+        learningRate: 0.01,
+        maxIterations: 1000,
+        l2Lambda: 0.1
+      });
+      this.logisticRegression.fit(scaledFeatures, labels, allWeights);
+
+      // Training accuracy on full data
+      const trainMetrics = this.evaluate(scaledFeatures, labels);
+      this.accuracy = trainMetrics.accuracy;
+
+      // Feature importance from the final RF (trained on all data)
+      this.featureImportance = this.randomForest.featureImportances;
+      this.isTrained = true;
+      this.trainedAt = new Date().toISOString();
+      this.cvFolds = validFolds;
+      this.cvAccuracies = cvAccuracies;
+
+      console.log('[MLEngine] Training complete (CV)!', {
+        trainAccuracy: this.accuracy,
+        validationAccuracy: this.validationAccuracy,
+        cvFolds: validFolds
+      });
+
+      return {
+        accuracy: this.accuracy,
+        validationAccuracy: this.validationAccuracy,
+        precision: trainMetrics.precision,
+        recall: trainMetrics.recall,
+        f1: trainMetrics.f1,
+        featureImportance: this.featureImportance,
+        confusionMatrix: trainMetrics.confusionMatrix,
+        cvFolds: validFolds,
+        cvAccuracies,
+        modelWeights: { ...this.modelWeights }
+      };
+    }
+
+    // ========================================================================
+    // PATH B: Single 80/20 Split (fallback for <200 samples or CV disabled)
+    // ========================================================================
+    if (crossValidate && n < 200) {
+      console.log(`[MLEngine] Insufficient data for CV (${n} < 200), using single split`);
+    }
+    return this._trainSingleSplit(scaledFeatures, labels, classWeights, modelType);
+  }
+
+  /**
+   * Original single-split training logic (fallback / cold-start path)
+   * @param {number[][]} scaledFeatures - Already-scaled features
+   * @param {number[]} labels - 0/1 labels
+   * @param {object} classWeights - Class weight mapping
+   * @param {string} modelType - Model type string
+   * @returns {object} Training metrics
+   */
+  _trainSingleSplit(scaledFeatures, labels, classWeights, modelType) {
+    const validationSplit = 0.2;
     const splitIndex = Math.floor(scaledFeatures.length * (1 - validationSplit));
     const trainFeatures = scaledFeatures.slice(0, splitIndex);
     const trainLabels = labels.slice(0, splitIndex);
     const valFeatures = scaledFeatures.slice(splitIndex);
     const valLabels = labels.slice(splitIndex);
 
-    // Calculate class weights
-    const classWeights = calculateClassWeights(trainLabels);
     const sampleWeights = trainLabels.map(label => classWeights[label]);
 
-    console.log('[MLEngine] Training started...', {
-      totalSamples: features2D.length,
+    console.log('[MLEngine] Training started (single split)...', {
+      totalSamples: scaledFeatures.length,
       trainSamples: trainFeatures.length,
       valSamples: valFeatures.length,
       classWeights,
@@ -800,9 +989,9 @@ class MLEngine {
     // Calculate ensemble weights based on validation accuracy
     const totalAcc = rfMetrics.accuracy + gbMetrics.accuracy + lrMetrics.accuracy;
     this.modelWeights = {
-      rf: rfMetrics.accuracy / totalAcc,
-      gb: gbMetrics.accuracy / totalAcc,
-      lr: lrMetrics.accuracy / totalAcc
+      rf: totalAcc > 0 ? rfMetrics.accuracy / totalAcc : 1 / 3,
+      gb: totalAcc > 0 ? gbMetrics.accuracy / totalAcc : 1 / 3,
+      lr: totalAcc > 0 ? lrMetrics.accuracy / totalAcc : 1 / 3
     };
 
     console.log('[MLEngine] Model weights:', this.modelWeights);
@@ -817,6 +1006,8 @@ class MLEngine {
     this.validationAccuracy = ensembleMetrics.accuracy;
     this.isTrained = true;
     this.trainedAt = new Date().toISOString();
+    this.cvFolds = null;
+    this.cvAccuracies = null;
 
     // Feature importance from Random Forest (best at this)
     this.featureImportance = this.randomForest.featureImportances;
@@ -836,8 +1027,269 @@ class MLEngine {
       recall: ensembleMetrics.recall,
       f1: ensembleMetrics.f1,
       featureImportance: this.featureImportance,
-      confusionMatrix: ensembleMetrics.confusionMatrix
+      confusionMatrix: ensembleMetrics.confusionMatrix,
+      cvFolds: null,
+      cvAccuracies: null,
+      modelWeights: { ...this.modelWeights }
     };
+  }
+
+  /**
+   * Evaluate a single CV fold: create temporary models, train, and return per-model accuracies.
+   * @param {number[][]} trainFeatures - Scaled training features for this fold
+   * @param {number[]} trainLabels - Training labels for this fold
+   * @param {number[][]} valFeatures - Scaled validation features for this fold
+   * @param {number[]} valLabels - Validation labels for this fold
+   * @param {number[]} sampleWeights - Per-sample weights for training data
+   * @returns {object} { rfAcc, gbAcc, lrAcc, ensembleAcc }
+   */
+  _evaluateFold(trainFeatures, trainLabels, valFeatures, valLabels, sampleWeights) {
+    // Temporary Random Forest
+    const foldRF = new RandomForest({
+      nTrees: this.config.nTrees,
+      maxDepth: this.config.maxDepth,
+      minSamples: this.config.minSamples,
+      seed: this.config.seed
+    });
+    foldRF.fit(trainFeatures, trainLabels, sampleWeights);
+    const rfAcc = this.evaluate(valFeatures, valLabels, foldRF).accuracy;
+
+    // Temporary Gradient Boosted Trees
+    const foldGB = new GradientBoostedTrees({
+      nEstimators: this.config.nEstimators,
+      learningRate: this.config.learningRate,
+      maxDepth: this.config.maxDepth,
+      minSamples: this.config.minSamples,
+      seed: this.config.seed + 1
+    });
+    foldGB.fit(trainFeatures, trainLabels, sampleWeights);
+    const gbAcc = this.evaluate(valFeatures, valLabels, foldGB).accuracy;
+
+    // Temporary Logistic Regression
+    const foldLR = new LogisticRegression({
+      learningRate: 0.01,
+      maxIterations: 1000,
+      l2Lambda: 0.1
+    });
+    foldLR.fit(trainFeatures, trainLabels, sampleWeights);
+    const lrAcc = this.evaluate(valFeatures, valLabels, foldLR).accuracy;
+
+    // Collect OOF ensemble predictions for calibration
+    const oofPredictions = valFeatures.map(f => {
+      const rfP = foldRF.predictProba(f);
+      const gbP = foldGB.predictProba(f);
+      const lrP = foldLR.predictProba(f);
+      const totalA = rfAcc + gbAcc + lrAcc;
+      const wRF = totalA > 0 ? rfAcc / totalA : 1/3;
+      const wGB = totalA > 0 ? gbAcc / totalA : 1/3;
+      const wLR = totalA > 0 ? lrAcc / totalA : 1/3;
+      return wRF * rfP[1] + wGB * gbP[1] + wLR * lrP[1];
+    });
+
+    return { rfAcc, gbAcc, lrAcc, oofPredictions };
+  }
+
+  // ========================================================================
+  // UPGRADE #1: Incremental/Online Learning
+  // ========================================================================
+
+  /**
+   * Incrementally update models with new data without full retrain
+   * @param {number[][]} newFeatures - New feature vectors
+   * @param {number[]} newLabels - New labels (0/1)
+   */
+  incrementalUpdate(newFeatures, newLabels) {
+    if (!this.isTrained || !newFeatures.length) return;
+
+    try {
+      const cleanedFeatures = newFeatures.map(row =>
+        row.map(val => isNaN(val) || !isFinite(val) ? 0 : val)
+      );
+      const scaledFeatures = this.scaler.transform(cleanedFeatures);
+      const classWeights = calculateClassWeights(newLabels);
+      const sampleWeights = newLabels.map(label => classWeights[label]);
+
+      // RF: train 10 new trees on recent data, append, retire oldest if >200 trees
+      if (this.randomForest) {
+        const numFeatures = scaledFeatures[0].length;
+        const maxFeaturesPerTree = Math.floor(Math.sqrt(numFeatures));
+        const rng = new SeededRandom(Date.now());
+
+        for (let i = 0; i < 10; i++) {
+          const bootstrapSize = Math.floor(scaledFeatures.length * 0.7);
+          const indices = [];
+          for (let j = 0; j < bootstrapSize; j++) {
+            indices.push(rng.nextInt(0, scaledFeatures.length));
+          }
+          const bsFeatures = indices.map(idx => scaledFeatures[idx]);
+          const bsLabels = indices.map(idx => newLabels[idx]);
+          const bsWeights = indices.map(idx => sampleWeights[idx]);
+
+          const tree = new DecisionTree({
+            maxDepth: this.config.maxDepth,
+            minSamples: this.config.minSamples,
+            maxFeatures: maxFeaturesPerTree,
+            random: rng
+          });
+          tree.fit(bsFeatures, bsLabels, bsWeights);
+          this.randomForest.trees.push(tree);
+        }
+
+        // Retire oldest trees if >200
+        while (this.randomForest.trees.length > 200) {
+          this.randomForest.trees.shift();
+        }
+      }
+
+      // GBT: add 20 new boosting rounds
+      if (this.gradientBoosted && this.gradientBoosted.trees) {
+        const gbt = this.gradientBoosted;
+        let predictions = scaledFeatures.map(f => {
+          let pred = gbt.initialPrediction;
+          for (const tree of gbt.trees) {
+            pred += gbt.learningRate * gbt._predictRegressionTree(tree, f);
+          }
+          return pred;
+        });
+
+        for (let i = 0; i < 20; i++) {
+          const residuals = newLabels.map((label, idx) => {
+            const prob = sigmoid(predictions[idx]);
+            return label - prob;
+          });
+          const rTree = gbt._buildRegressionTree(scaledFeatures, residuals, sampleWeights, 0);
+          gbt.trees.push(rTree);
+
+          for (let j = 0; j < predictions.length; j++) {
+            predictions[j] += gbt.learningRate * gbt._predictRegressionTree(rTree, scaledFeatures[j]);
+          }
+        }
+      }
+
+      // LR: run 100 gradient descent iterations from current weights
+      if (this.logisticRegression && this.logisticRegression.weights) {
+        const lr = this.logisticRegression;
+        for (let iter = 0; iter < 100; iter++) {
+          const numFeatures = scaledFeatures[0].length;
+          let gradWeights = new Array(numFeatures).fill(0);
+          let gradBias = 0;
+
+          for (let i = 0; i < scaledFeatures.length; i++) {
+            const z = lr._computeZ(scaledFeatures[i]);
+            const prob = sigmoid(z);
+            const error = (prob - newLabels[i]) * sampleWeights[i];
+            for (let j = 0; j < numFeatures; j++) {
+              gradWeights[j] += error * scaledFeatures[i][j];
+            }
+            gradBias += error;
+          }
+
+          for (let j = 0; j < numFeatures; j++) {
+            gradWeights[j] += lr.l2Lambda * lr.weights[j];
+            lr.weights[j] -= lr.learningRate * gradWeights[j] / scaledFeatures.length;
+          }
+          lr.bias -= lr.learningRate * gradBias / scaledFeatures.length;
+        }
+      }
+
+      console.log(`[MLEngine] Incremental update: ${newFeatures.length} samples applied`);
+    } catch (err) {
+      console.error('[MLEngine] Incremental update error:', err.message);
+    }
+  }
+
+  // ========================================================================
+  // UPGRADE #5: Confidence Calibration (Isotonic Regression)
+  // ========================================================================
+
+  /**
+   * Build calibration map from raw probabilities and true labels
+   * @param {number[]} rawProbs - Raw P(UP) probabilities
+   * @param {number[]} trueLabels - True 0/1 labels
+   */
+  _buildCalibrationMap(rawProbs, trueLabels) {
+    if (!rawProbs || rawProbs.length < 200) {
+      this.calibrationMap = null;
+      return;
+    }
+
+    // Bin raw probabilities into 20 bins
+    const nBins = 20;
+    const bins = Array.from({ length: nBins }, () => ({ probs: [], labels: [] }));
+
+    for (let i = 0; i < rawProbs.length; i++) {
+      const binIdx = Math.min(Math.floor(rawProbs[i] * nBins), nBins - 1);
+      bins[binIdx].probs.push(rawProbs[i]);
+      bins[binIdx].labels.push(trueLabels[i]);
+    }
+
+    // Compute empirical P(UP) per bin
+    this.calibrationMap = [];
+    for (let i = 0; i < nBins; i++) {
+      if (bins[i].labels.length > 0) {
+        const rawMean = bins[i].probs.reduce((a, b) => a + b, 0) / bins[i].probs.length;
+        const empirical = bins[i].labels.reduce((a, b) => a + b, 0) / bins[i].labels.length;
+        this.calibrationMap.push({ rawProb: rawMean, calibratedProb: empirical });
+      }
+    }
+
+    // Sort by rawProb for interpolation
+    this.calibrationMap.sort((a, b) => a.rawProb - b.rawProb);
+
+    if (this.calibrationMap.length < 3) {
+      this.calibrationMap = null;  // Not enough bins populated
+    }
+  }
+
+  /**
+   * Apply calibration to a raw probability
+   * @param {number} rawProb - Raw probability from ensemble
+   * @returns {number} Calibrated probability
+   */
+  _calibrate(rawProb) {
+    if (!this.calibrationMap || this.calibrationMap.length < 3) {
+      return rawProb;  // Identity fallback
+    }
+
+    // Piecewise linear interpolation
+    const map = this.calibrationMap;
+    if (rawProb <= map[0].rawProb) return map[0].calibratedProb;
+    if (rawProb >= map[map.length - 1].rawProb) return map[map.length - 1].calibratedProb;
+
+    for (let i = 0; i < map.length - 1; i++) {
+      if (rawProb >= map[i].rawProb && rawProb <= map[i + 1].rawProb) {
+        const t = (rawProb - map[i].rawProb) / (map[i + 1].rawProb - map[i].rawProb);
+        return map[i].calibratedProb + t * (map[i + 1].calibratedProb - map[i].calibratedProb);
+      }
+    }
+
+    return rawProb;
+  }
+
+  /**
+   * Set the LSTM model instance (injected from lstmEngine.js)
+   * @param {object} lstmModel - LSTMNetwork instance with predict() method
+   */
+  setLSTMModel(lstmModel) {
+    this.lstmModel = lstmModel;
+  }
+
+  /**
+   * Set feature selection mask
+   * @param {number[]} indices - Array of selected feature indices
+   */
+  setSelectedFeatureIndices(indices) {
+    this.selectedFeatureIndices = indices;
+  }
+
+  /**
+   * Apply feature mask to a feature vector
+   * @param {number[]} features - Full feature vector
+   * @returns {number[]} Filtered feature vector (or original if no mask)
+   */
+  _applyFeatureMask(features) {
+    if (!this.selectedFeatureIndices) return features;
+    return this.selectedFeatureIndices.map(i => features[i] !== undefined ? features[i] : 0);
   }
 
   /**
@@ -850,25 +1302,53 @@ class MLEngine {
       throw new Error('Model not trained yet');
     }
 
-    // Clean and scale features
+    // Clean and scale features (scaler trained on full feature set)
     const cleanedFeatures = features.map(val => isNaN(val) || !isFinite(val) ? 0 : val);
     const scaledFeatures = this.scaler.transformRow(cleanedFeatures);
 
-    // Get predictions from all models
-    const rfProba = this.randomForest.predictProba(scaledFeatures);
-    const gbProba = this.gradientBoosted.predictProba(scaledFeatures);
-    const lrProba = this.logisticRegression.predictProba(scaledFeatures);
+    // Apply feature mask AFTER scaling if feature selection is active (Upgrade #4)
+    const finalFeatures = this._applyFeatureMask(scaledFeatures);
 
-    // Weighted ensemble
-    const downProb =
+    // Get predictions from all models
+    const rfProba = this.randomForest.predictProba(finalFeatures);
+    const gbProba = this.gradientBoosted.predictProba(finalFeatures);
+    const lrProba = this.logisticRegression.predictProba(finalFeatures);
+
+    // Weighted ensemble (3 or 4 models depending on LSTM availability)
+    let downProb =
       this.modelWeights.rf * rfProba[0] +
       this.modelWeights.gb * gbProba[0] +
       this.modelWeights.lr * lrProba[0];
 
-    const upProb =
+    let upProb =
       this.modelWeights.rf * rfProba[1] +
       this.modelWeights.gb * gbProba[1] +
       this.modelWeights.lr * lrProba[1];
+
+    // Include LSTM if available and has weight
+    if (this.lstmModel && this.modelWeights.lstm > 0 && this._lastSequence) {
+      try {
+        const lstmProb = this.lstmModel.predict(this._lastSequence);
+        upProb += this.modelWeights.lstm * lstmProb;
+        downProb += this.modelWeights.lstm * (1 - lstmProb);
+      } catch (e) {
+        // LSTM prediction failed, redistribute weight to other models
+        const rescale = 1 / (1 - this.modelWeights.lstm);
+        upProb *= rescale;
+        downProb *= rescale;
+      }
+    }
+
+    // Normalize probabilities
+    const total = upProb + downProb;
+    if (total > 0) {
+      upProb /= total;
+      downProb /= total;
+    }
+
+    // Apply calibration (Upgrade #5)
+    upProb = this._calibrate(upProb);
+    downProb = 1 - upProb;
 
     const prediction = upProb >= 0.5 ? 1 : 0;
     const confidence = Math.max(upProb, downProb);
@@ -881,6 +1361,14 @@ class MLEngine {
         down: downProb
       }
     };
+  }
+
+  /**
+   * Set the last feature sequence for LSTM prediction
+   * @param {number[][]} sequence - Last N feature vectors (e.g. 20×83)
+   */
+  setLastSequence(sequence) {
+    this._lastSequence = sequence;
   }
 
   /**
@@ -1027,7 +1515,15 @@ class MLEngine {
       hasRandomForest: !!this.randomForest,
       hasGradientBoosted: !!this.gradientBoosted,
       hasLogisticRegression: !!this.logisticRegression,
+      hasLSTM: !!this.lstmModel,
+      hasCalibration: !!this.calibrationMap,
+      calibrationBins: this.calibrationMap ? this.calibrationMap.length : 0,
+      selectedFeatureCount: this.selectedFeatureIndices ? this.selectedFeatureIndices.length : null,
+      rfTreeCount: this.randomForest ? this.randomForest.trees.length : 0,
+      gbtTreeCount: this.gradientBoosted ? this.gradientBoosted.trees.length : 0,
       config: this.config,
+      cvFolds: this.cvFolds,
+      cvAccuracies: this.cvAccuracies,
     };
   }
 

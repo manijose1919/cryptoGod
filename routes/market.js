@@ -14,15 +14,10 @@ export default function createMarketRouter(ctx) {
                 return res.status(400).json({ message: 'instrument_name and timeframe are required' });
             }
 
-            const activeExchange = exchange || ctx.getActiveExchangeId();
-            if (activeExchange !== 'crypto.com') {
-                const adapter = ctx.getExchangeAdapter(activeExchange);
-                const candles = await adapter.getCandles(instrument_name, timeframe, 200);
-                return res.status(200).json({ data: candles });
-            }
-
-            const data = await ctx.getMarketData(instrument_name, timeframe, 200);
-            res.status(200).json({ data });
+            // Always route through adapter (handles both Kraken and Crypto.com)
+            const adapter = ctx.getExchangeAdapter(exchange || undefined);
+            const candles = await adapter.getCandles(instrument_name, timeframe, 200);
+            res.status(200).json({ data: candles });
         } catch (error) {
             next(error);
         }
@@ -33,13 +28,8 @@ export default function createMarketRouter(ctx) {
         try {
             const { exchange } = req.query;
 
-            if (exchange && exchange !== 'crypto.com') {
-                const adapter = ctx.getExchangeAdapter(exchange);
-                const result = await adapter.getInstruments();
-                return res.status(200).json(result);
-            }
-
-            const result = await ctx.makePublicRequest('public/get-instruments');
+            const adapter = ctx.getExchangeAdapter(exchange || undefined);
+            const result = await adapter.getInstruments();
             res.status(200).json(result);
         } catch (error) {
             next(error);

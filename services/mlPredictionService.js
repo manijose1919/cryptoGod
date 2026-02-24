@@ -16,6 +16,11 @@ let buildFeatureVector, FEATURE_COUNT, getFeatureNames;
 let MLEngine;
 let MarketAnomalyDetector;
 let db;
+let RegimeMLEngine;
+let LSTMNetwork;
+let featureSelector;
+let hyperparamTuner;
+let getFlag;
 
 try {
   const featureModule = await import('./featureEngineering.js');
@@ -46,9 +51,46 @@ try {
   console.error('[ML Prediction] Failed to import database.js:', err.message);
 }
 
+// Performance Upgrade imports (all optional — fail gracefully)
+try {
+  const regimeModule = await import('./regimeMLEngine.js');
+  RegimeMLEngine = regimeModule.RegimeMLEngine;
+} catch (err) {
+  console.warn('[ML Prediction] regimeMLEngine not available:', err.message);
+}
+
+try {
+  const lstmModule = await import('./lstmEngine.js');
+  LSTMNetwork = lstmModule.LSTMNetwork;
+} catch (err) {
+  console.warn('[ML Prediction] lstmEngine not available:', err.message);
+}
+
+try {
+  featureSelector = await import('./featureSelector.js');
+} catch (err) {
+  console.warn('[ML Prediction] featureSelector not available:', err.message);
+}
+
+try {
+  hyperparamTuner = await import('./hyperparamTuner.js');
+} catch (err) {
+  console.warn('[ML Prediction] hyperparamTuner not available:', err.message);
+}
+
+try {
+  const sysConfig = await import('./systemConfig.js');
+  getFlag = sysConfig.getFlag;
+} catch (err) {
+  console.warn('[ML Prediction] systemConfig not available:', err.message);
+  getFlag = () => true; // Default: all flags enabled
+}
+
 // State
 let mlEngine = null;
 let anomalyDetector = null;
+let regimeEngine = null;     // Upgrade #6: Regime-aware model switching
+let lstmModel = null;        // Upgrade #8: LSTM sequence model
 let isInitialized = false;
 let lastTrainTime = 0;
 let predictionCount = 0;
@@ -56,6 +98,15 @@ const MIN_SAMPLES_TO_TRAIN = 100;
 const RETRAIN_INTERVAL = 60 * 60 * 1000; // 1 hour
 const RETRAIN_SAMPLE_THRESHOLD = 200; // retrain every 200 new samples
 let samplesSinceLastTrain = 0;
+
+// Upgrade #1: Incremental learning
+let incrementalSampleCount = 0;
+const INCREMENTAL_THRESHOLD = 20; // Trigger incremental update every 20 labeled samples
+const incrementalBuffer = { features: [], labels: [] };
+
+// Upgrade #8: LSTM sequence buffer — last 20 feature vectors per ticker
+const featureSequenceBuffer = new Map(); // ticker -> array of feature vectors
+const LSTM_SEQUENCE_LENGTH = 20;
 
 /**
  * Initialize ML system - load saved model or train initial model
@@ -182,18 +233,37 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       };
     }
 
-    // Step 2: Store features in DB for future labeling
+    // Step 2: Store features in DB for future labeling (include regime)
     try {
       if (db && db.insertMLFeatures) {
         db.insertMLFeatures({
           ticker,
           strategy,
           features_json: JSON.stringify(featureArray),
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          regime: marketRegime || null
         });
       }
     } catch (err) {
       console.warn('[ML Prediction] Failed to store features:', err.message);
+    }
+
+    // Buffer feature vectors for LSTM sequence prediction
+    try {
+      if (!featureSequenceBuffer.has(ticker)) {
+        featureSequenceBuffer.set(ticker, []);
+      }
+      const buffer = featureSequenceBuffer.get(ticker);
+      buffer.push(featureArray);
+      if (buffer.length > LSTM_SEQUENCE_LENGTH) {
+        buffer.shift();
+      }
+      // Pass sequence to mlEngine for LSTM prediction
+      if (mlEngine && buffer.length >= LSTM_SEQUENCE_LENGTH) {
+        mlEngine.setLastSequence(buffer.slice(-LSTM_SEQUENCE_LENGTH));
+      }
+    } catch (err) {
+      // Non-critical — LSTM sequence buffer failure
     }
 
     // Step 3: Check for market anomalies
@@ -336,7 +406,28 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
       // Increment samples counter
       samplesSinceLastTrain++;
 
-      // Check if retrain needed
+      // Upgrade #1: Buffer for incremental learning
+      try {
+        const parsedFeatures = JSON.parse(matchingFeature.features_json);
+        if (parsedFeatures.length === FEATURE_COUNT) {
+          incrementalBuffer.features.push(parsedFeatures);
+          incrementalBuffer.labels.push(label === 'UP' ? 1 : 0);
+          incrementalSampleCount++;
+
+          // Trigger incremental update every INCREMENTAL_THRESHOLD samples
+          if (incrementalSampleCount >= INCREMENTAL_THRESHOLD && mlEngine && mlEngine.isTrained) {
+            console.log(`[ML Prediction] Incremental update: ${incrementalBuffer.features.length} new samples`);
+            mlEngine.incrementalUpdate(incrementalBuffer.features, incrementalBuffer.labels);
+            incrementalBuffer.features.length = 0;
+            incrementalBuffer.labels.length = 0;
+            incrementalSampleCount = 0;
+          }
+        }
+      } catch (incErr) {
+        // Non-critical — incremental learning error
+      }
+
+      // Check if full retrain needed
       if (checkRetrainNeeded()) {
         console.log('[ML Prediction] Retrain conditions met, training model...');
         await trainModel();
@@ -407,10 +498,107 @@ export async function trainModel() {
       return false;
     }
 
-    // Train model
-    const metrics = mlEngine.train(features2D, labels);
+    // Upgrade #13: Hyperparameter tuning (if enough samples and flag enabled)
+    let trainConfig = {};
+    try {
+      if (hyperparamTuner && getFlag('HYPERPARAM_TUNING_ENABLED') && features2D.length >= 300) {
+        console.log('[ML Prediction] Running hyperparameter tuning...');
+        const tuneResult = hyperparamTuner.runRandomSearch(features2D, labels, 20, 3);
+        if (tuneResult && tuneResult.bestConfig) {
+          trainConfig = tuneResult.bestConfig;
+          hyperparamTuner.saveBestHyperparams(tuneResult.bestConfig);
+          console.log(`[ML Prediction] Best hyperparams: nTrees=${trainConfig.nTrees}, nEstimators=${trainConfig.nEstimators}, maxDepth=${trainConfig.maxDepth}`);
+        }
+      } else if (hyperparamTuner) {
+        // Try loading saved hyperparams
+        const saved = hyperparamTuner.getBestHyperparams();
+        if (saved) trainConfig = saved;
+      }
+    } catch (tuneErr) {
+      console.warn('[ML Prediction] Hyperparameter tuning error:', tuneErr.message);
+    }
+
+    // Apply tuned config if available
+    if (trainConfig.nTrees) {
+      mlEngine.config.nTrees = trainConfig.nTrees;
+      mlEngine.config.nEstimators = trainConfig.nEstimators || mlEngine.config.nEstimators;
+      mlEngine.config.maxDepth = trainConfig.maxDepth || mlEngine.config.maxDepth;
+      mlEngine.config.learningRate = trainConfig.learningRate || mlEngine.config.learningRate;
+    }
+
+    // Train model with walk-forward cross-validation
+    const metrics = mlEngine.train(features2D, labels, { crossValidate: true, nFolds: 5, purgeGap: 5 });
     console.log(`[ML Prediction] Training complete in ${Date.now() - startTime}ms`);
+    if (metrics.cvFolds) {
+      console.log(`[ML Prediction] CV: ${metrics.cvFolds} folds, avgValAcc=${metrics.validationAccuracy.toFixed(3)}, weights: RF=${metrics.modelWeights.rf.toFixed(3)}, GB=${metrics.modelWeights.gb.toFixed(3)}, LR=${metrics.modelWeights.lr.toFixed(3)}`);
+    }
     console.log(`[ML Prediction] Metrics: accuracy=${metrics.accuracy?.toFixed(2)}%, precision=${metrics.precision?.toFixed(2)}%, recall=${metrics.recall?.toFixed(2)}%`);
+
+    // Upgrade #4: Feature Selection (permutation importance)
+    try {
+      if (featureSelector && getFlag('FEATURE_SELECTION_ENABLED') && features2D.length >= 200) {
+        const valStart = Math.floor(features2D.length * 0.8);
+        const valFeatures = features2D.slice(valStart);
+        const valLabels = labels.slice(valStart);
+        // Scale validation features for importance computation
+        const scaledVal = mlEngine.scaler.transform(
+          valFeatures.map(row => row.map(v => isNaN(v) || !isFinite(v) ? 0 : v))
+        );
+        const importances = featureSelector.runPermutationImportance(mlEngine, scaledVal, valLabels, 3);
+        if (importances) {
+          const selected = featureSelector.selectTopFeatures(importances, 0.005);
+          featureSelector.setSelectedFeatures(selected);
+          mlEngine.setSelectedFeatureIndices(selected);
+          console.log(`[ML Prediction] Feature selection: ${selected.length}/${features2D[0].length} features kept`);
+        }
+      }
+    } catch (fsErr) {
+      console.warn('[ML Prediction] Feature selection error:', fsErr.message);
+    }
+
+    // Upgrade #8: Train LSTM model on sequences
+    try {
+      if (LSTMNetwork && getFlag('LSTM_ENABLED') && features2D.length >= 200) {
+        console.log('[ML Prediction] Training LSTM model...');
+        const sequences = [];
+        const seqLabels = [];
+        for (let i = LSTM_SEQUENCE_LENGTH; i < features2D.length; i++) {
+          sequences.push(features2D.slice(i - LSTM_SEQUENCE_LENGTH, i));
+          seqLabels.push(labels[i]);
+        }
+        if (sequences.length >= 100) {
+          lstmModel = new LSTMNetwork(features2D[0].length, 64, 1);
+          lstmModel.fit(sequences, seqLabels, 30, 0.001);
+          mlEngine.setLSTMModel(lstmModel);
+          // Give LSTM 10% weight, redistribute from others
+          const w = mlEngine.modelWeights;
+          const lstmWeight = 0.10;
+          const scale = 1 - lstmWeight;
+          mlEngine.modelWeights = {
+            rf: w.rf * scale,
+            gb: w.gb * scale,
+            lr: w.lr * scale,
+            lstm: lstmWeight
+          };
+          console.log(`[ML Prediction] LSTM trained, ensemble weights updated (LSTM=${lstmWeight})`);
+        }
+      }
+    } catch (lstmErr) {
+      console.warn('[ML Prediction] LSTM training error:', lstmErr.message);
+    }
+
+    // Upgrade #6: Train regime-specific models
+    try {
+      if (RegimeMLEngine && getFlag('REGIME_MODELS_ENABLED') && features2D.length >= 200) {
+        // Fetch regime labels from DB
+        const regimeLabels = labeledSamples.map(s => s.regime || 'SIDEWAYS');
+        regimeEngine = new RegimeMLEngine(mlEngine.config);
+        regimeEngine.train(features2D, labels, regimeLabels);
+        console.log('[ML Prediction] Regime models trained');
+      }
+    } catch (regimeErr) {
+      console.warn('[ML Prediction] Regime model training error:', regimeErr.message);
+    }
 
     // Save model to database
     try {

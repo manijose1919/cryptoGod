@@ -9,7 +9,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-export const FEATURE_COUNT = 83;
+export const FEATURE_COUNT = 91;
 
 /**
  * Get all 62 feature names in order
@@ -110,6 +110,15 @@ export function getFeatureNames() {
     'strategy_confluence_signal',
     'strategy_divergence_signal',
     'strategy_agreement_count',
+    // On-chain features (8) — Upgrade #7
+    'exchange_net_flow',
+    'mvrv_ratio',
+    'active_addr_change',
+    'hash_rate_change',
+    'whale_tx_count',
+    'whale_tx_volume',
+    'exchange_reserve_change',
+    'miner_outflow',
   ];
 }
 
@@ -221,6 +230,14 @@ export function buildFeatureVector(ticker, candles, options = {}) {
       features[idx++] = clamp(ss.divergence || 0, -1, 1);     // strategy_divergence_signal
       features[idx++] = clamp((ss.agreementCount || 0) / 7, 0, 1); // strategy_agreement_count (normalized)
     } catch (stratErr) {
+      while (idx < 83) features[idx++] = 0;
+    }
+
+    // On-chain features (8) — Upgrade #7
+    try {
+      const onChain = extractOnChainFeatures(options.onChainData);
+      onChain.forEach(f => features[idx++] = f);
+    } catch (onChainErr) {
       while (idx < FEATURE_COUNT) features[idx++] = 0;
     }
 
@@ -244,6 +261,7 @@ export function buildFeatureVector(ticker, candles, options = {}) {
         ],
         lagged: features.slice(68, 75),
         strategySignals: features.slice(75, 83),
+        onChain: features.slice(83, 91),
       }
     };
   } catch (err) {
@@ -667,6 +685,29 @@ function extractContextFeatures(marketRegime, lastTradeTime, candleCount) {
 
   } catch (err) {
     console.error('Error extracting context features:', err);
+  }
+
+  return features;
+}
+
+/**
+ * Extract 8 on-chain features (Upgrade #7)
+ */
+function extractOnChainFeatures(onChainData) {
+  const features = new Array(8).fill(0);
+  if (!onChainData) return features;
+
+  try {
+    features[0] = clamp(onChainData.exchangeNetFlow || 0, -1, 1);        // exchange_net_flow (normalized)
+    features[1] = clamp((onChainData.mvrvRatio || 1) - 1, -2, 2) / 2;   // mvrv_ratio (centered at 0)
+    features[2] = clamp((onChainData.activeAddrChange || 0) / 100, -1, 1); // active_addr_change %
+    features[3] = clamp((onChainData.hashRateChange || 0) / 100, -1, 1);   // hash_rate_change %
+    features[4] = Math.min((onChainData.whaleTxCount || 0) / 50, 1);       // whale_tx_count (normalized)
+    features[5] = Math.min((onChainData.whaleTxVolume || 0) / 1e9, 1);     // whale_tx_volume (normalized to $1B)
+    features[6] = clamp((onChainData.exchangeReserveChange || 0) / 100, -1, 1); // exchange_reserve_change %
+    features[7] = clamp((onChainData.minerOutflow || 0) / 100, -1, 1);    // miner_outflow %
+  } catch (err) {
+    console.error('Error extracting on-chain features:', err);
   }
 
   return features;
