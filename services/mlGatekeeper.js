@@ -94,10 +94,12 @@ export function evaluateEntry(ticker, candles, ruleStrategy, ruleStrength, optio
   }
 
   try {
-    // Build feature vector with strategy signals
+    // Build feature vector with strategy signals + on-chain data + market intel
     const featureResult = buildFeatureVector(ticker, candles, {
       ...options,
       strategySignals: options.strategySignals || {},
+      onChainData: options.onChainData || null,
+      marketIntelligence: options.marketIntelligence || null,
     });
 
     // Append genetic signals if available
@@ -247,6 +249,7 @@ export function evaluateEntry(ticker, candles, ruleStrategy, ruleStrength, optio
       reason,
       mlPrediction,
       adversarialConsensus: advConsensus,
+      lastFeatureVector: features, // Batch 2B: expose for SHAP explainer
     };
 
   } catch (err) {

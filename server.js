@@ -22,10 +22,10 @@ import {
     calculateATR
 } from './server-indicator-service.js';
 
-// Import Advanced Services
-import * as VolatilityService from './services/volatilityService.js';
-import * as SentimentService from './services/sentimentService.js';
-import * as RiskService from './services/riskService.js';
+// Import Advanced Services (dead imports removed: VolatilityService, SentimentService, RiskService)
+
+// Feature names for SHAP explainer (Batch 2B fix)
+import { getFeatureNames } from './services/featureEngineering.js';
 
 import { 
     initializeDatabase, 
@@ -133,6 +133,15 @@ import * as portfolioCorrelationEngine from './services/portfolioCorrelationEngi
 import * as adversarialBrains from './services/adversarialBrains.js';
 import { getPopulation as getGeneticPopulation } from './services/geneticStrategyEngine.js';
 
+// Batch 4C: Continuous backtester
+let continuousBacktester = null;
+try {
+    continuousBacktester = await import('./services/continuousBacktester.js');
+    console.log('[Server] Continuous backtester loaded');
+} catch (e) {
+    console.warn('[Server] Continuous backtester not available:', e.message);
+}
+
 let multiExchangeService = null;
 let mlPredictionService = null;
 let selfTeachingLoop = null;
@@ -198,6 +207,33 @@ try {
     console.log('[Server] Portfolio optimizer loaded');
 } catch (e) {
     console.warn('[Server] Portfolio optimizer not available:', e.message);
+}
+
+// Execution Engine (Batch 2D: activate dead code)
+let executionEngine = null;
+try {
+    executionEngine = await import('./services/executionEngine.js');
+    console.log('[Server] Execution engine loaded');
+} catch (e) {
+    console.warn('[Server] Execution engine not available:', e.message);
+}
+
+// On-Chain Data Service (Batch 2A: wire into ML features)
+let onChainDataService = null;
+try {
+    onChainDataService = await import('./services/onChainDataService.js');
+    console.log('[Server] On-chain data service loaded');
+} catch (e) {
+    console.warn('[Server] On-chain data service not available:', e.message);
+}
+
+// Redis Cache
+let redisCache = null;
+try {
+    redisCache = await import('./services/redisCache.js');
+    console.log('[Server] Redis cache loaded:', redisCache.getStats().mode);
+} catch (e) {
+    console.warn('[Server] Redis cache not available:', e.message);
 }
 
 // External data services
@@ -513,8 +549,8 @@ app.use(express.static(path.join(__dirname, 'dist')));
 // Mount persistence routes (SQLite database)
 app.use('/api/db', persistenceRoutes);
 
-// Mount TradingView webhook routes
-// app.use('/api/tradingview', tradingviewRoutes);
+// Mount TradingView webhook routes (Batch 6A: re-enabled)
+app.use('/api/tradingview', tradingviewRoutes);
 
 // Mount Historical Training (Time Machine) routes
 let trainingRoutes = null;
@@ -555,6 +591,29 @@ app.post('/api/system-config', express.json(), (req, res) => {
             setFlags(updates.flags);
         }
         res.json({ success: true, flags: getAllFlags() });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Continuous Backtest API (Batch 4C) ---
+app.get('/api/backtest/continuous', (req, res) => {
+    try {
+        if (!continuousBacktester) return res.json({ enabled: false });
+        const { strategy } = req.query;
+        const results = strategy
+            ? continuousBacktester.getBacktestHistory(strategy)
+            : continuousBacktester.getBacktestResults();
+        res.json({ enabled: true, status: continuousBacktester.getStatus(), results });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Redis Cache Stats API (Batch 1A) ---
+app.get('/api/cache/stats', (req, res) => {
+    try {
+        res.json(redisCache ? redisCache.getStats() : { mode: 'none' });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -1769,9 +1828,35 @@ async function tradingBotLoop() {
                         // Find the strongest strategy candidate's strength from stratCandidates
                         const bestStrength = score.compositeScore / 100;
 
+                        // Batch 2A: Fetch on-chain data for ML features
+                        let onChainData = null;
+                        try {
+                            if (onChainDataService?.getAllOnChainData && getFlag('ONCHAIN_DATA_ENABLED')) {
+                                onChainData = await onChainDataService.getAllOnChainData(ticker);
+                            }
+                        } catch (e) { /* fail open */ }
+
+                        // Batch 3A: Aggregate market intelligence for ML features
+                        let marketIntelligence = null;
+                        try {
+                            const [cmcData, ethData, ccData, messData] = await Promise.allSettled([
+                                coinMarketCapService?.getGlobalMetrics?.(),
+                                etherscanService?.getGasPrice?.(),
+                                cryptoCompareService?.getSocialStats?.(ticker.replace('USD', '')),
+                                messariService?.getAssetMetrics?.(ticker.replace('USD', '')),
+                            ]);
+                            marketIntelligence = {
+                                fearGreed: cmcData?.value?.fear_greed_value || 0,
+                                btcDominance: cmcData?.value?.btc_dominance || 0,
+                                ethGasGwei: ethData?.value?.gasPrice || 0,
+                                socialScore: ccData?.value?.socialScore || 0,
+                                marketCapChange24h: messData?.value?.market_cap_change_24h || 0,
+                            };
+                        } catch (e) { /* fail open */ }
+
                         pipelineResult = mlGatekeeper.evaluateEntry(
                             ticker, candles, entryStrategy, bestStrength,
-                            { strategySignals, geneticSignals }
+                            { strategySignals, geneticSignals, onChainData, marketIntelligence }
                         );
 
                         if (pipelineResult && !pipelineResult.proceed) {
@@ -1790,7 +1875,7 @@ async function tradingBotLoop() {
                                     const engine = mlPredictionService?.getMLEngine?.();
                                     if (engine && engine.isTrained) {
                                         const featureNames = getFeatureNames ? getFeatureNames() : [];
-                                        const explanation = shapExplainer.explainPrediction(engine, score._lastFeatureVector || [], featureNames);
+                                        const explanation = shapExplainer.explainPrediction(engine, pipelineResult.lastFeatureVector || [], featureNames);
                                         if (explanation) {
                                             shapReason = shapExplainer.formatExplanation(explanation);
                                         }
@@ -2029,6 +2114,25 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         } else {
             // Real: smart order routing with order book slippage estimation
             const adapter = getExchangeAdapter();
+
+            // Batch 2D: Try execution engine first (TWAP, limit-then-market)
+            if (executionEngine && getFlag('SMART_EXECUTION_ENABLED')) {
+                try {
+                    const execResult = await executionEngine.executeSmartBuy(adapter, ticker, notional, botState.sessionId);
+                    if (execResult && execResult.avgPrice > 0) {
+                        avgPrice = execResult.avgPrice;
+                        quantity = execResult.totalQty;
+                        addLog(`[EXEC-ENGINE] Smart buy: ${quantity.toFixed(6)} @ ${avgPrice.toFixed(2)}, slippage=${execResult.slippage?.actualSlippage?.toFixed(3) || '?'}%, time=${execResult.executionTimeMs}ms`, 'INFO');
+                        // Skip the inline order routing below
+                    }
+                } catch (execErr) {
+                    addLog(`[EXEC-ENGINE] Smart buy failed: ${execErr.message}, falling back to inline routing`, 'WARN');
+                    // Fall through to existing logic
+                }
+            }
+
+            // Existing inline order routing (fallback if execution engine not used)
+            if (!quantity) {
             let usedLimit = false;
             let partialFillQty = 0;
             let partialFillCost = 0;
@@ -2137,6 +2241,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                     avgPrice = marketPrice;
                 }
             }
+            } // end if (!quantity) — execution engine fallback
         }
 
         // Use actual fill values for fee and cash deduction (not pre-fill estimate)
@@ -2235,8 +2340,24 @@ const handleSell = async (position, price, reason) => {
             const slippagePct = (baseSlippageBps * Math.max(1, sizeMultiplier)) / 10000 * 100;
             avgPrice = price * (1 - slippagePct / 100); // sells slip DOWN
         } else {
-            // Real: route through exchange adapter — log order book slippage estimate
+            // Real: route through exchange adapter
             const adapter = getExchangeAdapter();
+
+            // Batch 2D: Try execution engine for smart sell (TWAP, limit-then-market)
+            if (executionEngine && getFlag('SMART_EXECUTION_ENABLED')) {
+                try {
+                    const execResult = await executionEngine.executeSmartSell(adapter, position.ticker, position.quantity, botState.sessionId);
+                    if (execResult && execResult.avgPrice > 0) {
+                        avgPrice = execResult.avgPrice;
+                        addLog(`[EXEC-ENGINE] Smart sell: ${position.quantity.toFixed(6)} @ ${avgPrice.toFixed(2)}, slippage=${execResult.slippage?.actualSlippage?.toFixed(3) || '?'}%, time=${execResult.executionTimeMs}ms`, 'INFO');
+                    }
+                } catch (execErr) {
+                    addLog(`[EXEC-ENGINE] Smart sell failed: ${execErr.message}, falling back`, 'WARN');
+                }
+            }
+
+            // Fallback: original order routing
+            if (!avgPrice) {
             try {
                 const orderBook = await withTimeout(adapter.getOrderBook(position.ticker, 20), 3000, 'getOrderBook-sell');
                 if (orderBook?.bids?.length > 0) {
@@ -2250,6 +2371,7 @@ const handleSell = async (position, price, reason) => {
             }
             const orderResult = await withTimeout(adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs), 20000, 'placeSellOrder');
             avgPrice = parseFloat(orderResult.avgPrice) || price;
+            }
         }
 
         const sellFee = avgPrice * position.quantity * fees.perSide;
@@ -2759,10 +2881,20 @@ const startServer = async () => {
         }
     }
 
-    // Schedule DB cleanup weekly
+    // Schedule DB cleanup weekly (Batch 5A: 90-day retention)
     setInterval(() => {
-        try { cleanupOldData(30); } catch (e) { console.warn('[DB Cleanup] Error:', e.message); }
+        try { cleanupOldData(90); } catch (e) { console.warn('[DB Cleanup] Error:', e.message); }
     }, 7 * 24 * 60 * 60 * 1000);
+
+    // Start continuous backtester (Batch 4C)
+    if (continuousBacktester) {
+        try {
+            continuousBacktester.start();
+            console.log('[Server] Continuous backtester started');
+        } catch (e) {
+            console.warn('[Server] Continuous backtester start failed:', e.message);
+        }
+    }
 
     const scanner = new SignalScanner(
         async (ticker, timeframe) => await getMarketData(ticker, timeframe, 100),

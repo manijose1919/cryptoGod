@@ -9,7 +9,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-export const FEATURE_COUNT = 91;
+export const FEATURE_COUNT = 103;
 
 /**
  * Get all 62 feature names in order
@@ -119,6 +119,20 @@ export function getFeatureNames() {
     'whale_tx_volume',
     'exchange_reserve_change',
     'miner_outflow',
+    // Market Intelligence features (6) — Batch 3A
+    'cmc_fear_greed',
+    'cmc_btc_dominance',
+    'eth_gas_gwei',
+    'social_score_crypto',
+    'market_cap_change_24h',
+    'market_intel_composite',
+    // Exchange Enrichment features (6) — Batch 3B
+    'cross_exchange_price_spread',
+    'funding_rate_signal',
+    'open_interest_change',
+    'tvl_change_defi',
+    'derivatives_basis',
+    'exchange_volume_divergence',
   ];
 }
 
@@ -238,6 +252,24 @@ export function buildFeatureVector(ticker, candles, options = {}) {
       const onChain = extractOnChainFeatures(options.onChainData);
       onChain.forEach(f => features[idx++] = f);
     } catch (onChainErr) {
+      while (idx < 91) features[idx++] = 0;
+    }
+
+    // Market Intelligence features (6) — Batch 3A
+    try {
+      const marketIntel = extractMarketIntelligenceFeatures(options.marketIntelligence);
+      marketIntel.forEach(f => features[idx++] = f);
+    } catch (miErr) {
+      while (idx < 97) features[idx++] = 0;
+    }
+
+    // Exchange Enrichment features (6) — Batch 3B
+    try {
+      const exchangeEnrich = extractExchangeEnrichmentFeatures(
+        options.exchangeSnapshot, options.derivativesData, options.defiData
+      );
+      exchangeEnrich.forEach(f => features[idx++] = f);
+    } catch (eeErr) {
       while (idx < FEATURE_COUNT) features[idx++] = 0;
     }
 
@@ -262,6 +294,8 @@ export function buildFeatureVector(ticker, candles, options = {}) {
         lagged: features.slice(68, 75),
         strategySignals: features.slice(75, 83),
         onChain: features.slice(83, 91),
+        marketIntelligence: features.slice(91, 97),
+        exchangeEnrichment: features.slice(97, 103),
       }
     };
   } catch (err) {
@@ -708,6 +742,68 @@ function extractOnChainFeatures(onChainData) {
     features[7] = clamp((onChainData.minerOutflow || 0) / 100, -1, 1);    // miner_outflow %
   } catch (err) {
     console.error('Error extracting on-chain features:', err);
+  }
+
+  return features;
+}
+
+/**
+ * Extract 6 market intelligence features (Batch 3A)
+ * Sources: CoinMarketCap, Etherscan, CryptoCompare, Messari
+ */
+function extractMarketIntelligenceFeatures(marketIntelligence) {
+  const features = new Array(6).fill(0);
+  if (!marketIntelligence) return features;
+
+  try {
+    features[0] = clamp((marketIntelligence.fearGreed || 50) / 100, 0, 1);    // cmc_fear_greed (0-1)
+    features[1] = clamp((marketIntelligence.btcDominance || 50) / 100, 0, 1); // cmc_btc_dominance (0-1)
+    features[2] = clamp((marketIntelligence.ethGasGwei || 0) / 200, 0, 1);    // eth_gas_gwei (normalized to 200 gwei)
+    features[3] = clamp((marketIntelligence.socialScore || 0) / 100, 0, 1);   // social_score_crypto (0-1)
+    features[4] = clamp((marketIntelligence.marketCapChange24h || 0) / 10, -1, 1); // market_cap_change % (normalized to ±10%)
+    // Composite: weighted avg of all above
+    features[5] = (features[0] * 0.3 + features[3] * 0.3 + (1 - features[2] * 0.2) + features[4] * 0.2);
+  } catch (err) {
+    console.error('Error extracting market intelligence features:', err);
+  }
+
+  return features;
+}
+
+/**
+ * Extract 6 enhanced exchange/derivatives features (Batch 3B)
+ * Sources: multiExchangeService DB data
+ */
+function extractExchangeEnrichmentFeatures(exchangeSnapshot, derivativesData, defiData) {
+  const features = new Array(6).fill(0);
+
+  try {
+    // Cross-exchange price spread (from exchange_snapshots)
+    if (exchangeSnapshot?.crossExchange?.spread != null) {
+      features[0] = clamp(exchangeSnapshot.crossExchange.spread / 2, -1, 1); // cross_exchange_price_spread
+    }
+    // Funding rate (from derivatives_data)
+    if (derivativesData?.fundingRate != null) {
+      features[1] = clamp(derivativesData.fundingRate * 100, -1, 1); // funding_rate_signal
+    }
+    // Open interest change
+    if (derivativesData?.oiChange != null) {
+      features[2] = clamp(derivativesData.oiChange / 10, -1, 1); // open_interest_change %
+    }
+    // TVL change (from defi_snapshots)
+    if (defiData?.tvlChange24h != null) {
+      features[3] = clamp(defiData.tvlChange24h / 10, -1, 1); // tvl_change_defi %
+    }
+    // Derivatives basis
+    if (derivativesData?.futuresSpotBasis != null) {
+      features[4] = clamp(derivativesData.futuresSpotBasis / 5, -1, 1); // derivatives_basis %
+    }
+    // Exchange volume divergence (cross-exchange volume comparison)
+    if (exchangeSnapshot?.volumeDivergence != null) {
+      features[5] = clamp(exchangeSnapshot.volumeDivergence, -1, 1); // exchange_volume_divergence
+    }
+  } catch (err) {
+    console.error('Error extracting exchange enrichment features:', err);
   }
 
   return features;

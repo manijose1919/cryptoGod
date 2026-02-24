@@ -1056,7 +1056,7 @@ export function getMLAccuracyStats() {
 }
 
 // --- Cleanup old data ---
-export function cleanupOldData(daysToKeep = 30) {
+export function cleanupOldData(daysToKeep = 90) { // Batch 5A: extended from 30→90 days (200GB NVMe)
   const cutoff = Date.now() - (daysToKeep * 24 * 60 * 60 * 1000);
   const results = {};
   results.exchangeSnapshots = getDb().prepare('DELETE FROM exchange_snapshots WHERE timestamp < ?').run(cutoff).changes;
@@ -1897,13 +1897,13 @@ export function getLatestMonteCarloResult() {
 export function runMaintenance() {
   try {
     const d = getDb();
-    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    const ninetyDaysAgo = Date.now() - (90 * 24 * 60 * 60 * 1000); // Batch 5A: 30→90 days
 
-    // Delete old candle_history >30 days
-    const candleDeleted = d.prepare('DELETE FROM candle_history WHERE time < ?').run(thirtyDaysAgo).changes;
+    // Delete old candle_history >90 days
+    const candleDeleted = d.prepare('DELETE FROM candle_history WHERE time < ?').run(ninetyDaysAgo).changes;
 
-    // Cleanup other old data
-    const results = cleanupOldData(30);
+    // Cleanup other old data (90 days)
+    const results = cleanupOldData(90);
 
     // Run ANALYZE for query planner optimization
     d.exec('ANALYZE');
