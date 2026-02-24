@@ -200,6 +200,19 @@ try {
     console.warn('[Server] Portfolio optimizer not available:', e.message);
 }
 
+// External data services
+let cryptoCompareService = null;
+let etherscanService = null;
+let messariService = null;
+let coinDeskService = null;
+let coinMarketCapService = null;
+
+try { cryptoCompareService = await import('./services/cryptoCompareService.js'); console.log('[Server] CryptoCompare service loaded'); } catch (e) {}
+try { etherscanService = await import('./services/etherscanService.js'); console.log('[Server] Etherscan service loaded'); } catch (e) {}
+try { messariService = await import('./services/messariService.js'); console.log('[Server] Messari service loaded'); } catch (e) {}
+try { coinDeskService = await import('./services/coinDeskService.js'); console.log('[Server] CoinDesk service loaded'); } catch (e) {}
+try { coinMarketCapService = await import('./services/coinMarketCapService.js'); console.log('[Server] CoinMarketCap service loaded'); } catch (e) {}
+
 // Phase 4: Enhanced Sentiment Services
 let youtubeSentimentService = null;
 let redditSentimentService = null;
@@ -613,6 +626,47 @@ app.get('/api/backtest/monte-carlo', async (req, res) => {
         }
 
         res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// External data services API endpoint
+app.get('/api/market-intelligence', async (req, res) => {
+    try {
+        const data = {};
+        const promises = [];
+
+        if (coinMarketCapService) promises.push(
+            coinMarketCapService.getGlobalMetrics?.().then(r => { data.globalMetrics = r; }).catch(() => {})
+        );
+        if (coinMarketCapService) promises.push(
+            coinMarketCapService.getMarketDominance?.().then(r => { data.dominance = r; }).catch(() => {})
+        );
+        if (coinMarketCapService) promises.push(
+            coinMarketCapService.getFearGreedIndex?.().then(r => { data.fearGreed = r; }).catch(() => {})
+        );
+        if (etherscanService) promises.push(
+            etherscanService.getNetworkStats?.().then(r => { data.ethNetwork = r; }).catch(() => {})
+        );
+        if (coinDeskService) promises.push(
+            coinDeskService.getBitcoinPriceIndex?.().then(r => { data.btcPrice = r; }).catch(() => {})
+        );
+        if (messariService) promises.push(
+            messariService.getMarketOverview?.().then(r => { data.messariOverview = r; }).catch(() => {})
+        );
+
+        await Promise.all(promises);
+
+        data.services = {
+            cryptoCompare: cryptoCompareService?.getStatus?.() || { enabled: false },
+            etherscan: etherscanService?.getStatus?.() || { enabled: false },
+            messari: messariService?.getStatus?.() || { enabled: false },
+            coinDesk: coinDeskService?.getStatus?.() || { enabled: false },
+            coinMarketCap: coinMarketCapService?.getStatus?.() || { enabled: false },
+        };
+
+        res.json(data);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
