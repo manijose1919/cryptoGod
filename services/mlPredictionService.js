@@ -86,6 +86,17 @@ try {
   getFlag = () => true; // Default: all flags enabled
 }
 
+// Worker thread for offloading training
+let Worker;
+try {
+  const wt = await import('node:worker_threads');
+  Worker = wt.Worker;
+} catch (e) {
+  console.warn('[ML Prediction] worker_threads not available');
+}
+let trainingWorker = null;
+let workerTraining = false;
+
 // State
 let mlEngine = null;
 let anomalyDetector = null;
@@ -95,7 +106,7 @@ let isInitialized = false;
 let lastTrainTime = 0;
 let predictionCount = 0;
 const MIN_SAMPLES_TO_TRAIN = 100;
-const RETRAIN_INTERVAL = 60 * 60 * 1000; // 1 hour
+const RETRAIN_INTERVAL = 30 * 60 * 1000; // 30 min (Batch 5B: increased from 1 hour)
 const RETRAIN_SAMPLE_THRESHOLD = 200; // retrain every 200 new samples
 let samplesSinceLastTrain = 0;
 
@@ -104,9 +115,9 @@ let incrementalSampleCount = 0;
 const INCREMENTAL_THRESHOLD = 20; // Trigger incremental update every 20 labeled samples
 const incrementalBuffer = { features: [], labels: [] };
 
-// Upgrade #8: LSTM sequence buffer — last 20 feature vectors per ticker
+// Upgrade #8: LSTM sequence buffer — last 30 feature vectors per ticker (Batch 5B: 20→30)
 const featureSequenceBuffer = new Map(); // ticker -> array of feature vectors
-const LSTM_SEQUENCE_LENGTH = 20;
+const LSTM_SEQUENCE_LENGTH = 30;
 
 /**
  * Initialize ML system - load saved model or train initial model
@@ -315,8 +326,20 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       };
     }
 
-    // Step 5: Combine anomaly check + prediction into decision
+    // Step 5: Blend regime prediction (Batch 2C — activate trained but unused regime engine)
     let confidence = prediction.confidence;
+    try {
+      if (regimeEngine && getFlag('REGIME_MODELS_ENABLED') && marketRegime) {
+        const regimePred = regimeEngine.predict(featureArray, marketRegime);
+        if (regimePred && typeof regimePred.confidence === 'number') {
+          confidence = 0.7 * confidence + 0.3 * regimePred.confidence;
+        }
+      }
+    } catch (regErr) {
+      // Non-critical — regime prediction error
+    }
+
+    // Combine anomaly check + prediction into decision
     const direction = prediction.prediction === 1 ? 'UP' : 'DOWN';
     let take = true;
     let reason = '';
@@ -356,7 +379,8 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
         probabilities: prediction.probabilities
       },
       reason,
-      mlAvailable: true
+      mlAvailable: true,
+      lastFeatureVector: featureArray, // Batch 2B: expose for SHAP
     };
 
   } catch (err) {
@@ -458,6 +482,88 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
 }
 
 /**
+ * Train via worker thread (Batch 4A: offload from main event loop)
+ */
+async function trainOnWorker(features2D, labels, config, labeledSamples) {
+  if (!Worker || workerTraining) return false;
+  return new Promise((resolve) => {
+    try {
+      workerTraining = true;
+      const workerPath = new URL('./mlTrainingWorker.js', import.meta.url).pathname
+        .replace(/^\/([A-Z]:)/, '$1'); // Fix Windows paths
+      const worker = new Worker(workerPath);
+      const timeout = setTimeout(() => {
+        worker.terminate();
+        workerTraining = false;
+        console.warn('[ML Prediction] Worker training timed out after 120s');
+        resolve(false);
+      }, 120000);
+
+      worker.on('message', (msg) => {
+        if (msg.type === 'ready') {
+          worker.postMessage({
+            type: 'train',
+            features2D,
+            labels,
+            config,
+            lstmConfig: {
+              enabled: getFlag('LSTM_ENABLED'),
+              sequenceLength: LSTM_SEQUENCE_LENGTH,
+              epochs: 30,
+            },
+          });
+        } else if (msg.type === 'trained') {
+          clearTimeout(timeout);
+          try {
+            mlEngine.deserialize(msg.modelData);
+            if (msg.lstmWeights && lstmModel) {
+              try { lstmModel.deserialize(msg.lstmWeights); } catch {}
+            }
+            lastTrainTime = Date.now();
+            samplesSinceLastTrain = 0;
+            // Save to DB
+            if (db?.insertMLModel) {
+              db.insertMLModel({
+                model_data: JSON.stringify(msg.modelData),
+                accuracy: msg.metrics?.accuracy,
+                precision: msg.metrics?.precision,
+                recall: msg.metrics?.recall,
+                f1_score: msg.metrics?.f1Score,
+                sample_count: msg.sampleCount,
+                trained_at: Date.now(),
+              });
+            }
+            console.log(`[ML Prediction] Worker training complete: acc=${msg.metrics?.accuracy?.toFixed(2)}%`);
+          } catch (e) {
+            console.warn('[ML Prediction] Failed to deserialize worker model:', e.message);
+          }
+          workerTraining = false;
+          worker.terminate();
+          resolve(true);
+        } else if (msg.type === 'error') {
+          clearTimeout(timeout);
+          console.warn('[ML Prediction] Worker training error:', msg.error);
+          workerTraining = false;
+          worker.terminate();
+          resolve(false);
+        }
+      });
+
+      worker.on('error', (err) => {
+        clearTimeout(timeout);
+        console.warn('[ML Prediction] Worker thread error:', err.message);
+        workerTraining = false;
+        resolve(false);
+      });
+    } catch (e) {
+      workerTraining = false;
+      console.warn('[ML Prediction] Failed to spawn training worker:', e.message);
+      resolve(false);
+    }
+  });
+}
+
+/**
  * Train/retrain the ML model
  */
 export async function trainModel() {
@@ -498,12 +604,31 @@ export async function trainModel() {
       return false;
     }
 
+    // Batch 4A: Try worker thread training first (keeps main loop responsive)
+    if (Worker && !workerTraining && features2D.length >= 200) {
+      // Get hyperparams config first
+      let workerConfig = {};
+      try {
+        if (hyperparamTuner) {
+          const saved = hyperparamTuner.getBestHyperparams();
+          if (saved) workerConfig = saved;
+        }
+      } catch {}
+      workerConfig.nFolds = 7; // Batch 5B: increased from 5
+      const workerResult = await trainOnWorker(features2D, labels, workerConfig, labeledSamples);
+      if (workerResult) {
+        console.log(`[ML Prediction] Worker training succeeded in ${Date.now() - startTime}ms`);
+        return true;
+      }
+      console.log('[ML Prediction] Worker training failed, falling back to main thread');
+    }
+
     // Upgrade #13: Hyperparameter tuning (if enough samples and flag enabled)
     let trainConfig = {};
     try {
       if (hyperparamTuner && getFlag('HYPERPARAM_TUNING_ENABLED') && features2D.length >= 300) {
         console.log('[ML Prediction] Running hyperparameter tuning...');
-        const tuneResult = hyperparamTuner.runRandomSearch(features2D, labels, 20, 3);
+        const tuneResult = hyperparamTuner.runRandomSearch(features2D, labels, 40, 3); // Batch 5B: 20→40 configs
         if (tuneResult && tuneResult.bestConfig) {
           trainConfig = tuneResult.bestConfig;
           hyperparamTuner.saveBestHyperparams(tuneResult.bestConfig);
@@ -526,8 +651,8 @@ export async function trainModel() {
       mlEngine.config.learningRate = trainConfig.learningRate || mlEngine.config.learningRate;
     }
 
-    // Train model with walk-forward cross-validation
-    const metrics = mlEngine.train(features2D, labels, { crossValidate: true, nFolds: 5, purgeGap: 5 });
+    // Train model with walk-forward cross-validation (Batch 5B: 5→7 folds)
+    const metrics = mlEngine.train(features2D, labels, { crossValidate: true, nFolds: 7, purgeGap: 5 });
     console.log(`[ML Prediction] Training complete in ${Date.now() - startTime}ms`);
     if (metrics.cvFolds) {
       console.log(`[ML Prediction] CV: ${metrics.cvFolds} folds, avgValAcc=${metrics.validationAccuracy.toFixed(3)}, weights: RF=${metrics.modelWeights.rf.toFixed(3)}, GB=${metrics.modelWeights.gb.toFixed(3)}, LR=${metrics.modelWeights.lr.toFixed(3)}`);
@@ -568,7 +693,7 @@ export async function trainModel() {
         }
         if (sequences.length >= 100) {
           lstmModel = new LSTMNetwork(features2D[0].length, 64, 1);
-          lstmModel.fit(sequences, seqLabels, 30, 0.001);
+          lstmModel.fit(sequences, seqLabels, 50, 0.001); // Batch 5B: 30→50 epochs
           mlEngine.setLSTMModel(lstmModel);
           // Give LSTM 10% weight, redistribute from others
           const w = mlEngine.modelWeights;

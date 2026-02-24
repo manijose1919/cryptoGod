@@ -47,6 +47,7 @@ const DEFAULT_FLAGS = {
   MONTE_CARLO_ENABLED: true,
   SMART_EXECUTION_ENABLED: true,
   PORTFOLIO_OPTIMIZER_ENABLED: true,
+  CONTINUOUS_BACKTEST_ENABLED: true,  // Batch 4C: background strategy quality monitoring
 };
 
 // In-memory cache of current flags (seeded from defaults, overwritten by DB on init)
