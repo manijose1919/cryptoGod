@@ -37,6 +37,12 @@ export function initializeDatabase() {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
+  // Performance PRAGMAs for NVMe SSD
+  db.pragma('mmap_size = 2147483648');   // 2GB mmap — fast on NVMe
+  db.pragma('cache_size = -64000');       // 64MB page cache
+  db.pragma('synchronous = NORMAL');      // Safe with WAL, faster than FULL
+  db.pragma('temp_store = MEMORY');       // Temp tables in RAM
+
   // Create all tables
   db.exec(`
     -- Core trade history
@@ -497,6 +503,45 @@ export function initializeDatabase() {
     CREATE INDEX IF NOT EXISTS idx_gatekeeper_log_time
       ON ml_gatekeeper_log(created_at DESC);
   `);
+
+  // ============================================
+  // Performance Upgrade Tables
+  // ============================================
+  db.exec(`
+    -- On-chain data cache
+    CREATE TABLE IF NOT EXISTS onchain_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT, timestamp INTEGER, data_json TEXT,
+      UNIQUE(ticker, timestamp)
+    );
+
+    -- Execution quality tracking
+    CREATE TABLE IF NOT EXISTS execution_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT, side TEXT, estimated_slippage REAL,
+      actual_slippage REAL, fill_rate REAL, execution_time_ms INTEGER,
+      order_type TEXT, timestamp INTEGER
+    );
+
+    -- Monte Carlo results
+    CREATE TABLE IF NOT EXISTS monte_carlo_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT, n_simulations INTEGER,
+      sharpe_p5 REAL, sharpe_p50 REAL, sharpe_p95 REAL,
+      drawdown_p5 REAL, drawdown_p50 REAL, drawdown_p95 REAL,
+      return_p5 REAL, return_p50 REAL, return_p95 REAL,
+      trade_count INTEGER, created_at INTEGER
+    );
+  `);
+
+  // Add regime column to ml_features (safe migration)
+  try { db.exec(`ALTER TABLE ml_features ADD COLUMN regime TEXT`); } catch(e) { /* already exists */ }
+
+  // Performance indexes
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_ml_features_lookup ON ml_features(ticker, timestamp)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_ml_predictions_lookup ON ml_predictions(ticker, timestamp)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_strategy_outcome ON trades(strategy, outcome)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_execution_metrics_lookup ON execution_metrics(ticker, timestamp)`); } catch(e) {}
 
   console.log(`[Database] Initialized SQLite at ${dbPath}`);
   return db;
@@ -1778,4 +1823,95 @@ export function getRecentGatekeeperDecisions(limit = 100) {
   return getDb().prepare(
     'SELECT * FROM ml_gatekeeper_log ORDER BY created_at DESC LIMIT ?'
   ).all(limit);
+}
+
+// ============================================
+// EXECUTION METRICS
+// ============================================
+
+export function insertExecutionMetric(metric) {
+  return getDb().prepare(`
+    INSERT INTO execution_metrics (ticker, side, estimated_slippage, actual_slippage, fill_rate, execution_time_ms, order_type, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(metric.ticker, metric.side, metric.estimated_slippage || 0,
+         metric.actual_slippage || 0, metric.fill_rate || 1, metric.execution_time_ms || 0,
+         metric.order_type || 'MARKET', metric.timestamp || Date.now());
+}
+
+export function getExecutionMetrics(ticker = null, limit = 100) {
+  if (ticker) {
+    return getDb().prepare(
+      'SELECT * FROM execution_metrics WHERE ticker = ? ORDER BY timestamp DESC LIMIT ?'
+    ).all(ticker, limit);
+  }
+  return getDb().prepare(
+    'SELECT * FROM execution_metrics ORDER BY timestamp DESC LIMIT ?'
+  ).all(limit);
+}
+
+// ============================================
+// ON-CHAIN SNAPSHOTS
+// ============================================
+
+export function insertOnChainSnapshot(ticker, timestamp, dataJson) {
+  return getDb().prepare(`
+    INSERT OR REPLACE INTO onchain_snapshots (ticker, timestamp, data_json)
+    VALUES (?, ?, ?)
+  `).run(ticker, timestamp, dataJson);
+}
+
+export function getLatestOnChainSnapshot(ticker) {
+  return getDb().prepare(
+    'SELECT * FROM onchain_snapshots WHERE ticker = ? ORDER BY timestamp DESC LIMIT 1'
+  ).get(ticker);
+}
+
+// ============================================
+// MONTE CARLO RESULTS
+// ============================================
+
+export function insertMonteCarloResult(result) {
+  return getDb().prepare(`
+    INSERT INTO monte_carlo_results (session_id, n_simulations, sharpe_p5, sharpe_p50, sharpe_p95, drawdown_p5, drawdown_p50, drawdown_p95, return_p5, return_p50, return_p95, trade_count, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(result.session_id || '', result.n_simulations || 0,
+         result.sharpe_p5 || 0, result.sharpe_p50 || 0, result.sharpe_p95 || 0,
+         result.drawdown_p5 || 0, result.drawdown_p50 || 0, result.drawdown_p95 || 0,
+         result.return_p5 || 0, result.return_p50 || 0, result.return_p95 || 0,
+         result.trade_count || 0, Date.now());
+}
+
+export function getLatestMonteCarloResult() {
+  return getDb().prepare(
+    'SELECT * FROM monte_carlo_results ORDER BY created_at DESC LIMIT 1'
+  ).get();
+}
+
+// ============================================
+// DATABASE MAINTENANCE
+// ============================================
+
+/**
+ * Run daily maintenance: cleanup old data, ANALYZE tables, vacuum
+ */
+export function runMaintenance() {
+  try {
+    const d = getDb();
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+
+    // Delete old candle_history >30 days
+    const candleDeleted = d.prepare('DELETE FROM candle_history WHERE time < ?').run(thirtyDaysAgo).changes;
+
+    // Cleanup other old data
+    const results = cleanupOldData(30);
+
+    // Run ANALYZE for query planner optimization
+    d.exec('ANALYZE');
+
+    console.log(`[Database] Maintenance complete: ${candleDeleted} old candles deleted, ANALYZE run`, results);
+    return { candleDeleted, ...results };
+  } catch (e) {
+    console.warn('[Database] Maintenance error:', e.message);
+    return null;
+  }
 }

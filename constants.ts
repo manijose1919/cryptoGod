@@ -183,6 +183,37 @@ export const PARTIAL_EXIT = {
 } as const;
 
 // ============================================
+// ATR-BASED DYNAMIC EXIT STAGES (Upgrade #9)
+// ============================================
+export const ATR_EXIT_STAGES = {
+    STAGE_1_ATR_MULT: 1.0,        // Exit 25% at 1.0× ATR profit
+    STAGE_1_PERCENT: 25,
+    STAGE_2_ATR_MULT: 2.0,        // Exit 35% at 2.0× ATR profit
+    STAGE_2_PERCENT: 35,
+    STAGE_3_TRAIL_ATR_MULT: 1.5,  // Trail remaining at 1.5× ATR below high-water mark
+    STAGE_3_PERCENT: 40,          // Remaining 40%
+    // Regime multipliers applied to ATR values
+    REGIME_MULTIPLIERS: {
+        SIDEWAYS: 0.75,           // Tighter exits in sideways markets
+        UPTREND: 1.25,            // Wider exits in uptrends
+        DOWNTREND: 0.5,           // Very tight exits in downtrends
+        DEFAULT: 1.0,
+    },
+} as const;
+
+// ============================================
+// ML MODEL SIZE CONSTANTS (Upgrade #16)
+// ============================================
+export const ML_MODEL_SIZES = {
+    RF_TREES: 150,                // Random Forest: 150 trees (was 50)
+    GBT_ESTIMATORS: 250,         // Gradient Boosted Trees: 250 estimators (was 100)
+    LSTM_HIDDEN_UNITS: 64,       // LSTM: 64 hidden units
+    LSTM_SEQUENCE_LENGTH: 20,    // LSTM input: last 20 feature vectors
+    RF_MAX_TREES: 200,           // Max RF trees before retiring oldest
+    INCREMENTAL_TRIGGER: 20,    // Trigger incremental update every 20 new samples
+} as const;
+
+// ============================================
 // SLOW MARKET DETECTION
 // ============================================
 export const SLOW_MARKET = {
@@ -217,7 +248,7 @@ export const ML_CONFIG = {
     RETRAIN_SAMPLE_THRESHOLD: 200,
     ML_CONFIDENCE_THRESHOLD: 60,                 // ML must be this confident to override
     ANOMALY_POSITION_REDUCTION: 0.5,             // Reduce position by 50% on anomaly
-    FEATURE_COUNT: 67,  // 62 base + 4 sentiment + 1 market_speed
+    FEATURE_COUNT: 91,  // 83 base + 8 on-chain features
     ENSEMBLE_MODELS: ['gradient_boosted', 'random_forest', 'logistic_regression'],
     MAX_TRAINING_SAMPLES: 5000,
     ADAPTIVE_THRESHOLD_SMOOTHING: 0.3,           // Apply 30% of computed adjustment

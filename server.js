@@ -45,7 +45,7 @@ import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, expor
 // WebSocket services are accessed dynamically via getWebSocketService()
 import * as cryptoComWsService from './services/websocketService.js';
 import { analyzeMultiTimeframe, shouldEnterLong, getMultiTimeframeStatus } from './services/multiTimeframe.js';
-import { recordTradeResult as cbRecordTrade, setDailyBalance, shouldPauseTrading, resetCircuitBreaker, fullResetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
+import { recordTradeResult as cbRecordTrade, setDailyBalance, setCurrentBalance, shouldPauseTrading, resetCircuitBreaker, fullResetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
 import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategyThrottled, getAdaptiveWeightsStatus, fullResetWeights, exportState as awExportState, importState as awImportState } from './services/adaptiveWeights.js';
 import { calculateAllIndicators } from './services/advancedIndicators.js';
 import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
@@ -71,6 +71,7 @@ import { getFundingRateSignal, getFundingConfidenceAdjustment, shouldBlockEntryO
 
 // Batch 2: Intelligence Layer Services
 import { getOrderBookSignal, getOrderBookConfidenceAdjustment } from './services/orderBookSignals.js';
+import { analyzeOrderBook, optimizeEntryExit } from './services/orderBookService.js';
 import { getCorrelationMatrix, checkCorrelationRisk } from './services/correlationRiskBackend.js';
 import { initJournalTable, recordTradeForJournal, autoJournal, getJournalEntries, forceGenerateJournal } from './services/tradeJournal.js';
 
@@ -138,6 +139,8 @@ let selfTeachingLoop = null;
 let smartMoneyService = null;
 let localNLPService = null;
 let adaptiveThresholdsService = null;
+let shapExplainer = null;       // Upgrade #12: SHAP values
+let portfolioOptimizer = null;  // Upgrade #10: Portfolio rebalancer
 
 try {
     const mes = await import('./services/multiExchangeService.js');
@@ -180,6 +183,21 @@ try {
     console.log('[Server] Adaptive thresholds service loaded');
 } catch (e) {
     console.warn('[Server] Adaptive thresholds service not available:', e.message);
+}
+
+// Performance Upgrade services
+try {
+    shapExplainer = await import('./services/shapExplainer.js');
+    console.log('[Server] SHAP explainer loaded');
+} catch (e) {
+    console.warn('[Server] SHAP explainer not available:', e.message);
+}
+
+try {
+    portfolioOptimizer = await import('./services/portfolioOptimizer.js');
+    console.log('[Server] Portfolio optimizer loaded');
+} catch (e) {
+    console.warn('[Server] Portfolio optimizer not available:', e.message);
 }
 
 // Phase 4: Enhanced Sentiment Services
@@ -237,6 +255,12 @@ function mergeCandles(restCandles, ticker) {
 function getLatestPrice(ticker) {
     return getActiveWsService().getLatestPrice(ticker);
 }
+function getRealtimeCandles(ticker) {
+    return getActiveWsService().getRealtimeCandles(ticker);
+}
+function wsSubscribeTickers(tickers) {
+    return getActiveWsService().subscribeTickers(tickers);
+}
 function wsConnected() {
     return getActiveWsService().isConnected();
 }
@@ -283,6 +307,10 @@ function initExchangeWebSocket(tickers, broadcastFn) {
                         data: [trade]
                     }
                 });
+            }
+            // Real-time SL/TP exit check on every trade tick
+            if (portfolio.positions[ticker] && exitLevelCache.has(ticker)) {
+                checkTickExit(ticker, trade.price);
             }
         }
     });
@@ -519,6 +547,77 @@ app.post('/api/system-config', express.json(), (req, res) => {
     }
 });
 
+// --- ML Health Check Endpoint (Upgrade #14) ---
+app.get('/api/health/ml', (req, res) => {
+    try {
+        const mlStatus = mlPredictionService?.getMLStatus?.() || {};
+        const engineStats = mlPredictionService?.getMLEngine?.()?.getModelStats() || {};
+        res.json({
+            status: 'ok',
+            ml: {
+                initialized: mlStatus.isInitialized,
+                trained: mlStatus.isTrained,
+                accuracy: mlStatus.accuracy,
+                sampleCount: mlStatus.sampleCount,
+                predictionCount: mlStatus.predictionCount,
+                featureCount: mlStatus.featureCount,
+                lastTrainTime: mlStatus.lastTrainTime,
+                hasLSTM: engineStats.hasLSTM || false,
+                hasCalibration: engineStats.hasCalibration || false,
+                rfTreeCount: engineStats.rfTreeCount || 0,
+                gbtTreeCount: engineStats.gbtTreeCount || 0,
+                selectedFeatureCount: engineStats.selectedFeatureCount || null,
+            },
+            uptime: process.uptime(),
+            memoryMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        });
+    } catch (e) {
+        res.status(500).json({ status: 'error', error: e.message });
+    }
+});
+
+// --- Monte Carlo Backtest Endpoint (Upgrade #11) ---
+app.get('/api/backtest/monte-carlo', async (req, res) => {
+    try {
+        let monteCarloService;
+        try {
+            monteCarloService = await import('./services/monteCarloService.js');
+        } catch (e) {
+            return res.status(501).json({ error: 'Monte Carlo service not available' });
+        }
+
+        // Get trade history from session trades
+        const sessionId = botState.sessionId;
+        let tradeHistory = [];
+        if (sessionId && db.getSessionTrades) {
+            const trades = db.getSessionTrades(sessionId, 500);
+            tradeHistory = trades
+                .filter(t => t.type === 'SELL' && t.pnl !== 0)
+                .map(t => ({
+                    pnl: t.pnl,
+                    pnlPercent: t.pnl / (t.price * t.quantity) * 100,
+                    holdDuration: 0
+                }));
+        }
+
+        const nSims = parseInt(req.query.sims) || 1000;
+        const result = monteCarloService.runMonteCarloSimulation(tradeHistory, nSims, portfolio.cash + Object.values(portfolio.positions).reduce((s, p) => s + p.quantity * (p.currentPrice || p.openPrice), 0));
+
+        if (!result) {
+            return res.json({ error: 'Insufficient trade history (min 20 trades)', trades: tradeHistory.length });
+        }
+
+        // Save results
+        if (monteCarloService.saveMonteCarloResults) {
+            monteCarloService.saveMonteCarloResults(sessionId, result);
+        }
+
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Clean expired sessions periodically
 setInterval(() => {
     const cleaned = SessionManager.cleanExpiredSessions();
@@ -526,6 +625,16 @@ setInterval(() => {
         console.log(`[SessionManager] Cleaned up ${cleaned} expired sessions.`);
     }
 }, 300000); // Every 5 minutes
+
+// Daily maintenance: vacuum old data, reanalyze indexes (Upgrade #17)
+setInterval(() => {
+    try {
+        db.runMaintenance();
+        console.log('[Maintenance] Daily SQLite maintenance completed.');
+    } catch (e) {
+        console.error('[Maintenance] Error:', e.message);
+    }
+}, 24 * 60 * 60 * 1000); // Every 24 hours
 
 // ============================================
 // In-Memory State
@@ -550,6 +659,10 @@ let logs = [];
 let botInterval = null;
 let availableTickers = [];
 const instrumentSpecs = new Map(); // Cache: instrument_name -> { quantity_decimals, qty_tick_size }
+
+// Sentiment cache: ticker -> { score, timestamp }. TTL = 5 minutes (sentiment changes slowly)
+const SENTIMENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const sentimentCachePersistent = new Map();
 
 const addLog = (message, type = 'INFO') => {
     const newLog = {
@@ -680,24 +793,11 @@ async function makeSignedRequest(method, params = {}, sessionId = null) {
     return data.result;
 }
 
-// ============================================
-// Helper: Convert ticker to instrument_name format
-// ============================================
-function toInstrumentName(ticker) {
-    if (ticker.includes('_')) return ticker; // Already formatted
-    if (ticker.endsWith('USDC')) return ticker.replace('USDC', '_USDC');
-    if (ticker.endsWith('USDT')) return ticker.replace('USDT', '_USDT');
-    if (ticker.endsWith('CAD')) return ticker.replace('CAD', '_CAD');
-    if (ticker.endsWith('USD')) return ticker.replace('USD', '_USD');
-    return ticker;
-}
-
 // Market Data Fetching (Parallel) + Auto-collect to SQLite
 // ============================================
 async function getMarketData(ticker, timeframe = '1m', count = 100) {
-    const instrument_name = toInstrumentName(ticker);
-    const result = await makePublicRequest('public/get-candlestick', { instrument_name, timeframe, count });
-    const candles = result.data;
+    const adapter = getExchangeAdapter();
+    const candles = await adapter.getCandles(ticker, timeframe, count);
 
     // Auto-collect candles into SQLite for backtesting history
     if (candles && candles.length > 0) {
@@ -723,17 +823,47 @@ async function getMarketData(ticker, timeframe = '1m', count = 100) {
 }
 
 async function getMultipleMarketData(tickers, timeframe = '1m') {
-    // Fetch all tickers in parallel for efficiency
-    const promises = tickers.map(async (ticker) => {
-        try {
-            const candles = await getMarketData(ticker, timeframe);
-            return { ticker, candles, error: null };
-        } catch (error) {
-            return { ticker, candles: null, error: error.message };
-        }
-    });
+    const results = [];
+    const restNeeded = [];
 
-    return Promise.all(promises);
+    // For 1m timeframe: use WebSocket buffer when available (instant, no REST call)
+    if (timeframe === '1m' && wsConnected()) {
+        for (const ticker of tickers) {
+            const wsCandles = getRealtimeCandles(ticker);
+            if (wsCandles && wsCandles.length >= CONFIG.MIN_CANDLES_REQUIRED) {
+                // WS buffer has enough candles — use directly, skip REST
+                // Persist to SQLite async (non-blocking) for backtesting history
+                try {
+                    const rows = wsCandles.slice(-50).map(c => ({
+                        ticker, timeframe: '1m', time: c.t,
+                        open: c.o, high: c.h, low: c.l, close: c.c, volume: c.v,
+                    }));
+                    insertCandlesBatch(rows);
+                } catch (e) { /* non-blocking */ }
+                results.push({ ticker, candles: wsCandles, error: null, source: 'ws' });
+            } else {
+                restNeeded.push(ticker);
+            }
+        }
+    } else {
+        restNeeded.push(...tickers);
+    }
+
+    // REST-fetch only tickers that don't have sufficient WS data
+    if (restNeeded.length > 0) {
+        const promises = restNeeded.map(async (ticker) => {
+            try {
+                const candles = await getMarketData(ticker, timeframe);
+                return { ticker, candles, error: null, source: 'rest' };
+            } catch (error) {
+                return { ticker, candles: null, error: error.message, source: 'rest' };
+            }
+        });
+        const restResults = await Promise.all(promises);
+        results.push(...restResults);
+    }
+
+    return results;
 }
 
 // ============================================
@@ -860,6 +990,138 @@ function get1hTrend(candles1h) {
 }
 
 // ============================================
+// Real-Time SL/TP Exit via WebSocket Ticks
+// ============================================
+const exitLevelCache = new Map();
+// Map<ticker, { tpPrice, slPrice, trailActivationPrice, trailPct, profitGoal, regime }>
+
+function refreshExitLevels(marketDataMap) {
+    const fees = getActiveFees();
+    const { profitGoals } = botState.settings;
+    for (const [ticker, position] of Object.entries(portfolio.positions)) {
+        const candles = marketDataMap.get(ticker);
+        if (!candles || candles.length < 10) continue;
+
+        const targets = getDynamicTargets(candles);
+        const openPrice = position.openPrice;
+
+        // Upgrade #9: ATR-based dynamic exits with regime multipliers
+        const atr = calculateATRFromCandles(candles, 14);
+        const atrPct = openPrice > 0 ? (atr / openPrice) : 0.01;
+
+        // Regime multipliers for exit tightness
+        let regimeMultiplier = 1.0;
+        if (targets.regime === 'SIDEWAYS') regimeMultiplier = 0.75;
+        else if (targets.regime === 'UPTREND') regimeMultiplier = 1.25;
+        else if (targets.regime === 'DOWNTREND') regimeMultiplier = 0.5;
+
+        const adjustedATR = atrPct * regimeMultiplier;
+
+        // Stage 1: exit 25% at 1.0× ATR profit
+        const stage1Price = openPrice * (1 + adjustedATR * 1.0 + fees.roundTrip);
+        // Stage 2: exit 35% at 2.0× ATR profit
+        const stage2Price = openPrice * (1 + adjustedATR * 2.0 + fees.roundTrip);
+        // Stage 3: trail remaining at 1.5× ATR below high-water mark
+        const trailATRPct = adjustedATR * 1.5;
+
+        // TP price: use stage 2 as main TP target
+        const tpPrice = stage2Price;
+
+        // SL price: 2× ATR below entry (fee-adjusted)
+        const feeAdjustedSL = adjustedATR * 2.0 + fees.roundTrip;
+        const slPrice = openPrice * (1 - feeAdjustedSL);
+
+        // Trail activation: at stage 1 price
+        const trailActivationPrice = stage1Price;
+
+        // Trail distance percentage
+        const trailPct = Math.max(0.3, trailATRPct * 100);
+
+        // Per-trade profit goal (dollar amount)
+        const profitGoal = profitGoals?.[position.entryStrategy] || 0;
+
+        exitLevelCache.set(ticker, {
+            tpPrice, slPrice, trailActivationPrice, trailPct, profitGoal, regime: targets.regime,
+            stage1Price, stage2Price, atrPct: adjustedATR, regimeMultiplier
+        });
+    }
+    // Clean stale entries for closed positions
+    for (const ticker of exitLevelCache.keys()) {
+        if (!portfolio.positions[ticker]) exitLevelCache.delete(ticker);
+    }
+}
+
+// ATR calculation helper for exit levels
+function calculateATRFromCandles(candles, period = 14) {
+    if (candles.length < period + 1) return 0;
+    const trs = [];
+    for (let i = 1; i < candles.length; i++) {
+        const tr = Math.max(
+            candles[i].h - candles[i].l,
+            Math.abs(candles[i].h - candles[i - 1].c),
+            Math.abs(candles[i].l - candles[i - 1].c)
+        );
+        trs.push(tr);
+    }
+    const slice = trs.slice(-period);
+    return slice.reduce((a, b) => a + b, 0) / slice.length;
+}
+
+async function checkTickExit(ticker, price) {
+    const position = portfolio.positions[ticker];
+    if (!position || position._exitPending) return;
+
+    const levels = exitLevelCache.get(ticker);
+    if (!levels) return; // No cached levels yet (first bot loop hasn't run)
+
+    // Update tracking prices on every tick
+    if (price > (position.highestPrice || 0)) position.highestPrice = price;
+    if (price < (position.lowestPrice || Infinity)) position.lowestPrice = price;
+    position.currentPrice = price;
+
+    let exitReason = null;
+
+    // 1. Per-trade profit goal
+    if (levels.profitGoal > 0) {
+        const profit = (price - position.openPrice) * position.quantity;
+        if (profit >= levels.profitGoal) {
+            exitReason = `[RT] Per-trade profit goal $${levels.profitGoal.toFixed(2)} reached`;
+        }
+    }
+
+    // 2. Take-profit
+    if (!exitReason && price >= levels.tpPrice) {
+        const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
+        exitReason = `[RT-TP] +${pnl}% hit TP @ ${levels.tpPrice.toFixed(4)} (${levels.regime})`;
+    }
+
+    // 3. Trailing stop (only if trail activated)
+    if (!exitReason && position.highestPrice >= levels.trailActivationPrice) {
+        const trailLevel = position.highestPrice * (1 - levels.trailPct / 100);
+        if (price <= trailLevel) {
+            exitReason = `[RT-TRAIL] price ${price.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${position.highestPrice.toFixed(4)})`;
+        }
+    }
+
+    // 4. Stop-loss
+    if (!exitReason && price <= levels.slPrice) {
+        const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
+        exitReason = `[RT-SL] ${pnl}% hit SL @ ${levels.slPrice.toFixed(4)} (${levels.regime})`;
+    }
+
+    if (exitReason) {
+        position._exitPending = true; // Prevent double-exit from bot loop
+        try {
+            await handleSell(position, price, exitReason);
+        } catch (err) {
+            console.error(`[RT-EXIT] Failed for ${ticker}: ${err.message}`);
+            // Clear flag so bot loop can retry
+            if (portfolio.positions[ticker]) portfolio.positions[ticker]._exitPending = false;
+        }
+    }
+}
+
+// ============================================
 // Trading Bot Loop (Optimized for Large Universes)
 // ============================================
 let botLoopRunning = false;
@@ -910,14 +1172,23 @@ async function tradingBotLoop() {
         const scanBatch = tickerPool.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
         
         const tickersToFetch = [...new Set([...positionTickers, ...scanBatch])];
+
+        // Auto-subscribe scan batch to WebSocket so future loops use WS buffer
+        if (wsConnected()) wsSubscribeTickers(tickersToFetch);
+
         const allMarketData = await getMultipleMarketData(tickersToFetch);
 
         // Create a lookup map
         const marketDataMap = new Map();
-        for (const { ticker, candles, error } of allMarketData) {
+        let wsHits = 0, restHits = 0;
+        for (const { ticker, candles, error, source } of allMarketData) {
             if (!error && candles && candles.length >= CONFIG.MIN_CANDLES_REQUIRED) {
                 marketDataMap.set(ticker, candles);
             }
+            if (source === 'ws') wsHits++; else restHits++;
+        }
+        if (wsHits > 0 && Math.random() < 0.05) {
+            addLog(`[DATA] WS: ${wsHits} tickers (instant), REST: ${restHits} tickers`, 'INFO');
         }
 
         // --- CIRCUIT BREAKER CHECK ---
@@ -972,10 +1243,12 @@ async function tradingBotLoop() {
         }
 
         const prices = {};
+        refreshExitLevels(marketDataMap); // Refresh cached levels for real-time tick checker
 
         // --- EXIT LOGIC ---
         for (const ticker of positionTickers) {
             const position = portfolio.positions[ticker];
+            if (!position || position._exitPending) continue; // Skip positions being exited by RT tick checker
             const candles = marketDataMap.get(ticker);
 
             if (!candles) continue;
@@ -1050,7 +1323,7 @@ async function tradingBotLoop() {
         const pmExits = checkProfitMethodExits(portfolio.positions, marketDataMap);
         for (const exit of pmExits) {
             const pos = portfolio.positions[exit.ticker];
-            if (!pos) continue;
+            if (!pos || pos._exitPending) continue;
             const candles = marketDataMap.get(exit.ticker);
             const exitPrice = candles ? candles[candles.length - 1].c : pos.openPrice;
             await handleSell(pos, exitPrice, exit.reason);
@@ -1062,6 +1335,7 @@ async function tradingBotLoop() {
         );
         totalValue = portfolio.cash + holdingsValue;
         beastUpdateBalance(totalValue);
+        setCurrentBalance(totalValue);  // Upgrade #3: Drawdown-adaptive Kelly tracking
 
         if (sessionProfitGoal && totalValue >= sessionProfitGoal) {
             addLog(`SESSION PROFIT GOAL REACHED! Total: $${totalValue.toFixed(2)}`, 'SPECIAL');
@@ -1150,38 +1424,55 @@ async function tradingBotLoop() {
 
             candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
-            // --- SENTIMENT ENRICHMENT: fetch combined sentiment for top candidates ---
+            // --- SENTIMENT ENRICHMENT: cached with 5min TTL to avoid redundant API calls ---
             const sentimentCache = new Map();
             try {
                 const topTickers = candidates.slice(0, 5).map(c => c.ticker);
-                const sentimentResults = await Promise.allSettled(
-                    topTickers.map(async (ticker) => {
-                        let score = 0;
-                        let sources = 0;
-                        if (redditSentimentService) {
-                            try {
-                                const rd = await redditSentimentService.getEnhancedTickerSentiment(ticker);
-                                if (rd?.combinedSentiment != null) { score += rd.combinedSentiment * 0.35; sources += 0.35; }
-                            } catch (e) {}
+                const now = Date.now();
+                const tickersToFetchSentiment = [];
+
+                // Use cached sentiment where available
+                for (const ticker of topTickers) {
+                    const cached = sentimentCachePersistent.get(ticker);
+                    if (cached && (now - cached.timestamp) < SENTIMENT_CACHE_TTL_MS) {
+                        sentimentCache.set(ticker, cached.score);
+                    } else {
+                        tickersToFetchSentiment.push(ticker);
+                    }
+                }
+
+                // Only fetch sentiment for tickers not in cache
+                if (tickersToFetchSentiment.length > 0) {
+                    const sentimentResults = await Promise.allSettled(
+                        tickersToFetchSentiment.map(async (ticker) => {
+                            let score = 0;
+                            let sources = 0;
+                            if (redditSentimentService) {
+                                try {
+                                    const rd = await redditSentimentService.getEnhancedTickerSentiment(ticker);
+                                    if (rd?.combinedSentiment != null) { score += rd.combinedSentiment * 0.35; sources += 0.35; }
+                                } catch (e) {}
+                            }
+                            if (youtubeSentimentService) {
+                                try {
+                                    const yt = await youtubeSentimentService.getYouTubeSentiment(ticker);
+                                    if (yt?.sentiment != null) { score += yt.sentiment * 0.25; sources += 0.25; }
+                                } catch (e) {}
+                            }
+                            if (multiExchangeService) {
+                                try {
+                                    const fg = multiExchangeService.getFearGreed();
+                                    if (fg?.value != null) { const fgNorm = (fg.value - 50) / 50; score += fgNorm * 0.40; sources += 0.40; }
+                                } catch (e) {}
+                            }
+                            return { ticker, sentiment: sources > 0 ? score / sources : 0 };
+                        })
+                    );
+                    for (const r of sentimentResults) {
+                        if (r.status === 'fulfilled' && r.value) {
+                            sentimentCache.set(r.value.ticker, r.value.sentiment);
+                            sentimentCachePersistent.set(r.value.ticker, { score: r.value.sentiment, timestamp: now });
                         }
-                        if (youtubeSentimentService) {
-                            try {
-                                const yt = await youtubeSentimentService.getYouTubeSentiment(ticker);
-                                if (yt?.sentiment != null) { score += yt.sentiment * 0.25; sources += 0.25; }
-                            } catch (e) {}
-                        }
-                        if (multiExchangeService) {
-                            try {
-                                const fg = multiExchangeService.getFearGreed();
-                                if (fg?.value != null) { const fgNorm = (fg.value - 50) / 50; score += fgNorm * 0.40; sources += 0.40; }
-                            } catch (e) {}
-                        }
-                        return { ticker, sentiment: sources > 0 ? score / sources : 0 };
-                    })
-                );
-                for (const r of sentimentResults) {
-                    if (r.status === 'fulfilled' && r.value) {
-                        sentimentCache.set(r.value.ticker, r.value.sentiment);
                     }
                 }
             } catch (e) {}
@@ -1438,10 +1729,25 @@ async function tradingBotLoop() {
                             });
                             entryStrategy = null;
                         } else if (pipelineResult) {
+                            // Upgrade #12: SHAP explanation for trade entries
+                            let shapReason = '';
+                            try {
+                                if (shapExplainer && getFlag('SHAP_ENABLED')) {
+                                    const engine = mlPredictionService?.getMLEngine?.();
+                                    if (engine && engine.isTrained) {
+                                        const featureNames = getFeatureNames ? getFeatureNames() : [];
+                                        const explanation = shapExplainer.explainPrediction(engine, score._lastFeatureVector || [], featureNames);
+                                        if (explanation) {
+                                            shapReason = shapExplainer.formatExplanation(explanation);
+                                        }
+                                    }
+                                }
+                            } catch (shapErr) { /* non-critical */ }
+
                             logThought({
                                 type: 'ML_PIPELINE', ticker, action: 'ML_GATEKEEPER_PASS',
                                 confidence: pipelineResult.confidence,
-                                reason: `${pipelineResult.tier}: ${pipelineResult.reason} (size×${pipelineResult.sizeMultiplier.toFixed(2)})`,
+                                reason: `${pipelineResult.tier}: ${pipelineResult.reason} (size×${pipelineResult.sizeMultiplier.toFixed(2)})${shapReason ? ' | ' + shapReason : ''}`,
                                 regime: currentRegime,
                             });
                         }
@@ -1518,6 +1824,28 @@ async function tradingBotLoop() {
                             }
                         }
                     } catch (e) {}
+
+                    // Upgrade #10: Portfolio Optimizer — check portfolio health before entry
+                    if (entryStrategy && investmentAmount > CONFIG.MIN_TRADE_SIZE && portfolioOptimizer) {
+                        try {
+                            if (getFlag('PORTFOLIO_OPTIMIZER_ENABLED')) {
+                                const health = portfolioOptimizer.evaluatePortfolioHealth(
+                                    portfolio.positions, null, totalValue
+                                );
+                                // Block entry if HHI is too concentrated
+                                if (health.hhi > 0.33) {
+                                    logThought({
+                                        type: 'SKIP', ticker, action: 'PORTFOLIO_TOO_CONCENTRATED',
+                                        confidence: score.compositeScore,
+                                        reason: `HHI=${health.hhi.toFixed(3)} > 0.33 threshold, ${health.overweightPositions.length} overweight positions`,
+                                        regime: currentRegime,
+                                    });
+                                    entryStrategy = null;
+                                    investmentAmount = 0;
+                                }
+                            }
+                        } catch (e) { /* fail open */ }
+                    }
 
                     if (entryStrategy && investmentAmount > CONFIG.MIN_TRADE_SIZE) {
                         const pipelineTier = pipelineResult?.tier || 'N/A';
@@ -1620,6 +1948,15 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         }
     }
 
+    // Kraken minimum order validation
+    if (getActiveExchangeId() === 'kraken' && krakenMinimums) {
+        const minOrder = krakenMinimums.getMinimumOrder(ticker);
+        if (notional < minOrder.minNotional) {
+            addLog(`[KRAKEN] Order $${notional.toFixed(2)} below minimum $${minOrder.minNotional} for ${ticker} — skipping`, 'WARN');
+            return;
+        }
+    }
+
     addLog(`Triggering BUY for ${ticker} @ ${price}. Reason: [${strategy}] ${reason}`, 'BUY');
 
     try {
@@ -1627,20 +1964,58 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         const fees = getActiveFees();
 
         if (botState.tradingMode === 'SIMULATION') {
-            // Simulation: use current price + fee, no exchange call
-            avgPrice = price;
-            quantity = notional / price;
+            // Simulation: synthetic slippage model (conservative estimate)
+            // Small orders on major pairs: ~0.01-0.05%, large orders on altcoins: up to 0.2%
+            const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(ticker);
+            const baseSlippageBps = isMajor ? 2 : 8; // 0.02% majors, 0.08% alts
+            const sizeMultiplier = Math.min(3, notional / 100); // scales up for larger orders
+            const slippagePct = (baseSlippageBps * Math.max(1, sizeMultiplier)) / 10000 * 100;
+            avgPrice = price * (1 + slippagePct / 100);
+            quantity = notional / avgPrice;
         } else {
-            // Real: smart order routing (limit vs market based on spread)
+            // Real: smart order routing with order book slippage estimation
             const adapter = getExchangeAdapter();
             let usedLimit = false;
             let partialFillQty = 0;
             let partialFillCost = 0;
 
+            // Fetch order book for slippage estimation + adaptive limit pricing
+            let orderBook = null;
+            let estimatedSlippage = null;
+            let adaptiveLimitPrice = price * (1 + 0.0001); // fallback: +0.01%
+            try {
+                orderBook = await withTimeout(adapter.getOrderBook(ticker, 20), 5000, 'getOrderBook');
+                if (orderBook && orderBook.asks && orderBook.asks.length > 0) {
+                    const estQty = notional / price;
+                    estimatedSlippage = optimizeEntryExit(orderBook, 'BUY', estQty);
+
+                    if (estimatedSlippage && estimatedSlippage.slippagePercent > 1.0) {
+                        addLog(`[ORDER-BOOK] Skipping ${ticker}: estimated slippage ${estimatedSlippage.slippagePercent.toFixed(3)}% exceeds 1% threshold`, 'WARN');
+                        return { success: false, slippageRejected: true };
+                    }
+                    if (!estimatedSlippage?.isLiquiditySufficient) {
+                        addLog(`[ORDER-BOOK] Skipping ${ticker}: insufficient order book depth for $${notional.toFixed(2)}`, 'WARN');
+                        return { success: false, slippageRejected: true };
+                    }
+                    // Adaptive limit price: best ask + 30% of spread (tighter than market, wider than book)
+                    const bestBid = parseFloat(orderBook.bids[0]?.[0] || 0);
+                    const bestAsk = parseFloat(orderBook.asks[0]?.[0] || 0);
+                    if (bestBid > 0 && bestAsk > 0) {
+                        const spread = bestAsk - bestBid;
+                        adaptiveLimitPrice = bestAsk + spread * 0.3;
+                    }
+                    if (estimatedSlippage) {
+                        addLog(`[ORDER-BOOK] ${ticker}: est. slippage ${estimatedSlippage.slippagePercent.toFixed(3)}%, spread ${bestAsk > 0 && bestBid > 0 ? ((bestAsk - bestBid) / bestBid * 100).toFixed(4) : '?'}%`, 'INFO');
+                    }
+                }
+            } catch (e) {
+                // Order book fetch failed — proceed without it (non-blocking)
+            }
+
             // Try limit order if adapter supports it and spread is wide enough
             if (adapter.getMakerFeePercent && adapter.placeLimitBuyOrder) {
                 try {
-                    const limitPrice = price * (1 + 0.0001); // best bid + 0.01%
+                    const limitPrice = adaptiveLimitPrice; // Use order-book-informed price
                     const vol = notional / limitPrice;
 
                     const limitOrder = await withTimeout(adapter.placeLimitBuyOrder(ticker, limitPrice, vol, botState.sessionId), 20000, 'placeLimitBuyOrder');
@@ -1798,11 +2173,27 @@ const handleSell = async (position, price, reason) => {
         const fees = getActiveFees();
 
         if (botState.tradingMode === 'SIMULATION') {
-            // Simulation: use current price, no exchange call
-            avgPrice = price;
+            // Simulation: synthetic sell-side slippage (selling into bids, slightly worse)
+            const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(position.ticker);
+            const sellNotional = position.quantity * price;
+            const baseSlippageBps = isMajor ? 3 : 10; // sell-side slightly worse than buy
+            const sizeMultiplier = Math.min(3, sellNotional / 100);
+            const slippagePct = (baseSlippageBps * Math.max(1, sizeMultiplier)) / 10000 * 100;
+            avgPrice = price * (1 - slippagePct / 100); // sells slip DOWN
         } else {
-            // Real: route through exchange adapter — must succeed before we update portfolio
+            // Real: route through exchange adapter — log order book slippage estimate
             const adapter = getExchangeAdapter();
+            try {
+                const orderBook = await withTimeout(adapter.getOrderBook(position.ticker, 20), 3000, 'getOrderBook-sell');
+                if (orderBook?.bids?.length > 0) {
+                    const slippageEst = optimizeEntryExit(orderBook, 'SELL', position.quantity);
+                    if (slippageEst) {
+                        addLog(`[ORDER-BOOK] SELL ${position.ticker}: est. slippage ${slippageEst.slippagePercent.toFixed(3)}%${slippageEst.isLiquiditySufficient ? '' : ' (INSUFFICIENT DEPTH)'}`, 'INFO');
+                    }
+                }
+            } catch (e) {
+                // Non-blocking — proceed with sell regardless
+            }
             const orderResult = await withTimeout(adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs), 20000, 'placeSellOrder');
             avgPrice = parseFloat(orderResult.avgPrice) || price;
         }
@@ -1814,6 +2205,7 @@ const handleSell = async (position, price, reason) => {
         // Update portfolio AFTER successful sell (not before, so failed sells don't orphan positions)
         portfolio.cash += (position.quantity * avgPrice) - sellFee;
         delete portfolio.positions[position.ticker];
+        exitLevelCache.delete(position.ticker); // Clean RT exit cache
 
         // Clean up profit method internal state for this ticker
         cleanupProfitMethodState(position.ticker, position.entryStrategy);
@@ -1925,26 +2317,11 @@ const logPublicIp = async () => {
 
 const updateAvailableTickers = async () => {
     try {
-        // Try active exchange adapter first
         const activeExchange = getActiveExchangeId();
-        let instruments = [];
-
-        if (activeExchange !== 'crypto.com') {
-            try {
-                const adapter = getExchangeAdapter(activeExchange);
-                const adapterResult = await adapter.getInstruments();
-                // Adapters may return { data: [...] } or a plain array
-                instruments = Array.isArray(adapterResult) ? adapterResult : (adapterResult?.data || adapterResult?.instruments || []);
-            } catch (e) {
-                console.warn('[Tickers] Adapter getInstruments failed, falling back to Crypto.com:', e.message);
-            }
-        }
-
-        // Fallback to Crypto.com API
-        if (!Array.isArray(instruments) || instruments.length === 0) {
-            const result = await makePublicRequest('public/get-instruments');
-            instruments = result.instruments || result.data || [];
-        }
+        const adapter = getExchangeAdapter();
+        const adapterResult = await adapter.getInstruments();
+        // Adapters may return { data: [...] } or a plain array
+        const instruments = Array.isArray(adapterResult) ? adapterResult : (adapterResult?.data || adapterResult?.instruments || []);
 
         // Handle both Crypto.com (instrument_name, tradeable) and Kraken (symbol, tradable) field names
         availableTickers = instruments
@@ -1970,7 +2347,7 @@ const updateAvailableTickers = async () => {
             console.log(`[Tickers] Updated: ${availableTickers.length} tickers from ${activeExchange}`);
         }
     } catch (error) {
-        console.error('Ticker update failed:', error.message);
+        console.warn(`[Tickers] ${getActiveExchangeId()} getInstruments failed: ${error.message} — keeping ${availableTickers.length} existing tickers`);
     }
 };
 
@@ -2156,6 +2533,15 @@ const startServer = async () => {
     initJournalTable();
     initTelegram();
 
+    // Validate exchange credentials at startup
+    if (getActiveExchangeId() === 'kraken') {
+        if (!process.env.KRAKEN_API_KEY || !process.env.KRAKEN_SECRET) {
+            console.error('[Server] FATAL: Kraken mode requires KRAKEN_API_KEY and KRAKEN_SECRET env vars');
+            process.exit(1);
+        }
+        console.log('[Server] Kraken mode: credentials verified');
+    }
+
     // Restore previous session state before anything else
     const restoredState = restoreFullState();
     if (restoredState) {
@@ -2232,9 +2618,10 @@ const startServer = async () => {
         }
     }
 
-    // Initialize WebSocket for the active exchange
+    // Initialize WebSocket for the active exchange — subscribe to all quality tickers
+    // so WS buffer starts filling immediately (avoids REST for 1m data once buffer is warm)
     const FALLBACK_TICKERS = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
-    const wsTickers = availableTickers.length > 0 ? availableTickers : FALLBACK_TICKERS;
+    const wsTickers = [...new Set([...QUALITY_TICKERS, ...(availableTickers.length > 0 ? availableTickers : FALLBACK_TICKERS)])];
     initExchangeWebSocket(wsTickers, broadcastToFrontend);
 
     setInterval(updateAvailableTickers, CONFIG.TICKER_REFRESH_MS);

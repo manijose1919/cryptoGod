@@ -76,4 +76,9 @@ export class BaseExchangeAdapter {
     async getOrderStatus(orderId, sessionId) {
         throw new Error('getOrderStatus() not supported by this exchange');
     }
+
+    /** Fetch order book depth. Returns {bids: [[price, qty, count], ...], asks: [...]} */
+    async getOrderBook(ticker, depth = 10) {
+        throw new Error('getOrderBook() not supported by this exchange');
+    }
 }

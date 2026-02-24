@@ -29,22 +29,8 @@ export default function createAuthRouter(ctx) {
             const { apiKey, secretKey } = req.body;
 
             const sessionId = ctx.SessionManager.createSession(apiKey, secretKey);
-            let balanceResult = await ctx.makeSignedRequest('private/user-balance', {}, sessionId);
-
-            const dataArray = balanceResult?.data || [];
-            const topLevel = Array.isArray(dataArray) && dataArray.length > 0 ? dataArray[0] : dataArray;
-
-            let cashBalance = 0;
-            const holdings = {};
-            const positionBalances = topLevel?.position_balances || [];
-
-            for (const pos of positionBalances) {
-                const currency = pos.instrument_name;
-                const qty = parseFloat(pos.quantity || '0');
-                if (qty <= 0) continue;
-                if (currency === 'USD' || currency === 'USDC') cashBalance += qty;
-                else holdings[currency] = { quantity: qty, usdValue: 0 };
-            }
+            const adapter = ctx.getExchangeAdapter();
+            const { cashBalance, holdings } = await adapter.getBalance(sessionId);
 
             const totalBalance = cashBalance;
             ctx.portfolio.cash = cashBalance;

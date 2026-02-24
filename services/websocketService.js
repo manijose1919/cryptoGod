@@ -27,7 +27,7 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 100; // Increased for 24/7 operation
 const RECONNECT_BASE_MS = 5000;     // Start at 5s
 const RECONNECT_MAX_MS = 60000;     // Cap at 60s
-const HEARTBEAT_INTERVAL_MS = 15000;
+const HEARTBEAT_INTERVAL_MS = 10000;  // Reduced from 15s for faster disconnect detection
 const WS_URL = 'wss://stream.crypto.com/exchange/v1/market';
 
 // Real-time candle buffer: ticker -> candles array
@@ -36,6 +36,12 @@ const MAX_BUFFERED_CANDLES = 200;
 
 // Latest trade prices
 const latestPrices = new Map();
+
+// Latency tracking
+let lastHeartbeatSentAt = 0;
+let latencyMs = 0;
+const latencyHistory = [];  // Rolling window of last 100 latency measurements
+const MAX_LATENCY_HISTORY = 100;
 
 // ============================================
 // CONNECTION MANAGEMENT
@@ -120,8 +126,9 @@ function scheduleReconnect() {
 
 function sendHeartbeat() {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    lastHeartbeatSentAt = Date.now();
     ws.send(JSON.stringify({
-      id: Date.now(),
+      id: lastHeartbeatSentAt,
       method: 'public/heartbeat',
     }));
   }
@@ -145,6 +152,14 @@ function sendSubscribe(channels) {
 function handleMessage(msg) {
   // Heartbeat response
   if (msg.method === 'public/heartbeat') {
+    // Track latency from heartbeat round-trip
+    if (lastHeartbeatSentAt > 0) {
+      latencyMs = Date.now() - lastHeartbeatSentAt;
+      latencyHistory.push(latencyMs);
+      if (latencyHistory.length > MAX_LATENCY_HISTORY) {
+        latencyHistory.shift();
+      }
+    }
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({
         id: msg.id,
@@ -343,6 +358,9 @@ export function isConnected() {
  * Get WebSocket status info
  */
 export function getWebSocketStatus() {
+  const avgLatency = latencyHistory.length > 0
+    ? latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length
+    : 0;
   return {
     connected,
     subscriptions: subscriptions.size,
@@ -352,6 +370,9 @@ export function getWebSocketStatus() {
     ),
     reconnectAttempts,
     latestPrices: Object.fromEntries(latestPrices),
+    latencyMs,
+    avgLatencyMs: Math.round(avgLatency),
+    latencySamples: latencyHistory.length,
   };
 }
 
