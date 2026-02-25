@@ -1230,7 +1230,7 @@ async function checkTickExit(ticker, price) {
     if (exitReason && !isStopLoss) {
         const fees = getActiveFees();
         const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(ticker);
-        const estSlippagePct = isMajor ? 0.03 : 0.10; // % slippage estimate
+        const estSlippagePct = isMajor ? 0.05 : 0.15; // % slippage estimate (Kraken has wider spreads)
         const estExitPrice = price * (1 - estSlippagePct / 100); // sells slip down
         const sellFee = estExitPrice * position.quantity * fees.perSide;
         const buyFee = position.openPrice * position.quantity * fees.perSide;
