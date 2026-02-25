@@ -221,6 +221,27 @@ export function detectCandlestickPatterns(candles: Candle[]): CandlestickPattern
     });
   }
 
+  // Fix #25 (Tier 3): Volume confirmation for reversal patterns
+  // Require volume > 1.5x average for reversal patterns; penalize low-volume patterns
+  const avgVolume20 = candles.slice(-20).reduce((s, x) => s + x.volume, 0) / Math.max(1, candles.slice(-20).length);
+  const currentVolume = c.volume;
+  const volumeRatio = avgVolume20 > 0 ? currentVolume / avgVolume20 : 1;
+
+  const reversalPatterns = ['HAMMER', 'INVERTED_HAMMER', 'BULLISH_ENGULFING', 'BEARISH_ENGULFING',
+    'MORNING_STAR', 'EVENING_STAR', 'PIERCING_LINE'];
+
+  for (const pattern of patterns) {
+    if (reversalPatterns.includes(pattern.name)) {
+      if (volumeRatio >= 1.5) {
+        // Strong volume confirms the reversal — boost strength
+        pattern.strength = Math.min(100, pattern.strength * 1.15);
+      } else if (volumeRatio < 0.8) {
+        // Low volume on reversal pattern — likely noise, penalize heavily
+        pattern.strength = Math.max(10, pattern.strength * 0.6);
+      }
+    }
+  }
+
   return patterns;
 }
 
@@ -400,16 +421,26 @@ export function analyzeDipBuy(candles: Candle[]): DipBuySignal {
   // Recovery started = price bouncing from low
   const recoveryStarted = price > prevPrice && price > recentLowPrice * 1.001;
 
-  // RSI proxy: count how many of last 14 candles were down
-  const downCandles = candles.slice(-14).filter(c => c.close < c.open).length;
-  const oversold = downCandles >= 9; // 9+ of 14 candles bearish = oversold
+  // Fix #19 (Tier 3): Replace candle-counting RSI proxy with actual RSI calculation
+  const closes14 = candles.slice(-15).map(c => c.close);
+  let rsi14 = 50;
+  if (closes14.length >= 15) {
+    const changes = [];
+    for (let i = 1; i < closes14.length; i++) changes.push(closes14[i] - closes14[i - 1]);
+    const gains = changes.map(c => Math.max(c, 0));
+    const losses = changes.map(c => Math.max(-c, 0));
+    const avgGain = gains.reduce((a, b) => a + b, 0) / 14;
+    const avgLoss = losses.reduce((a, b) => a + b, 0) / 14;
+    rsi14 = avgLoss === 0 ? 100 : avgGain === 0 ? 0 : 100 - (100 / (1 + avgGain / avgLoss));
+  }
+  const oversold = rsi14 < 30; // Proper RSI oversold condition
 
   // Score the dip opportunity
   let entryScore = 0;
   if (dipFromHigh > 1) entryScore += Math.min(30, dipFromHigh * 8);  // Deeper dip = better
   if (recoveryStarted) entryScore += 25;
   if (volumeConfirmed) entryScore += 20;
-  if (oversold) entryScore += 15;
+  if (oversold) entryScore += 20; // RSI < 30 is stronger signal than candle counting
   if (bounceFromLow > 0.1) entryScore += 10;
 
   const isDip = dipFromHigh > 0.5 && entryScore > 30;
@@ -579,8 +610,9 @@ export function getSurgeTradingDecision(candles: Candle[]): SurgeTradingDecision
                        bearishPatterns.reduce((s, p) => s + p.strength, 0);
 
   // Priority 1: DIP BUY - from surge detection or dip analysis
-  if (surge.detected && surge.type === 'DIP_BUY' && surge.confidence > 40) {
-    const trendBoost = trend.direction !== 'STRONG_DOWN' ? 10 : -20;
+  // Fix #19 (Tier 3): Hard block DIP_BUY in STRONG_DOWN trends to avoid catching falling knives
+  if (surge.detected && surge.type === 'DIP_BUY' && surge.confidence > 40 && trend.direction !== 'STRONG_DOWN') {
+    const trendBoost = trend.direction === 'DOWN' ? -10 : 10; // Penalize DOWN, not just STRONG_DOWN
     const patternBoost = bullishPatterns.length > 0 ? 15 : 0;
     const confidence = Math.min(95, surge.confidence + trendBoost + patternBoost);
 
@@ -599,9 +631,9 @@ export function getSurgeTradingDecision(candles: Candle[]): SurgeTradingDecision
     };
   }
 
-  // Priority 1b: DIP BUY from dip analysis
-  if (dip.isDip && dip.entryScore > 40 && dip.recoveryStarted) {
-    const trendBoost = trend.direction !== 'STRONG_DOWN' ? 10 : -20;
+  // Priority 1b: DIP BUY from dip analysis (Fix #19: block in STRONG_DOWN)
+  if (dip.isDip && dip.entryScore > 40 && dip.recoveryStarted && trend.direction !== 'STRONG_DOWN') {
+    const trendBoost = trend.direction === 'DOWN' ? -10 : 10;
     const patternBoost = bullishPatterns.length > 0 ? 15 : 0;
     const confidence = Math.min(95, dip.entryScore + trendBoost + patternBoost);
 

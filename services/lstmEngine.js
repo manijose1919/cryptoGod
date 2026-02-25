@@ -507,7 +507,12 @@ class LSTMNetwork {
 
     const totalN = sequences.length;
     const H = this.hiddenSize;
-    const maxNorm = 3.0; // Tightened from 5.0 to prevent gradient instability
+    const maxNorm = 2.0; // Fix #20 (Tier 3): Tightened from 3.0 to 2.0 for better stability
+
+    // Fix #20 (Tier 3): Momentum buffers for Adam-style updates on dense layer
+    const momentumBeta = 0.9;
+    const velocityWd = new Float64Array(H);
+    let velocityBd = 0;
 
     // --- Train/Validation/Test Split (60/20/20, chronological) ---
     // Chronological split prevents look-ahead bias in time-series data
@@ -572,10 +577,13 @@ class LSTMNetwork {
 
         // Apply gradients with scheduled learning rate
         this.cell.applyGradients(cellGrads, currentLr);
+        // Fix #20 (Tier 3): Momentum-based updates for dense layer (reduces oscillation)
         for (let i = 0; i < H; i++) {
-          this.Wd[i] -= currentLr * dWd[i];
+          velocityWd[i] = momentumBeta * velocityWd[i] + (1 - momentumBeta) * dWd[i];
+          this.Wd[i] -= currentLr * velocityWd[i];
         }
-        this.bd -= currentLr * dbd;
+        velocityBd = momentumBeta * velocityBd + (1 - momentumBeta) * dbd;
+        this.bd -= currentLr * velocityBd;
       }
 
       const avgTrainLoss = epochLoss / N;

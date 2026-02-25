@@ -179,11 +179,12 @@ export function setCurrentBalance(balance) {
  * Uses rolling 50-trade window + drawdown-adaptive fraction
  * Returns recommended position size as fraction of portfolio (0 to 1)
  */
-export function calculateKellyFraction(minTrades = 20) {
+export function calculateKellyFraction(minTrades = 50) {
+  // Fix #21 (Tier 3): Raised minimum from 20→50 trades for reliable Kelly estimates
   const completedTrades = tradeHistory.filter(t => t.pnl !== 0);
 
-  // Use rolling 50-trade window for more responsive Kelly
-  const recentTrades = completedTrades.slice(-50);
+  // Use rolling 100-trade window for more stable Kelly (was 50)
+  const recentTrades = completedTrades.slice(-100);
 
   if (recentTrades.length < minTrades) {
     return {
@@ -222,10 +223,10 @@ export function calculateKellyFraction(minTrades = 20) {
     }
   }
 
-  // Confidence based on sample size
+  // Fix #21 (Tier 3): Raised confidence thresholds
   let confidence = 'LOW';
-  if (recentTrades.length >= 50) confidence = 'HIGH';
-  else if (recentTrades.length >= 20) confidence = 'MEDIUM';
+  if (recentTrades.length >= 100) confidence = 'HIGH';
+  else if (recentTrades.length >= 50) confidence = 'MEDIUM';
 
   // Cap at 40% max position size, apply drawdown-adaptive multiplier
   const recommended = Math.min(0.40, kellyFull * kellyMultiplier);
@@ -263,27 +264,62 @@ export function getKellyPositionSize(portfolioValue) {
 }
 
 /**
- * Per-strategy Kelly: calculate for a specific strategy only
+ * Fix #28 (Tier 3): Per-strategy Kelly with exponential decay weighting
+ * Recent trades matter more than old ones. Different strategies have different
+ * R:R profiles so a single global Kelly is suboptimal.
  */
 export function getStrategyKelly(strategy, portfolioValue) {
   const stratTrades = tradeHistory.filter(t => t.strategy === strategy && t.pnl !== 0);
-  if (stratTrades.length < 10) {
-    return { amount: portfolioValue * 0.05, fraction: 0.05, confidence: 'LOW' };
+  // Raised minimum from 10→30 for more reliable per-strategy estimates
+  if (stratTrades.length < 30) {
+    return { amount: portfolioValue * 0.05, fraction: 0.05, confidence: 'LOW', trades: stratTrades.length };
   }
 
-  const wins = stratTrades.filter(t => t.pnl > 0);
-  const losses = stratTrades.filter(t => t.pnl < 0);
-  const winRate = wins.length / stratTrades.length;
-  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 1;
+  // Use last 80 trades for the strategy
+  const recentTrades = stratTrades.slice(-80);
+
+  // Exponential decay weighting: recent trades get higher weight
+  // decay factor 0.97 means trade from 30 ago has ~40% weight of latest
+  const decayFactor = 0.97;
+  let weightedWins = 0;
+  let weightedLosses = 0;
+  let weightedWinPnl = 0;
+  let weightedLossPnl = 0;
+  let totalWeight = 0;
+
+  for (let i = 0; i < recentTrades.length; i++) {
+    const weight = Math.pow(decayFactor, recentTrades.length - 1 - i);
+    totalWeight += weight;
+    if (recentTrades[i].pnl > 0) {
+      weightedWins += weight;
+      weightedWinPnl += recentTrades[i].pnl * weight;
+    } else {
+      weightedLosses += weight;
+      weightedLossPnl += Math.abs(recentTrades[i].pnl) * weight;
+    }
+  }
+
+  const winRate = totalWeight > 0 ? weightedWins / totalWeight : 0.5;
+  const avgWin = weightedWins > 0 ? weightedWinPnl / weightedWins : 0;
+  const avgLoss = weightedLosses > 0 ? weightedLossPnl / weightedLosses : 1;
+
   const b = avgLoss > 0 ? avgWin / avgLoss : 1;
-  const kellyHalf = Math.max(0, (b * winRate - (1 - winRate)) / b) / 2;
+  const kellyFull = Math.max(0, (b * winRate - (1 - winRate)) / b);
+  // Use half-Kelly for safety (full Kelly is too aggressive)
+  const kellyHalf = kellyFull / 2;
   const recommended = Math.min(0.25, kellyHalf);
+
+  let confidence = 'LOW';
+  if (recentTrades.length >= 60) confidence = 'HIGH';
+  else if (recentTrades.length >= 30) confidence = 'MEDIUM';
 
   return {
     amount: portfolioValue * recommended,
     fraction: recommended,
-    confidence: stratTrades.length >= 20 ? 'HIGH' : 'MEDIUM',
+    confidence,
+    trades: recentTrades.length,
+    winRate: (winRate * 100).toFixed(1) + '%',
+    payoffRatio: b.toFixed(2),
   };
 }
 

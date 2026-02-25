@@ -15,8 +15,8 @@
 const SCAN_INTERVAL_MS = 60000; // Scan every 60 seconds
 const SCAN_TIMEFRAMES = ['5m', '15m', '1h']; // Multiple timeframes for confirmation
 const SIGNAL_COOLDOWN_MS = 300000; // 5 min cooldown per ticker to avoid spam
-const MIN_SCORE_BUY = 5;  // Minimum score to trigger BUY (raised from 3 to reduce false positives)
-const MIN_SCORE_SELL = 5; // Minimum score to trigger SELL
+const MIN_SCORE_BUY = 8;  // Fix #21 (Tier 3): Raised from 5→8 to reduce false positives
+const MIN_SCORE_SELL = 8; // Fix #21: Raised from 5→8
 const MAX_SIGNALS = 100;
 
 const TICKERS = [
