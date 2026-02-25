@@ -486,6 +486,72 @@ export function calculateVWAP(candles: Candle[]): number[] {
 
 
 // ============================================
+// Fix #22 (Tier 3): STOCHASTIC RSI
+// ============================================
+
+/**
+ * Stochastic RSI - Momentum confirmation indicator
+ * Applies stochastic oscillator formula to RSI values (not price)
+ * More sensitive than raw RSI — catches momentum shifts earlier
+ * Returns 0-100 scale: <20 = oversold, >80 = overbought
+ */
+export function calculateStochRSI(candles: Candle[], rsiPeriod: number = 14, stochPeriod: number = 14, kSmooth: number = 3, dSmooth: number = 3): { k: number[]; d: number[] } {
+    const closes = candles.map(c => c.close);
+    const rsiValues = calculateRsi(closes, rsiPeriod);
+
+    // Apply stochastic formula to RSI: (RSI - lowest RSI) / (highest RSI - lowest RSI) * 100
+    const stochK: number[] = new Array(candles.length).fill(50);
+    for (let i = stochPeriod - 1; i < rsiValues.length; i++) {
+        const window = rsiValues.slice(i - stochPeriod + 1, i + 1).filter(v => !isNaN(v));
+        if (window.length < 2) continue;
+        const minRsi = Math.min(...window);
+        const maxRsi = Math.max(...window);
+        stochK[i] = maxRsi === minRsi ? 50 : ((rsiValues[i] - minRsi) / (maxRsi - minRsi)) * 100;
+    }
+
+    // Smooth %K with SMA
+    const k = sma(stochK, kSmooth).map(v => isNaN(v) ? 50 : v);
+    // %D is SMA of %K
+    const d = sma(k, dSmooth).map(v => isNaN(v) ? 50 : v);
+
+    return { k, d };
+}
+
+/**
+ * Delta Volume - Buy volume minus sell volume trend
+ * Classifies each candle's volume as buy or sell based on close position
+ * Positive delta = buying pressure, negative = selling pressure
+ * Returns normalized series (0-100 scale, 50 = neutral)
+ */
+export function calculateDeltaVolume(candles: Candle[], period: number = 14): number[] {
+    if (candles.length < period) return new Array(candles.length).fill(50);
+
+    // Classify volume: if close > open, volume is "buy"; else "sell"
+    // Proportion is based on close position within range
+    const deltas: number[] = candles.map(c => {
+        const range = c.high - c.low;
+        if (range === 0) return 0;
+        // Buy proportion: how close the close is to the high
+        const buyProportion = (c.close - c.low) / range;
+        const buyVol = c.volume * buyProportion;
+        const sellVol = c.volume * (1 - buyProportion);
+        return buyVol - sellVol;
+    });
+
+    // Smooth with EMA for trend
+    const smoothed = ema(deltas, period);
+
+    // Normalize to 0-100: find max absolute value in recent window for scaling
+    const recentAbs = smoothed.slice(-50).filter(v => !isNaN(v)).map(v => Math.abs(v));
+    const maxAbs = recentAbs.length > 0 ? Math.max(...recentAbs, 0.001) : 1;
+
+    return smoothed.map(v => {
+        if (isNaN(v)) return 50;
+        return Math.max(0, Math.min(100, 50 + (v / maxAbs) * 50));
+    });
+}
+
+// ============================================
 // EXISTING INDICATORS
 // ============================================
 
@@ -588,14 +654,11 @@ function calculateDivergenceInternal(candles: Candle[]): DivergenceData {
     const closes = candles.map(c => c.close);
     const rsiValues = calculateRsi(closes, INDICATOR_PARAMS.RSI_PERIOD);
 
-    // Optimized single-pass peak detection
-    // Only keep last 2 highs and lows (all we need for divergence)
-    let lastHigh: { index: number; value: number } | null = null;
-    let prevHigh: { index: number; value: number } | null = null;
-    let lastLow: { index: number; value: number } | null = null;
-    let prevLow: { index: number; value: number } | null = null;
+    // Fix #26 (Tier 3): Sliding window peak detection — collect ALL local peaks
+    // instead of only the last 2, to catch intermediate divergences
+    const allHighs: { index: number; value: number }[] = [];
+    const allLows: { index: number; value: number }[] = [];
 
-    // Single pass through lookback window
     for (let i = startIdx + 2; i < endIdx - 2; i++) {
         const price = candles[i].close;
         const p1 = candles[i - 1].close;
@@ -603,15 +666,11 @@ function calculateDivergenceInternal(candles: Candle[]): DivergenceData {
         const n1 = candles[i + 1].close;
         const n2 = candles[i + 2].close;
 
-        // Check for local high
         if (price > p1 && price > p2 && price > n1 && price > n2) {
-            prevHigh = lastHigh;
-            lastHigh = { index: i, value: price };
+            allHighs.push({ index: i, value: price });
         }
-        // Check for local low
         if (price < p1 && price < p2 && price < n1 && price < n2) {
-            prevLow = lastLow;
-            lastLow = { index: i, value: price };
+            allLows.push({ index: i, value: price });
         }
     }
 
@@ -633,25 +692,52 @@ function calculateDivergenceInternal(candles: Candle[]): DivergenceData {
     let strength = 0;
     let confidence = 0;
 
-    // Bullish divergence: price lower lows, RSI higher lows
-    if (prevLow && lastLow && lastLow.value < prevLow.value) {
-        const rsiAtPrevLow = rsiValues[prevLow.index];
-        const rsiAtLastLow = rsiValues[lastLow.index];
-        if (rsiAtLastLow > rsiAtPrevLow) {
-            divergenceType = 'bullish';
-            strength = Math.abs(rsiAtLastLow - rsiAtPrevLow);
-            confidence = Math.min(100, strength * 3 + (lastRsi < 40 ? 20 : 0));
+    // Bullish divergence: scan ALL low pairs (not just last 2)
+    // Look for any pair where price makes lower low but RSI makes higher low
+    let bestBullishConf = 0;
+    for (let i = 0; i < allLows.length - 1; i++) {
+        for (let j = i + 1; j < allLows.length; j++) {
+            const prevLow = allLows[i];
+            const lastLow = allLows[j];
+            if (lastLow.value < prevLow.value) {
+                const rsiAtPrev = rsiValues[prevLow.index];
+                const rsiAtLast = rsiValues[lastLow.index];
+                if (rsiAtLast > rsiAtPrev) {
+                    const s = Math.abs(rsiAtLast - rsiAtPrev);
+                    const c = Math.min(100, s * 3 + (rsiAtLast < 40 ? 20 : 0));
+                    if (c > bestBullishConf) {
+                        divergenceType = 'bullish';
+                        strength = s;
+                        confidence = c;
+                        bestBullishConf = c;
+                    }
+                }
+            }
         }
     }
 
-    // Bearish divergence: price higher highs, RSI lower highs
-    if (divergenceType === 'none' && prevHigh && lastHigh && lastHigh.value > prevHigh.value) {
-        const rsiAtPrevHigh = rsiValues[prevHigh.index];
-        const rsiAtLastHigh = rsiValues[lastHigh.index];
-        if (rsiAtLastHigh < rsiAtPrevHigh) {
-            divergenceType = 'bearish';
-            strength = Math.abs(rsiAtPrevHigh - rsiAtLastHigh);
-            confidence = Math.min(100, strength * 3 + (lastRsi > 60 ? 20 : 0));
+    // Bearish divergence: scan ALL high pairs
+    let bestBearishConf = 0;
+    if (divergenceType === 'none') {
+        for (let i = 0; i < allHighs.length - 1; i++) {
+            for (let j = i + 1; j < allHighs.length; j++) {
+                const prevHigh = allHighs[i];
+                const lastHigh = allHighs[j];
+                if (lastHigh.value > prevHigh.value) {
+                    const rsiAtPrev = rsiValues[prevHigh.index];
+                    const rsiAtLast = rsiValues[lastHigh.index];
+                    if (rsiAtLast < rsiAtPrev) {
+                        const s = Math.abs(rsiAtPrev - rsiAtLast);
+                        const c = Math.min(100, s * 3 + (rsiAtLast > 60 ? 20 : 0));
+                        if (c > bestBearishConf) {
+                            divergenceType = 'bearish';
+                            strength = s;
+                            confidence = c;
+                            bestBearishConf = c;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1003,8 +1089,16 @@ export function calculateSignalScore(candles: Candle[]): SignalScore {
         divergenceSignal = -divergence.confidence * 0.5;
     }
 
-    // Weight the signals
-    const weights = {
+    // Fix #17 (Tier 3): Correlation-discounted signal weighting
+    // TC, Momentum, and Confluence all derive heavily from EMA-based calculations.
+    // When all 3 correlated signals agree, apply a correlation discount to prevent
+    // triple-counting the same underlying price trend information.
+    const emaCorrelatedSignals = [trendSignal, confluenceSignal, momentumSignal];
+    const emaCorrelatedSigns = emaCorrelatedSignals.map(s => Math.sign(s));
+    const allSameDirection = emaCorrelatedSigns.every(s => s === emaCorrelatedSigns[0]) && emaCorrelatedSigns[0] !== 0;
+
+    // Base weights
+    let weights = {
         trend: 0.25,
         whale: 0.20,
         confluence: 0.20,
@@ -1012,6 +1106,19 @@ export function calculateSignalScore(candles: Candle[]): SignalScore {
         breakout: 0.10,
         divergence: 0.10
     };
+
+    if (allSameDirection) {
+        // When EMA-correlated signals all agree, discount them and boost independent signals
+        // This prevents the same underlying EMA trend from getting 60% weight (0.25+0.20+0.15)
+        weights = {
+            trend: 0.20,       // -0.05 (primary EMA signal, keep strongest)
+            whale: 0.25,       // +0.05 (volume-based, independent)
+            confluence: 0.12,  // -0.08 (most correlated with TC)
+            momentum: 0.10,    // -0.05 (EMA-derived)
+            breakout: 0.18,    // +0.08 (volatility-based, independent)
+            divergence: 0.15   // +0.05 (RSI divergence, partially independent)
+        };
+    }
 
     const overall =
         trendSignal * weights.trend +
@@ -1025,7 +1132,9 @@ export function calculateSignalScore(candles: Candle[]): SignalScore {
     const allSignals = [trendSignal, whaleSignal, confluenceSignal, momentumSignal, breakoutSignal, divergenceSignal];
     const signalSigns = allSignals.map(s => Math.sign(s));
     const agreementCount = signalSigns.filter(s => s === Math.sign(overall)).length;
-    const confidence = (agreementCount / allSignals.length) * 100;
+    let confidence = (agreementCount / allSignals.length) * 100;
+    // If all 6 agree but 3 are correlated, effective independent agreement is 4 not 6
+    if (allSameDirection && agreementCount === 6) confidence *= 0.85;
 
     return {
         overall: Math.max(-100, Math.min(100, overall)),

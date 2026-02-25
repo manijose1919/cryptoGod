@@ -149,7 +149,7 @@ class TradePredictor:
         self._save()
 
     def _online_update(self, features: np.ndarray, label: int):
-        """Incremental update using SGDClassifier for real-time learning."""
+        """Fix #24 (Tier 3): Improved online learning with proper initialization and decay."""
         from sklearn.linear_model import SGDClassifier
         X = features.reshape(1, -1)
 
@@ -160,21 +160,30 @@ class TradePredictor:
                 alpha=0.001,
                 random_state=42,
                 warm_start=True,
+                learning_rate="invscaling",  # Decaying LR for stability
+                eta0=0.01,
+                power_t=0.25,
             )
-            # Need to see all classes before partial_fit
-            if len(self.y_history) < 5:
+            # Fix #24: Need at least 30 samples (was 5) for reliable scaler + model init
+            if len(self.y_history) < 30:
                 return
-            X_init = np.array(self.X_history[-5:])
-            y_init = np.array(self.y_history[-5:])
+            # Use last 30 samples for initialization (more reliable scaler)
+            X_init = np.array(self.X_history[-30:])
+            y_init = np.array(self.y_history[-30:])
             self._online_scaler.fit(X_init)
             X_init_scaled = self._online_scaler.transform(X_init)
             self._online_model.partial_fit(X_init_scaled, y_init, classes=[0, 1, 2])
-            self._online_samples = 5
+            self._online_samples = 30
             return
 
         try:
-            # Incremental scaling update
-            self._online_scaler.partial_fit(X)
+            # Fix #24: Rolling window scaler update - refit on last 100 samples periodically
+            if self._online_samples % 20 == 0 and len(self.X_history) >= 100:
+                X_recent = np.array(self.X_history[-100:])
+                self._online_scaler.fit(X_recent)
+            else:
+                self._online_scaler.partial_fit(X)
+
             X_scaled = self._online_scaler.transform(X)
             self._online_model.partial_fit(X_scaled, [label])
             self._online_samples += 1

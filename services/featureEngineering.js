@@ -11,6 +11,56 @@ function clamp(value, min, max) {
 
 export const FEATURE_COUNT = 103;
 
+// Fix #27 (Tier 3): Rolling median tracker for feature imputation
+// Replaces zero-fill for missing features with historical median values,
+// so models can distinguish "data unavailable" from "actual zero".
+const _featureMedianHistory = new Map(); // featureIndex → last 50 values
+const _featureMedianCache = new Map();   // featureIndex → cached median
+
+function updateFeatureMedian(index, value) {
+  if (value === 0 || isNaN(value)) return; // Don't track zero/missing values
+  let history = _featureMedianHistory.get(index);
+  if (!history) { history = []; _featureMedianHistory.set(index, history); }
+  history.push(value);
+  if (history.length > 50) history.shift();
+  // Update cached median
+  const sorted = [...history].sort((a, b) => a - b);
+  _featureMedianCache.set(index, sorted[Math.floor(sorted.length / 2)]);
+}
+
+function getFeatureMedian(index) {
+  return _featureMedianCache.get(index) || 0;
+}
+
+/**
+ * Fix #27: Replace zero values in optional feature groups with historical medians.
+ * Price/volume/context features keep zeros since they're always available.
+ * Order book, derivatives, sentiment, defi features use median imputation.
+ */
+function imputeMissingFeatures(features) {
+  // Optional feature ranges that may be missing (order book, derivatives, sentiment, defi, on-chain, market intel, exchange)
+  const optionalRanges = [
+    [28, 36],  // order book
+    [36, 42],  // derivatives
+    [42, 50],  // sentiment
+    [50, 55],  // defi
+    [83, 91],  // on-chain
+    [91, 97],  // market intelligence
+    [97, 103], // exchange enrichment
+  ];
+
+  for (const [start, end] of optionalRanges) {
+    for (let i = start; i < end && i < features.length; i++) {
+      if (features[i] !== 0) {
+        updateFeatureMedian(i, features[i]);
+      } else {
+        features[i] = getFeatureMedian(i);
+      }
+    }
+  }
+  return features;
+}
+
 /**
  * Get all 62 feature names in order
  */
@@ -272,6 +322,9 @@ export function buildFeatureVector(ticker, candles, options = {}) {
     } catch (eeErr) {
       while (idx < FEATURE_COUNT) features[idx++] = 0;
     }
+
+    // Fix #27 (Tier 3): Replace zero-fill with median imputation for optional features
+    imputeMissingFeatures(features);
 
     return {
       features,

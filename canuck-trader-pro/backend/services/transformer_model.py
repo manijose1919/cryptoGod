@@ -46,8 +46,8 @@ NUM_LAYERS = 2             # Number of stacked transformer encoder layers
 OUTPUT_CLASSES = 3          # BUY, SELL, HOLD
 
 MAX_BUFFER_SIZE = 2000     # Maximum training sequences held in memory
-MIN_SAMPLES_TO_TRAIN = 20  # Was 100 — start training with less data
-RETRAIN_THRESHOLD = 20     # Was 100 — retrain more often while learning
+MIN_SAMPLES_TO_TRAIN = 200  # Fix #21 (Tier 3): Raised from 20→200 for reliable model training
+RETRAIN_THRESHOLD = 50      # Fix #21: Raised from 20→50 for meaningful incremental updates
 
 ACTION_MAP = {"BUY": 0, "SELL": 1, "HOLD": 2}
 ACTION_NAMES = {0: "BUY", 1: "SELL", 2: "HOLD"}

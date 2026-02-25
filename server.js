@@ -1263,6 +1263,10 @@ async function checkTickExit(ticker, price) {
 // ============================================
 let botLoopRunning = false;
 let botLoopStartTime = 0;
+// Fix #23 (Tier 3): MTF data cache to avoid redundant REST calls
+let _mtfCache5m = { data: null, ts: 0 };
+let _mtfCache15m = { data: null, ts: 0 };
+let _mtfCache1h = { data: null, ts: 0 };
 async function tradingBotLoop() {
     if (!botState.isActive) return;
     if (botLoopRunning) return; // prevent overlapping async iterations
@@ -1337,15 +1341,33 @@ async function tradingBotLoop() {
         }
 
         // --- MULTI-TIMEFRAME DATA (5m, 15m, 1h alongside 1m) ---
+        // Fix #23 (Tier 3): Cache MTF data with TTL matching timeframe period
+        // 5m data cached 4 min, 15m cached 12 min, 1h cached 50 min
+        // Eliminates redundant REST calls every 1.5-5s bot loop
         let mtfDataMap = new Map();
-        let data1hMap = new Map(); // 1h candles for cross-TF momentum check
+        let data1hMap = new Map();
         try {
             const mtfTickers = [...new Set([...positionTickers, ...scanBatch.slice(0, 6)])];
-            const [data5m, data15m, data1h] = await Promise.all([
-                getMultipleMarketData(mtfTickers, '5m'),
-                getMultipleMarketData(mtfTickers, '15m'),
-                getMultipleMarketData(mtfTickers, '1h'),
-            ]);
+            const now = Date.now();
+
+            // Check if cached MTF data is still fresh
+            const mtf5mStale = !_mtfCache5m.ts || (now - _mtfCache5m.ts) > 4 * 60 * 1000;
+            const mtf15mStale = !_mtfCache15m.ts || (now - _mtfCache15m.ts) > 12 * 60 * 1000;
+            const mtf1hStale = !_mtfCache1h.ts || (now - _mtfCache1h.ts) > 50 * 60 * 1000;
+
+            // Only fetch stale timeframes
+            const fetches = [];
+            fetches.push(mtf5mStale ? getMultipleMarketData(mtfTickers, '5m') : Promise.resolve(_mtfCache5m.data));
+            fetches.push(mtf15mStale ? getMultipleMarketData(mtfTickers, '15m') : Promise.resolve(_mtfCache15m.data));
+            fetches.push(mtf1hStale ? getMultipleMarketData(mtfTickers, '1h') : Promise.resolve(_mtfCache1h.data));
+
+            const [data5m, data15m, data1h] = await Promise.all(fetches);
+
+            // Update caches
+            if (mtf5mStale && data5m) { _mtfCache5m = { data: data5m, ts: now }; }
+            if (mtf15mStale && data15m) { _mtfCache15m = { data: data15m, ts: now }; }
+            if (mtf1hStale && data1h) { _mtfCache1h = { data: data1h, ts: now }; }
+
             for (const ticker of mtfTickers) {
                 const candles1m = marketDataMap.get(ticker);
                 const entry5m = data5m.find(d => d.ticker === ticker);
@@ -1814,6 +1836,20 @@ async function tradingBotLoop() {
 
                         if (trend1h === 'BEARISH') {
                             htfAdj = -8; // Reduce composite score by 8 for bearish 1h
+                            // Fix #18 (Tier 3): Hard gate — block non-reversal LONG entries when 1h is bearish
+                            const reversalStrategies = ['REVERSAL', 'DIVERGENCE', 'MEAN_REVERSION'];
+                            if (entryStrategy && !reversalStrategies.includes(entryStrategy)) {
+                                logThought({ type: 'SKIP', ticker, action: 'HTF_1H_BEARISH_GATE',
+                                    confidence: score.compositeScore,
+                                    reason: `1h trend is BEARISH — blocking ${entryStrategy} LONG entry (only reversal strats allowed)`,
+                                    regime: currentRegime });
+                                entryStrategy = null;
+                            }
+                        }
+
+                        // Fix #18 (Tier 3): Require 15m alignment for 5m entries
+                        if (entryStrategy && trend15m === 'BEARISH' && trend1h !== 'BULLISH') {
+                            htfAdj -= 5; // Further penalty when 15m is bearish and 1h isn't bullish
                         }
 
                         // If both 1h AND 15m are bearish, skip entry entirely
