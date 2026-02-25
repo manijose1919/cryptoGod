@@ -115,15 +115,18 @@ export const SIGNAL_THRESHOLDS = {
 } as const;
 
 // ============================================
-// TRADING FEES (Crypto.com Exchange)
+// TRADING FEES (Kraken — primary exchange)
+// Note: Crypto.com was previously primary but Kraken is now the standard.
+// The backend dynamically reads fees from the active exchange adapter,
+// so these constants are used as fallback defaults for frontend/ML.
 // ============================================
 export const TRADING_FEES = {
-    TAKER_FEE_PERCENT: 0.075,      // Crypto.com taker fee per side
-    ROUND_TRIP_FEE_PERCENT: 0.15,  // Total buy + sell fees
-    FEE_BUFFER_PERCENT: 0.10,      // Slippage buffer
-    ESTIMATED_SLIPPAGE_PERCENT: 0.10, // Estimated slippage per trade
-    BID_ASK_SPREAD_PERCENT: 0.05,    // Typical bid-ask spread cost
-    TOTAL_COST_PER_TRADE: 0.30,      // Total: fees + slippage + spread (round trip)
+    TAKER_FEE_PERCENT: 0.26,        // Kraken taker fee per side (base tier)
+    ROUND_TRIP_FEE_PERCENT: 0.52,   // Total buy + sell taker fees
+    FEE_BUFFER_PERCENT: 0.10,       // Slippage buffer
+    ESTIMATED_SLIPPAGE_PERCENT: 0.15, // Kraken typically has wider spreads
+    BID_ASK_SPREAD_PERCENT: 0.08,    // Typical bid-ask spread cost
+    TOTAL_COST_PER_TRADE: 0.75,      // Total: fees + slippage + spread (round trip)
 } as const;
 
 // ============================================

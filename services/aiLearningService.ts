@@ -380,13 +380,12 @@ export function recordTrade(trade: {
   const holdDuration = (trade.exitTime - trade.entryTime) / 60000; // minutes
 
   // Fee-aware outcome classification:
-  // Round-trip fees vary by exchange: Crypto.com ~0.15%, Kraken ~0.52%
-  // Plus estimated slippage of ~0.05-0.10%. A trade is only a true WIN if
-  // the price move exceeds ALL costs. Using 0.20% as dead zone is wrong for
-  // Kraken (0.52% fees alone). Dynamically estimate the break-even threshold.
-  const estimatedRoundTripFeePct = 0.30; // Conservative: covers most exchanges
-  const estimatedSlippagePct = 0.08;     // Typical slippage for mid-cap crypto
-  const breakEvenThreshold = estimatedRoundTripFeePct + estimatedSlippagePct; // ~0.38%
+  // Kraken is the primary exchange: 0.52% round-trip taker fees (0.26% per side).
+  // Plus estimated slippage of ~0.15% (Kraken has wider spreads than Crypto.com).
+  // A trade is only a true WIN if the price move exceeds ALL costs.
+  const estimatedRoundTripFeePct = 0.52; // Kraken taker round-trip
+  const estimatedSlippagePct = 0.15;     // Kraken typical slippage
+  const breakEvenThreshold = estimatedRoundTripFeePct + estimatedSlippagePct; // ~0.67%
   const outcome: 'WIN' | 'LOSS' | 'BREAKEVEN' =
     pnlPercent > breakEvenThreshold ? 'WIN'
     : pnlPercent < -breakEvenThreshold ? 'LOSS'

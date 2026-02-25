@@ -117,8 +117,8 @@ class TradePredictor:
         Fee-aware thresholds: round-trip fees ~0.15-0.52% + slippage ~0.08%.
         A trade is only labeled as profitable if it exceeded ALL costs.
         """
-        # Fee-aware break-even threshold (covers fees + slippage for most exchanges)
-        break_even_pct = 0.38  # ~0.30% round-trip fees + 0.08% slippage
+        # Fee-aware break-even threshold for Kraken (primary exchange)
+        break_even_pct = 0.67  # ~0.52% Kraken round-trip taker fees + 0.15% slippage
 
         if pnl_pct > break_even_pct:
             # Trade was profitable after costs → the action was correct
@@ -731,7 +731,7 @@ class StrategyWeighter:
         Strategies that agreed with a winning trade get boosted.
         Strategies that agreed with a losing trade get penalized.
         """
-        profitable = pnl_pct > 0.38  # Fee-aware: must exceed round-trip fees + slippage
+        profitable = pnl_pct > 0.67  # Kraken fee-aware: must exceed 0.52% fees + 0.15% slippage
 
         for sig in signals:
             name = sig.get("name", "")

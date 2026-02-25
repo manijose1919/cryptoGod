@@ -26,7 +26,7 @@ npx tsc --noEmit
 ## Architecture
 
 ### Two-Process System
-- **Backend** (`server.js`, port 3033): Express server that proxies Crypto.com Exchange API, serves built frontend from `dist/`, runs WebSocket market stream, signal scanner, circuit breaker, and bot loops
+- **Backend** (`server.js`, port 3033): Express server with pluggable exchange adapters (Kraken primary, Crypto.com secondary), serves built frontend from `dist/`, runs WebSocket market stream, signal scanner, circuit breaker, and bot loops
 - **Frontend** (Vite, port 3000 in dev): React 18 + TypeScript SPA with TailwindCSS. Vite proxies `/api` requests to the backend
 
 ### Flat File Structure (no src/ directory)
@@ -50,7 +50,8 @@ Frontend services (`.ts` in `services/`) run in the browser:
 
 Backend services (`.js` in `services/`) run on Node:
 - `database.js` - SQLite via better-sqlite3 (WAL mode, `data/trading.db`)
-- `websocketService.js` - Crypto.com WebSocket market stream
+- `websocketService.js` - Crypto.com WebSocket market stream (secondary)
+- `krakenWebsocketService.js` - Kraken v2 WebSocket market stream (primary)
 - `signalScanner.js` - Auto-scans 10 tickers across timeframes
 - `beastMode.js` - Regime detection, compound multipliers, dynamic targets
 - `circuitBreaker.js` - Loss protection, Kelly criterion
@@ -59,7 +60,7 @@ Backend services (`.js` in `services/`) run on Node:
 - `PaperTrader.js` - Paper trading wrapper for Questrade
 
 ### Backend Routes
-- `/api/market-data` - Candle data from Crypto.com
+- `/api/market-data` - Candle data from active exchange (Kraken primary)
 - `/api/instruments` - Available trading pairs
 - `/api/db/*` - SQLite persistence CRUD (`routes/persistence.js`)
 - `/api/tradingview/*` - Signal injection (`routes/tradingview.js`)
@@ -79,9 +80,12 @@ The `TradingStrategy` type includes: TREND, BREAKOUT, WHALE, CONFLUENCE, MOMENTU
 **Important:** Many backend/service functions only accept the original 7 strategies (TREND through ADAPTIVE). When passing new strategy types to these functions, fall back to ADAPTIVE.
 
 ### Fee-Aware Trading
-- `TRADING_FEES` constant: 0.075% per side, 0.15% round-trip
-- All profit targets must exceed fees
+- **Kraken (primary)**: 0.26% taker per side, 0.52% round-trip; 0.16% maker per side
+- **Crypto.com (secondary)**: 0.075% per side, 0.15% round-trip
+- `TRADING_FEES` constant defaults to Kraken rates; backend uses `getActiveFees()` dynamically
+- All profit targets must exceed fees (min ~0.92% for Kraken taker trades)
 - PnL calculations must account for fees
+- ML models use 0.67% break-even threshold (Kraken fees + slippage)
 
 ### Environment Variables
 - `.env` / `.env.local` - Contains `GEMINI_API_KEY` for AI learning
