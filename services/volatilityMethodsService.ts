@@ -36,7 +36,7 @@ export type VolatilityMethod =
   | 'ROGERS_SATCHELL'; // Rogers-Satchell Volatility
 
 // ============================================
-// VOLATILITY THRESHOLDS (calibrated for crypto)
+// VOLATILITY THRESHOLDS (calibrated for crypto — used as fallback)
 // ============================================
 const VOLATILITY_THRESHOLDS = {
   ATR_PERCENT: { EXTREME: 5, HIGH: 3, MEDIUM: 1.5, LOW: 0.75 },
@@ -46,6 +46,54 @@ const VOLATILITY_THRESHOLDS = {
   GARMAN_KLASS: { EXTREME: 0.07, HIGH: 0.045, MEDIUM: 0.028, LOW: 0.014 },
   ROGERS_SATCHELL: { EXTREME: 0.065, HIGH: 0.042, MEDIUM: 0.026, LOW: 0.013 }
 };
+
+// ============================================
+// Fix #11 (Tier 2): PERCENTILE-BASED VOLATILITY CLASSIFICATION
+// Maintains a rolling history per method and classifies using z-score / percentile
+// rather than fixed thresholds that may not fit current market regime.
+// ============================================
+const VOLATILITY_HISTORY_MAX = 200;
+const volatilityHistory: Map<VolatilityMethod, number[]> = new Map();
+
+function recordVolatilityValue(method: VolatilityMethod, value: number): void {
+  let history = volatilityHistory.get(method);
+  if (!history) {
+    history = [];
+    volatilityHistory.set(method, history);
+  }
+  history.push(value);
+  if (history.length > VOLATILITY_HISTORY_MAX) {
+    history.shift(); // Remove oldest
+  }
+}
+
+function classifyByPercentile(
+  method: VolatilityMethod,
+  value: number,
+  fixedThresholds: { EXTREME: number; HIGH: number; MEDIUM: number; LOW: number }
+): 'EXTREME' | 'HIGH' | 'MEDIUM' | 'LOW' | 'VERY_LOW' {
+  const history = volatilityHistory.get(method);
+  // Need at least 30 samples for meaningful percentile classification
+  if (!history || history.length < 30) {
+    return classifyVolatility(value, fixedThresholds);
+  }
+
+  // Compute percentile rank of current value within history
+  const sorted = [...history].sort((a, b) => a - b);
+  let rank = 0;
+  for (const v of sorted) {
+    if (v <= value) rank++;
+    else break;
+  }
+  const percentile = (rank / sorted.length) * 100;
+
+  // Classify by percentile bands
+  if (percentile >= 95) return 'EXTREME';
+  if (percentile >= 80) return 'HIGH';
+  if (percentile >= 40) return 'MEDIUM';
+  if (percentile >= 15) return 'LOW';
+  return 'VERY_LOW';
+}
 
 // ============================================
 // HELPER FUNCTIONS
@@ -128,7 +176,8 @@ export function calculateATR(candles: Candle[], period: number = 14): Volatility
   const currentPrice = candles[candles.length - 1].close;
   const atrPercent = (atr / currentPrice) * 100;
 
-  const level = classifyVolatility(atrPercent, VOLATILITY_THRESHOLDS.ATR_PERCENT);
+  recordVolatilityValue('ATR', atrPercent);
+  const level = classifyByPercentile('ATR', atrPercent, VOLATILITY_THRESHOLDS.ATR_PERCENT);
   const normalized = normalizeToPercent(atrPercent, VOLATILITY_THRESHOLDS.ATR_PERCENT.EXTREME * 1.5);
 
   return {
@@ -190,7 +239,8 @@ export function calculateStdLogReturns(candles: Candle[], period: number = 20): 
   const variance = squaredDiffs.reduce((a, b) => a + b, 0) / (recentReturns.length - 1);
   const stdDev = Math.sqrt(variance);
 
-  const level = classifyVolatility(stdDev, VOLATILITY_THRESHOLDS.STD_LOG);
+  recordVolatilityValue('STD_LOG_RETURNS', stdDev);
+  const level = classifyByPercentile('STD_LOG_RETURNS', stdDev, VOLATILITY_THRESHOLDS.STD_LOG);
   const normalized = normalizeToPercent(stdDev, VOLATILITY_THRESHOLDS.STD_LOG.EXTREME * 1.5);
 
   return {
@@ -234,7 +284,8 @@ export function calculatePercentRange(candles: Candle[], period: number = 10): V
   // Average the ranges
   const avgRange = percentRanges.reduce((a, b) => a + b, 0) / percentRanges.length;
 
-  const level = classifyVolatility(avgRange, VOLATILITY_THRESHOLDS.PERCENT_RANGE);
+  recordVolatilityValue('PERCENT_RANGE', avgRange);
+  const level = classifyByPercentile('PERCENT_RANGE', avgRange, VOLATILITY_THRESHOLDS.PERCENT_RANGE);
   const normalized = normalizeToPercent(avgRange, VOLATILITY_THRESHOLDS.PERCENT_RANGE.EXTREME * 1.5);
 
   return {
@@ -283,7 +334,8 @@ export function calculateParkinson(candles: Candle[], period: number = 20): Vola
   // Parkinson's formula: sqrt( sum / (4 * n * ln(2)) )
   const parkinson = Math.sqrt(sumSquaredLogHL / (4 * period * Math.LN2));
 
-  const level = classifyVolatility(parkinson, VOLATILITY_THRESHOLDS.PARKINSON);
+  recordVolatilityValue('PARKINSON', parkinson);
+  const level = classifyByPercentile('PARKINSON', parkinson, VOLATILITY_THRESHOLDS.PARKINSON);
   const normalized = normalizeToPercent(parkinson, VOLATILITY_THRESHOLDS.PARKINSON.EXTREME * 1.5);
 
   return {
@@ -340,7 +392,8 @@ export function calculateGarmanKlass(candles: Candle[], period: number = 20): Vo
   // Ensure non-negative under the sqrt
   const gk = Math.sqrt(Math.max(0, term1 - term2));
 
-  const level = classifyVolatility(gk, VOLATILITY_THRESHOLDS.GARMAN_KLASS);
+  recordVolatilityValue('GARMAN_KLASS', gk);
+  const level = classifyByPercentile('GARMAN_KLASS', gk, VOLATILITY_THRESHOLDS.GARMAN_KLASS);
   const normalized = normalizeToPercent(gk, VOLATILITY_THRESHOLDS.GARMAN_KLASS.EXTREME * 1.5);
 
   return {
@@ -392,7 +445,8 @@ export function calculateRogersSatchell(candles: Candle[], period: number = 20):
   // Rogers-Satchell formula
   const rs = Math.sqrt(Math.max(0, sum / period));
 
-  const level = classifyVolatility(rs, VOLATILITY_THRESHOLDS.ROGERS_SATCHELL);
+  recordVolatilityValue('ROGERS_SATCHELL', rs);
+  const level = classifyByPercentile('ROGERS_SATCHELL', rs, VOLATILITY_THRESHOLDS.ROGERS_SATCHELL);
   const normalized = normalizeToPercent(rs, VOLATILITY_THRESHOLDS.ROGERS_SATCHELL.EXTREME * 1.5);
 
   return {
