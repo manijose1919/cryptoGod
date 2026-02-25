@@ -143,11 +143,14 @@ class MultiHeadAttention:
         # Store last attention weights for visualization
         self.last_attention_weights: Optional[np.ndarray] = None
 
-    def forward(self, x: np.ndarray) -> np.ndarray:
-        """Compute multi-head self-attention.
+    def forward(self, x: np.ndarray, causal: bool = True) -> np.ndarray:
+        """Compute multi-head self-attention with optional causal masking.
 
         Args:
             x: Input of shape (seq_len, d_model).
+            causal: If True, apply causal (lower-triangular) mask to prevent
+                    attending to future positions. This prevents data leakage
+                    where future price information influences current predictions.
         Returns:
             Output of shape (seq_len, d_model).
         """
@@ -166,6 +169,14 @@ class MultiHeadAttention:
         # Scaled dot-product attention: (num_heads, seq_len, seq_len)
         scale = np.sqrt(self.d_head)
         scores = np.matmul(Q, K.transpose(0, 2, 1)) / scale
+
+        # Apply causal mask: prevent each position from attending to future positions.
+        # This is critical for trading models — without it, the model can "see" future
+        # prices during training and prediction, creating unrealistic accuracy.
+        if causal:
+            causal_mask = np.triu(np.ones((seq_len, seq_len), dtype=np.float64), k=1)
+            scores = scores + causal_mask * (-1e9)  # broadcast across heads
+
         attn_weights = _softmax(scores, axis=-1)  # (num_heads, seq_len, seq_len)
 
         # Store for visualization
@@ -508,10 +519,12 @@ class TransformerTradingModel:
         """Train the model (must be called while holding self._lock).
 
         Steps:
-            1. Fit the scaler on all buffered feature data.
-            2. Optionally evolve the Transformer encoder weights.
-            3. Forward-pass all sequences through the encoder to get embeddings.
-            4. Train the MLPClassifier on embeddings.
+            1. Split data into train (60%) / validation (20%) / test (20%).
+            2. Fit the scaler on TRAINING data only (prevents data leakage).
+            3. Optionally evolve the Transformer encoder weights on train+val.
+            4. Forward-pass training sequences through the encoder to get embeddings.
+            5. Train the MLPClassifier on training embeddings.
+            6. Evaluate on held-out test set (never seen during training/evolution).
         """
         n = len(self._buffer)
         if n < MIN_SAMPLES_TO_TRAIN:
@@ -524,20 +537,36 @@ class TransformerTradingModel:
         all_seqs = np.array([s[0] for s in self._buffer])   # (n, SEQ_LENGTH, FEATURE_DIM)
         all_labels = np.array([s[1] for s in self._buffer])  # (n,)
 
-        # 1. Fit scaler on all feature data
-        flat_features = all_seqs.reshape(-1, FEATURE_DIM)
-        self.scaler.fit(flat_features)
-        all_seqs_normed = self.scaler.transform(flat_features).reshape(n, SEQ_LENGTH, FEATURE_DIM)
+        # 1. Split into train (60%) / validation (20%) / test (20%)
+        #    Use chronological split (no shuffle) to prevent look-ahead bias
+        n_test = max(1, n // 5)
+        n_val = max(1, n // 5)
+        n_train = n - n_val - n_test
 
-        # 2. Evolution step for the Transformer encoder (lightweight)
-        self._evolve_encoder(all_seqs_normed, all_labels, iterations=15, noise_scale=0.01)
+        train_seqs, train_labels = all_seqs[:n_train], all_labels[:n_train]
+        val_seqs, val_labels = all_seqs[n_train:n_train + n_val], all_labels[n_train:n_train + n_val]
+        test_seqs, test_labels = all_seqs[n_train + n_val:], all_labels[n_train + n_val:]
 
-        # 3. Generate embeddings through the (possibly improved) encoder
-        embeddings = np.zeros((n, D_MODEL), dtype=np.float64)
-        for i in range(n):
-            embeddings[i] = self.encoder.forward(all_seqs_normed[i])
+        logger.info(f"  Split: train={n_train}, val={n_val}, test={n_test}")
 
-        # 4. Train MLPClassifier on embeddings
+        # 2. Fit scaler on TRAINING data only (prevents data leakage)
+        flat_train = train_seqs.reshape(-1, FEATURE_DIM)
+        self.scaler.fit(flat_train)
+        train_normed = self.scaler.transform(flat_train).reshape(n_train, SEQ_LENGTH, FEATURE_DIM)
+        val_normed = self.scaler.transform(val_seqs.reshape(-1, FEATURE_DIM)).reshape(n_val, SEQ_LENGTH, FEATURE_DIM)
+        test_normed = self.scaler.transform(test_seqs.reshape(-1, FEATURE_DIM)).reshape(n_test, SEQ_LENGTH, FEATURE_DIM)
+
+        # 3. Evolution step: use train+val for evolution (test is never touched)
+        evo_seqs = np.concatenate([train_normed, val_normed], axis=0)
+        evo_labels = np.concatenate([train_labels, val_labels], axis=0)
+        self._evolve_encoder(evo_seqs, evo_labels, iterations=15, noise_scale=0.01)
+
+        # 4. Generate embeddings for train set only
+        train_embeddings = np.zeros((n_train, D_MODEL), dtype=np.float64)
+        for i in range(n_train):
+            train_embeddings[i] = self.encoder.forward(train_normed[i])
+
+        # 5. Train MLPClassifier on training embeddings
         self.classifier = MLPClassifier(
             hidden_layer_sizes=(64, 32),
             activation="relu",
@@ -551,19 +580,26 @@ class TransformerTradingModel:
         )
 
         try:
-            self.classifier.fit(embeddings, all_labels)
+            self.classifier.fit(train_embeddings, train_labels)
         except Exception as e:
             logger.error(f"MLPClassifier training failed: {e}")
             return
 
-        # 5. Evaluate accuracy (on held-out 20% validation split, not training data)
-        val_split = max(1, len(embeddings) // 5)
-        val_embeddings = embeddings[-val_split:]
-        val_labels = all_labels[-val_split:]
-        predictions = self.classifier.predict(val_embeddings)
-        accuracy = float(np.mean(predictions == val_labels)) * 100
-        self._training_accuracy = accuracy
+        # 6. Evaluate on HELD-OUT TEST SET (never seen during training or evolution)
+        test_embeddings = np.zeros((n_test, D_MODEL), dtype=np.float64)
+        for i in range(n_test):
+            test_embeddings[i] = self.encoder.forward(test_normed[i])
+        test_predictions = self.classifier.predict(test_embeddings)
+        test_accuracy = float(np.mean(test_predictions == test_labels)) * 100
 
+        # Also compute validation accuracy for comparison (detects overfitting)
+        val_embeddings = np.zeros((n_val, D_MODEL), dtype=np.float64)
+        for i in range(n_val):
+            val_embeddings[i] = self.encoder.forward(val_normed[i])
+        val_predictions = self.classifier.predict(val_embeddings)
+        val_accuracy = float(np.mean(val_predictions == val_labels)) * 100
+
+        self._training_accuracy = test_accuracy  # Report test accuracy, not training
         self._trained = True
         self._new_samples = 0
         self._last_train_time = time.time()
@@ -571,8 +607,13 @@ class TransformerTradingModel:
         elapsed = time.time() - t0
         logger.info(
             f"Transformer training complete: {n} samples, "
-            f"accuracy={accuracy:.1f}%, elapsed={elapsed:.1f}s"
+            f"val_accuracy={val_accuracy:.1f}%, test_accuracy={test_accuracy:.1f}%, "
+            f"elapsed={elapsed:.1f}s"
         )
+        if val_accuracy > test_accuracy + 10:
+            logger.warning(
+                f"Possible overfitting: val_accuracy={val_accuracy:.1f}% >> test_accuracy={test_accuracy:.1f}%"
+            )
 
         self._save()
 

@@ -1193,6 +1193,7 @@ async function checkTickExit(ticker, price) {
     position.currentPrice = price;
 
     let exitReason = null;
+    let isStopLoss = false; // SL exits always fire (protective); TP/trail exits are profit-checked
 
     // 1. Per-trade profit goal
     if (levels.profitGoal > 0) {
@@ -1216,10 +1217,33 @@ async function checkTickExit(ticker, price) {
         }
     }
 
-    // 4. Stop-loss
+    // 4. Stop-loss (always fires — protective exit)
     if (!exitReason && price <= levels.slPrice) {
         const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
         exitReason = `[RT-SL] ${pnl}% hit SL @ ${levels.slPrice.toFixed(4)} (${levels.regime})`;
+        isStopLoss = true;
+    }
+
+    // Pre-check exit profitability after estimated slippage + fees (for non-SL exits only).
+    // Stop-loss exits always fire because they're protective. But TP/trailing exits that
+    // would become net losses after slippage + fees should NOT fire — wait for a better price.
+    if (exitReason && !isStopLoss) {
+        const fees = getActiveFees();
+        const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(ticker);
+        const estSlippagePct = isMajor ? 0.03 : 0.10; // % slippage estimate
+        const estExitPrice = price * (1 - estSlippagePct / 100); // sells slip down
+        const sellFee = estExitPrice * position.quantity * fees.perSide;
+        const buyFee = position.openPrice * position.quantity * fees.perSide;
+        const netPnl = (estExitPrice - position.openPrice) * position.quantity - sellFee - buyFee;
+
+        if (netPnl < 0) {
+            // This "profitable" exit would actually be a loss after costs — skip it
+            // Log occasionally (1 in 20) to avoid log spam
+            if (Math.random() < 0.05) {
+                addLog(`[RT-SKIP] ${ticker}: Exit at ${price.toFixed(4)} would net $${netPnl.toFixed(2)} after slippage+fees — waiting for better price`, 'INFO');
+            }
+            return; // Don't exit — let price move further into profit
+        }
     }
 
     if (exitReason) {
@@ -1246,6 +1270,8 @@ async function tradingBotLoop() {
     botLoopStartTime = Date.now();
 
     try {
+        // Defensive: ensure botLoopRunning is ALWAYS cleared, even on unexpected errors.
+        // The finally block below handles this, but we also have the watchdog as a safety net.
         const { sessionProfitGoal, riskAmount, profitGoals } = botState.settings;
 
         // --- CAPITAL TIER MANAGEMENT ---
@@ -1761,15 +1787,37 @@ async function tradingBotLoop() {
                     sentimentAdj = Math.round(sentimentScore * 10); // -1..1 → -10..+10
                 }
 
-                // ML Advisory (A/B tracking) — advisory only, does not block trades
+                // ML Advisory — now active: scales position size and can block conflicting entries
                 let mlAdvice = { available: false, direction: null, confidence: 0 };
+                let mlSizeMultiplier = 1.0;
                 if (entryStrategy && mlPredictionService?.getMLAdvice) {
                     try {
                         mlAdvice = await mlPredictionService.getMLAdvice(ticker, candles, {});
                         if (mlAdvice.available) {
+                            // ML agrees with LONG entry: boost position size by confidence
+                            if (mlAdvice.direction === 'BUY' || mlAdvice.direction === 'LONG') {
+                                if (mlAdvice.confidence >= 70) {
+                                    mlSizeMultiplier = 1.15; // High-confidence agreement: +15%
+                                } else if (mlAdvice.confidence >= 50) {
+                                    mlSizeMultiplier = 1.05; // Moderate agreement: +5%
+                                }
+                            }
+                            // ML strongly disagrees (predicts SELL with high confidence): reduce or block
+                            else if ((mlAdvice.direction === 'SELL' || mlAdvice.direction === 'SHORT') && mlAdvice.confidence >= 65) {
+                                if (mlAdvice.confidence >= 80) {
+                                    logThought({ type: 'SKIP', ticker, action: 'ML_DISAGREE_STRONG',
+                                        confidence: mlAdvice.confidence,
+                                        reason: `ML predicts ${mlAdvice.direction} with ${mlAdvice.confidence}% confidence — blocking LONG entry`,
+                                        regime: currentRegime });
+                                    entryStrategy = null;
+                                } else {
+                                    mlSizeMultiplier = 0.60; // ML moderately disagrees: reduce size 40%
+                                }
+                            }
+
                             logThought({ type: 'ML_ADVICE', ticker, action: 'ML_PREDICTION',
                                 confidence: mlAdvice.confidence,
-                                reason: `ML predicts ${mlAdvice.direction} with ${mlAdvice.confidence}% confidence (advisory only)`,
+                                reason: `ML predicts ${mlAdvice.direction} with ${mlAdvice.confidence}% confidence → size×${mlSizeMultiplier.toFixed(2)}`,
                                 regime: currentRegime });
                         }
                     } catch (e) {}
@@ -1897,14 +1945,15 @@ async function tradingBotLoop() {
                 // ===== END ML PIPELINE =====
 
                 // Hard floor: reject any entry with adjusted compositeScore below optimizer floor
-                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj;
+                // Now includes sentiment adjustment so strongly negative sentiment can reject entries
+                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj;
                 if (entryStrategy && adjustedComposite < optParams.compositeScoreFloor) {
                     logThought({
                         type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
                         confidence: adjustedComposite,
-                        reason: `adjustedComposite ${adjustedComposite} (raw=${score.compositeScore}, htf=${htfAdj}, funding=${fundingAdj}) < ${optParams.compositeScoreFloor} floor`,
+                        reason: `adjustedComposite ${adjustedComposite} (raw=${score.compositeScore}, htf=${htfAdj}, funding=${fundingAdj}, sentiment=${sentimentAdj}) < ${optParams.compositeScoreFloor} floor`,
                         regime: currentRegime,
-                        indicators: { compositeScore: score.compositeScore, adjustedComposite, htfAdj, fundingAdj, entryStrategy },
+                        indicators: { compositeScore: score.compositeScore, adjustedComposite, htfAdj, fundingAdj, sentimentAdj, entryStrategy },
                     });
                     entryStrategy = null;
                 }
@@ -1940,6 +1989,12 @@ async function tradingBotLoop() {
                     // ML Pipeline: apply gatekeeper size multiplier
                     if (pipelineResult && pipelineResult.sizeMultiplier !== 1.0) {
                         investmentAmount *= pipelineResult.sizeMultiplier;
+                    }
+
+                    // ML Advisory: scale position size by ML confidence agreement/disagreement
+                    if (mlSizeMultiplier !== 1.0) {
+                        investmentAmount *= mlSizeMultiplier;
+                        investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
                     }
 
                     // Layer 4: Portfolio Correlation Engine — size based on portfolio-level risk
@@ -2060,8 +2115,18 @@ async function tradingBotLoop() {
 
         saveSessionState();
     } catch (error) {
-        console.error(`Bot loop error: ${error.message}`);
+        // Log full error with stack trace for debugging — this is critical because
+        // any unhandled error here would previously deadlock the entire bot
+        console.error(`Bot loop error: ${error.message}\n${error.stack || ''}`);
+        try {
+            addLog(`Bot loop error: ${error.message}`, 'ERROR');
+        } catch (logErr) {
+            // Don't let logging errors prevent finally from running
+        }
     } finally {
+        // CRITICAL: Always clear the running flag. Without this, the bot deadlocks
+        // permanently on any error. The watchdog at line ~3000 is a backup but has
+        // a 60-second delay — this immediate reset is the primary safety mechanism.
         botLoopRunning = false;
         botLoopStartTime = 0;
     }

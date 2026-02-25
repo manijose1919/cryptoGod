@@ -113,15 +113,18 @@ class TradePredictor:
     def record_outcome(self, features: np.ndarray, action: str, pnl_pct: float):
         """Record a trade outcome for learning.
 
-        Derives the correct label from actual PnL:
-        - Profitable BUY → label BUY was correct
-        - Losing BUY → label should have been SELL or HOLD
+        Derives the correct label from actual PnL, accounting for real trading costs.
+        Fee-aware thresholds: round-trip fees ~0.15-0.52% + slippage ~0.08%.
+        A trade is only labeled as profitable if it exceeded ALL costs.
         """
-        if pnl_pct > 0.1:
-            # Trade was profitable → the action was correct
+        # Fee-aware break-even threshold (covers fees + slippage for most exchanges)
+        break_even_pct = 0.38  # ~0.30% round-trip fees + 0.08% slippage
+
+        if pnl_pct > break_even_pct:
+            # Trade was profitable after costs → the action was correct
             label = self.LABEL_MAP.get(action, 1)
-        elif pnl_pct < -0.1:
-            # Trade lost money → opposite action was better
+        elif pnl_pct < -break_even_pct:
+            # Trade lost money after costs → opposite action was better
             if action == "BUY":
                 label = self.LABEL_MAP["SELL"]
             elif action == "SELL":
@@ -129,7 +132,7 @@ class TradePredictor:
             else:
                 label = self.LABEL_MAP["HOLD"]
         else:
-            # Break-even → HOLD was the right call
+            # Within break-even zone → HOLD was the right call
             label = self.LABEL_MAP["HOLD"]
 
         self.X_history.append(features.tolist())
@@ -230,7 +233,8 @@ class TradePredictor:
     def _train(self):
         """Train/retrain the 4-model voting ensemble on accumulated data.
 
-        Applies SMOTE oversampling if class imbalance detected (>2:1 ratio).
+        Uses chronological train/test split (80/20) to prevent look-ahead bias.
+        Applies SMOTE oversampling ONLY to training data (prevents data leakage).
         """
         X = np.array(self.X_history)
         y = np.array(self.y_history)
@@ -244,19 +248,33 @@ class TradePredictor:
         logger.info(f"Training 4-model ensemble on {len(y)} samples...")
         logger.info(f"  Class distribution: {dict(zip(unique_classes, class_counts))}")
 
-        self.scaler = StandardScaler()
-        X_scaled = self.scaler.fit_transform(X)
+        # Chronological train/test split (80/20) — no shuffle to prevent look-ahead bias
+        n_test = max(1, len(y) // 5)
+        n_train = len(y) - n_test
+        X_train_raw, X_test_raw = X[:n_train], X[n_train:]
+        y_train, y_test = y[:n_train], y[n_train:]
 
-        # Apply SMOTE if class imbalance detected
-        max_count = max(class_counts)
-        min_count = min(class_counts)
-        if max_count > min_count * 2 and min_count >= 3:
+        logger.info(f"  Split: train={n_train}, test={n_test}")
+
+        # Fit scaler on TRAINING data only (prevents data leakage)
+        self.scaler = StandardScaler()
+        X_train_scaled = self.scaler.fit_transform(X_train_raw)
+        X_test_scaled = self.scaler.transform(X_test_raw)
+
+        X_scaled = X_train_scaled
+        y = y_train
+
+        # Apply SMOTE to TRAINING data only (after split, preventing data leakage)
+        train_classes, train_counts = np.unique(y_train, return_counts=True)
+        max_count = max(train_counts) if len(train_counts) > 0 else 0
+        min_count = min(train_counts) if len(train_counts) > 0 else 0
+        if max_count > min_count * 2 and min_count >= 3 and len(train_classes) >= 2:
             try:
                 from imblearn.over_sampling import SMOTE
                 smote = SMOTE(random_state=42, k_neighbors=min(5, min_count - 1))
-                X_balanced, y_balanced = smote.fit_resample(X_scaled, y)
+                X_balanced, y_balanced = smote.fit_resample(X_train_scaled, y_train)
                 new_counts = dict(zip(*np.unique(y_balanced, return_counts=True)))
-                logger.info(f"  SMOTE applied: {len(y)} -> {len(y_balanced)} samples, classes: {new_counts}")
+                logger.info(f"  SMOTE applied to train only: {n_train} -> {len(y_balanced)} samples, classes: {new_counts}")
                 X_scaled = X_balanced
                 y = y_balanced
             except Exception as e:
@@ -288,15 +306,32 @@ class TradePredictor:
         self.model.fit(X_train, y)
         self.samples_since_train = 0
 
-        # Log individual model scores (in-sample, for diagnostics)
+        # Log individual model scores — report BOTH in-sample and test set scores
         self._sub_model_scores = {}
         for name, est in self.model.named_estimators_.items():
             try:
-                score = est.score(X_train, y)
-                self._sub_model_scores[name] = round(score, 4)
+                train_score = est.score(X_train, y)
+                # Apply feature selection to test set for scoring
+                X_test_input = X_test_scaled[:, self._selected_features] if self._selected_features is not None else X_test_scaled
+                test_score = est.score(X_test_input, y_test)
+                self._sub_model_scores[name] = {
+                    "train": round(train_score, 4),
+                    "test": round(test_score, 4),
+                }
             except Exception:
                 pass
-        logger.info(f"Sub-model scores: {self._sub_model_scores}")
+        logger.info(f"Sub-model scores (train/test): {self._sub_model_scores}")
+
+        # Report test set accuracy for the full ensemble
+        try:
+            X_test_input = X_test_scaled[:, self._selected_features] if self._selected_features is not None else X_test_scaled
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                ensemble_test_acc = self.model.score(X_test_input, y_test)
+            logger.info(f"Ensemble test accuracy: {ensemble_test_acc:.4f}")
+        except Exception as e:
+            logger.debug(f"Could not compute ensemble test accuracy: {e}")
 
         # Prediction calibration (isotonic regression)
         try:
@@ -687,7 +722,7 @@ class StrategyWeighter:
         Strategies that agreed with a winning trade get boosted.
         Strategies that agreed with a losing trade get penalized.
         """
-        profitable = pnl_pct > 0.1
+        profitable = pnl_pct > 0.38  # Fee-aware: must exceed round-trip fees + slippage
 
         for sig in signals:
             name = sig.get("name", "")
