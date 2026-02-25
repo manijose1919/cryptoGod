@@ -505,14 +505,43 @@ class LSTMNetwork {
       this._initWeights(detectedInputSize);
     }
 
-    const N = sequences.length;
+    const totalN = sequences.length;
     const H = this.hiddenSize;
-    const maxNorm = 5.0;
-    this.trainLosses = [];
+    const maxNorm = 3.0; // Tightened from 5.0 to prevent gradient instability
 
-    console.log(`[LSTMNetwork] Training: ${N} sequences, ${epochs} epochs, lr=${lr}, hidden=${H}, input=${this.inputSize}`);
+    // --- Train/Validation/Test Split (60/20/20, chronological) ---
+    // Chronological split prevents look-ahead bias in time-series data
+    const nTest = Math.max(1, Math.floor(totalN * 0.2));
+    const nVal = Math.max(1, Math.floor(totalN * 0.2));
+    const nTrain = totalN - nVal - nTest;
+
+    const trainSeqs = sequences.slice(0, nTrain);
+    const trainLabels = labels.slice(0, nTrain);
+    const valSeqs = sequences.slice(nTrain, nTrain + nVal);
+    const valLabels = labels.slice(nTrain, nTrain + nVal);
+    const testSeqs = sequences.slice(nTrain + nVal);
+    const testLabels = labels.slice(nTrain + nVal);
+
+    const N = nTrain;
+    this.trainLosses = [];
+    this.valLosses = [];
+
+    console.log(`[LSTMNetwork] Training: ${N} train, ${nVal} val, ${nTest} test, ${epochs} epochs, lr=${lr}, hidden=${H}, input=${this.inputSize}`);
+
+    // Early stopping: track best validation loss
+    let bestValLoss = Infinity;
+    let patienceCounter = 0;
+    const patience = 10; // Stop if no improvement for 10 epochs
+
+    // Learning rate decay schedule
+    const lrSchedule = (epoch) => {
+      if (epoch < 10) return lr;
+      if (epoch < 30) return lr * 0.5;
+      return lr * 0.1;
+    };
 
     for (let epoch = 0; epoch < epochs; epoch++) {
+      const currentLr = lrSchedule(epoch);
       let epochLoss = 0;
 
       // Shuffle training order each epoch
@@ -523,8 +552,8 @@ class LSTMNetwork {
       }
 
       for (const idx of indices) {
-        const seq = sequences[idx];
-        const label = labels[idx];
+        const seq = trainSeqs[idx];
+        const label = trainLabels[idx];
 
         // Forward
         const fwdResult = this._forward(seq);
@@ -541,30 +570,68 @@ class LSTMNetwork {
           dbd = this._scaleGrads(cellGrads, dWd, rawDbd, scale);
         }
 
-        // Apply gradients
-        this.cell.applyGradients(cellGrads, lr);
+        // Apply gradients with scheduled learning rate
+        this.cell.applyGradients(cellGrads, currentLr);
         for (let i = 0; i < H; i++) {
-          this.Wd[i] -= lr * dWd[i];
+          this.Wd[i] -= currentLr * dWd[i];
         }
-        this.bd -= lr * dbd;
+        this.bd -= currentLr * dbd;
       }
 
-      const avgLoss = epochLoss / N;
-      this.trainLosses.push(avgLoss);
+      const avgTrainLoss = epochLoss / N;
+      this.trainLosses.push(avgTrainLoss);
+
+      // Compute validation loss (no gradient updates)
+      let valLoss = 0;
+      for (let i = 0; i < nVal; i++) {
+        const fwd = this._forward(valSeqs[i]);
+        valLoss += binaryCrossEntropy(fwd.output, valLabels[i]);
+      }
+      const avgValLoss = nVal > 0 ? valLoss / nVal : avgTrainLoss;
+      this.valLosses.push(avgValLoss);
+
+      // Early stopping check
+      if (avgValLoss < bestValLoss) {
+        bestValLoss = avgValLoss;
+        patienceCounter = 0;
+      } else {
+        patienceCounter++;
+        if (patienceCounter >= patience) {
+          console.log(`[LSTMNetwork] Early stopping at epoch ${epoch + 1}: val_loss hasn't improved for ${patience} epochs`);
+          break;
+        }
+      }
 
       // Log every 10 epochs
       if ((epoch + 1) % 10 === 0 || epoch === 0) {
-        console.log(`[LSTMNetwork] Epoch ${epoch + 1}/${epochs} — loss: ${avgLoss.toFixed(6)}`);
+        console.log(`[LSTMNetwork] Epoch ${epoch + 1}/${epochs} — train_loss: ${avgTrainLoss.toFixed(6)}, val_loss: ${avgValLoss.toFixed(6)}, lr: ${currentLr}`);
       }
     }
 
+    // Evaluate on held-out test set (never seen during training)
+    let testCorrect = 0;
+    let testLoss = 0;
+    for (let i = 0; i < nTest; i++) {
+      const fwd = this._forward(testSeqs[i]);
+      testLoss += binaryCrossEntropy(fwd.output, testLabels[i]);
+      const predicted = fwd.output >= 0.5 ? 1 : 0;
+      if (predicted === testLabels[i]) testCorrect++;
+    }
+    const testAccuracy = nTest > 0 ? (testCorrect / nTest * 100).toFixed(1) : 'N/A';
+    const avgTestLoss = nTest > 0 ? testLoss / nTest : 0;
+
     this.isTrained = true;
     this.trainedAt = new Date().toISOString();
+    this.testAccuracy = parseFloat(testAccuracy) || 0;
 
     const finalLoss = this.trainLosses[this.trainLosses.length - 1];
-    console.log(`[LSTMNetwork] Training complete. Final loss: ${finalLoss.toFixed(6)}`);
+    console.log(`[LSTMNetwork] Training complete. Final train_loss: ${finalLoss.toFixed(6)}, test_loss: ${avgTestLoss.toFixed(6)}, test_accuracy: ${testAccuracy}%`);
 
-    return { losses: this.trainLosses, finalLoss };
+    if (this.valLosses.length > 0 && this.valLosses[this.valLosses.length - 1] > finalLoss * 1.5) {
+      console.warn(`[LSTMNetwork] WARNING: Possible overfitting — val_loss >> train_loss`);
+    }
+
+    return { losses: this.trainLosses, valLosses: this.valLosses, finalLoss, testAccuracy: this.testAccuracy };
   }
 
   /**

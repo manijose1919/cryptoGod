@@ -278,8 +278,8 @@ function persistLearnedPatterns(): void {
  * No external API needed - instant, free, unlimited.
  */
 function localAnalyze(): string {
-  if (tradeMemory.length < 5) {
-    return JSON.stringify({ patterns: 'Insufficient data', parameterChanges: {}, strategyAdvice: {}, riskAdvice: 'Collect more trades' });
+  if (tradeMemory.length < 20) {
+    return JSON.stringify({ patterns: 'Insufficient data (need 20+ trades for reliable patterns)', parameterChanges: {}, strategyAdvice: {}, riskAdvice: 'Collect more trades before adjusting parameters' });
   }
 
   const recent = tradeMemory.slice(-20);
@@ -379,9 +379,18 @@ export function recordTrade(trade: {
   const pnlPercent = ((trade.exitPrice - trade.entryPrice) / trade.entryPrice) * 100;
   const holdDuration = (trade.exitTime - trade.entryTime) / 60000; // minutes
 
-  // Fee-aware outcome: round-trip fees are ~0.15-0.52%, so account for that
+  // Fee-aware outcome classification:
+  // Round-trip fees vary by exchange: Crypto.com ~0.15%, Kraken ~0.52%
+  // Plus estimated slippage of ~0.05-0.10%. A trade is only a true WIN if
+  // the price move exceeds ALL costs. Using 0.20% as dead zone is wrong for
+  // Kraken (0.52% fees alone). Dynamically estimate the break-even threshold.
+  const estimatedRoundTripFeePct = 0.30; // Conservative: covers most exchanges
+  const estimatedSlippagePct = 0.08;     // Typical slippage for mid-cap crypto
+  const breakEvenThreshold = estimatedRoundTripFeePct + estimatedSlippagePct; // ~0.38%
   const outcome: 'WIN' | 'LOSS' | 'BREAKEVEN' =
-    pnlPercent > 0.20 ? 'WIN' : pnlPercent < -0.20 ? 'LOSS' : 'BREAKEVEN';
+    pnlPercent > breakEvenThreshold ? 'WIN'
+    : pnlPercent < -breakEvenThreshold ? 'LOSS'
+    : 'BREAKEVEN';
 
   const memory: TradeMemory = {
     id: Date.now(),
@@ -460,7 +469,7 @@ function updateLearningState(): void {
       totalPnl,
     };
 
-    if (stratTrades.length >= 5) { // Need at least 5 trades to judge
+    if (stratTrades.length >= 15) { // Need at least 15 trades per strategy for statistical significance
       if (learningState.strategyStats[strat].winRate > bestWinRate) {
         bestWinRate = learningState.strategyStats[strat].winRate;
         learningState.bestStrategy = strat;
@@ -497,8 +506,8 @@ function adjustParametersFromLearning(): void {
   // Adjust strategy weights based on performance
   for (const strat of Object.keys(learningState.strategyStats) as TradingStrategy[]) {
     const stats = learningState.strategyStats[strat];
-    if (stats.trades >= 5) {
-      // Boost successful strategies, reduce unsuccessful ones
+    if (stats.trades >= 15) {
+      // Boost successful strategies, reduce unsuccessful ones (need 15+ for significance)
       if (stats.winRate > 60) {
         params.strategyWeights[strat] = Math.min(2.0, params.strategyWeights[strat] + 0.1);
       } else if (stats.winRate < 35) {
