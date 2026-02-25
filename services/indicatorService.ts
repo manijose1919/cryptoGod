@@ -339,15 +339,19 @@ function calculateBreakoutDetectorSeriesInternal(
         return new Array(candles.length).fill(50);
     }
 
-    // Garman-Klass volatility estimator
-    const logHighLowSq = candles.map(c =>
-        c.high === c.low ? 0 : Math.pow(Math.log(c.high / c.low), 2)
-    );
-    const sumLogHighLowSq = movingSum(logHighLowSq, volatilityLength);
+    // Garman-Klass volatility estimator (Fix #9 Tier 2: corrected formula)
+    // GK = sqrt( (1/n) * Σ[ 0.5*ln(H/L)² - (2ln2-1)*ln(C/O)² ] )
+    // Previous code mixed hlc3 (a price) into a dimensionless log-variance — dimensional error
+    const gkTerms = candles.map(c => {
+        if (c.high === c.low || c.open === 0) return 0;
+        const logHL = Math.log(c.high / c.low);
+        const logCO = Math.log(c.close / c.open);
+        return 0.5 * logHL * logHL - (2 * Math.log(2) - 1) * logCO * logCO;
+    });
+    const sumGkTerms = movingSum(gkTerms, volatilityLength);
 
-    const hlc3 = candles.map(c => (c.high + c.low + c.close) / 3);
-    const priceVolatility = sumLogHighLowSq.map((s, i) =>
-        Math.sqrt((hlc3[i] / ((volatilityLength * 4) * Math.log(2))) * s)
+    const priceVolatility = sumGkTerms.map((s, i) =>
+        isNaN(s) ? NaN : Math.sqrt(Math.max(0, s / volatilityLength))
     );
 
     const breakoutRsi = calculateRsi(priceVolatility, rsiLength);
@@ -392,11 +396,12 @@ function calculateWhaleMoneyFlowSeriesInternal(
     const sumAdjustment = movingSum(adjustment, wmfLength);
     const sumVolume = movingSum(volumes, wmfLength);
 
-    const whaleMoneyFlow = sumAdjustment.map((sa, i) =>
-        sumVolume[i] > 0 ? sa / sumVolume[i] : 0
+    // CMF is in range [-1, 1]; normalize to [0, 100] for compositing
+    const whaleMoneyFlowNormalized = sumAdjustment.map((sa, i) =>
+        sumVolume[i] > 0 ? ((sa / sumVolume[i]) + 1) * 50 : 50
     );
 
-    // Money strength calculation
+    // Money strength (MFI-style): already in [0, 100] range
     const closeChanges = closes.map((c, i) => i > 0 ? c - closes[i - 1] : 0);
     const upper = movingSum(
         candles.map((c, i) => closeChanges[i] > 0 ? closes[i] * volumes[i] : 0),
@@ -415,8 +420,11 @@ function calculateWhaleMoneyFlowSeriesInternal(
         return 100 - (100 / (1 + u / l));
     });
 
+    // Fix #13 (Tier 2): Weighted normalized combination instead of raw addition.
+    // Both components are now on [0,100] scale. CMF weighted 40%, MFI 60%
+    // (MFI is the stronger signal; CMF provides confirmation)
     const finalSeries = moneyStrength.map((ms, i) =>
-        Math.max(0, Math.min(100, ms + whaleMoneyFlow[i]))
+        Math.max(0, Math.min(100, ms * 0.6 + whaleMoneyFlowNormalized[i] * 0.4))
     );
 
     return fillNaN(finalSeries, 50);
@@ -494,23 +502,45 @@ function calculateMomentumSeriesInternal(candles: Candle[]): number[] {
 
     const closes = candles.map(c => c.close);
 
+    // Fix #10 (Tier 2): Volatility-adaptive smoothing periods
+    // Estimate recent volatility (std of log returns over last 20 bars) to scale smoothing
+    let volScale = 1.0;
+    if (candles.length >= 21) {
+        const recentReturns: number[] = [];
+        for (let i = candles.length - 20; i < candles.length; i++) {
+            if (closes[i - 1] > 0) recentReturns.push(Math.log(closes[i] / closes[i - 1]));
+        }
+        if (recentReturns.length > 5) {
+            const mean = recentReturns.reduce((a, b) => a + b, 0) / recentReturns.length;
+            const variance = recentReturns.reduce((a, r) => a + (r - mean) ** 2, 0) / recentReturns.length;
+            const recentVol = Math.sqrt(variance);
+            // Typical crypto vol range: 0.01 (calm) to 0.06 (volatile)
+            // Scale: low vol → 0.7x periods (more responsive), high vol → 1.4x (more filtering)
+            volScale = Math.max(0.7, Math.min(1.4, 0.7 + (recentVol / 0.06) * 0.7));
+        }
+    }
+
+    const adaptFast = Math.max(3, Math.round(INDICATOR_PARAMS.MOMENTUM_FAST_PERIOD * volScale));
+    const adaptSlow = Math.max(8, Math.round(INDICATOR_PARAMS.MOMENTUM_SLOW_PERIOD * volScale));
+    const adaptSignal = Math.max(3, Math.round(INDICATOR_PARAMS.MOMENTUM_SIGNAL_PERIOD * volScale));
+
     // Rate of Change calculation
     const roc = closes.map((c, i) => {
-        if (i < INDICATOR_PARAMS.MOMENTUM_FAST_PERIOD) return 0;
-        const prevPrice = closes[i - INDICATOR_PARAMS.MOMENTUM_FAST_PERIOD];
+        if (i < adaptFast) return 0;
+        const prevPrice = closes[i - adaptFast];
         return prevPrice !== 0 ? ((c - prevPrice) / prevPrice) * 100 : 0;
     });
 
-    // Smooth the ROC with EMA
-    const smoothedRoc = ema(roc, INDICATOR_PARAMS.MOMENTUM_SIGNAL_PERIOD);
+    // Smooth the ROC with EMA (adaptive period)
+    const smoothedRoc = ema(roc, adaptSignal);
 
     // Also calculate longer-term momentum for confirmation
     const longRoc = closes.map((c, i) => {
-        if (i < INDICATOR_PARAMS.MOMENTUM_SLOW_PERIOD) return 0;
-        const prevPrice = closes[i - INDICATOR_PARAMS.MOMENTUM_SLOW_PERIOD];
+        if (i < adaptSlow) return 0;
+        const prevPrice = closes[i - adaptSlow];
         return prevPrice !== 0 ? ((c - prevPrice) / prevPrice) * 100 : 0;
     });
-    const smoothedLongRoc = ema(longRoc, INDICATOR_PARAMS.MOMENTUM_SIGNAL_PERIOD);
+    const smoothedLongRoc = ema(longRoc, adaptSignal);
 
     // Combine short and long momentum, normalize to 0-100
     const momentum = smoothedRoc.map((sr, i) => {

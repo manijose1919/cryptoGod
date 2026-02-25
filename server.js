@@ -1384,6 +1384,26 @@ async function tradingBotLoop() {
         const prices = {};
         refreshExitLevels(marketDataMap); // Refresh cached levels for real-time tick checker
 
+        // Fix #16 (Tier 2): WebSocket disconnect fallback for exits
+        // When WS is disconnected, RT tick checks don't fire. Run a fast SL/TP check
+        // using the latest REST candle close prices for all open positions.
+        if (!wsConnected() && positionTickers.length > 0) {
+            for (const ticker of positionTickers) {
+                const position = portfolio.positions[ticker];
+                if (!position || position._exitPending) continue;
+                const candles = marketDataMap.get(ticker);
+                if (!candles || candles.length === 0) continue;
+                const latestPrice = candles[candles.length - 1].c;
+                // Run the same tick-level exit check using REST-sourced price
+                try {
+                    await checkTickExit(ticker, latestPrice);
+                } catch (e) {
+                    // Non-blocking: log once per 100 failures
+                    if (Math.random() < 0.01) console.warn(`[WS-FALLBACK] checkTickExit error for ${ticker}:`, e.message);
+                }
+            }
+        }
+
         // --- EXIT LOGIC ---
         for (const ticker of positionTickers) {
             const position = portfolio.positions[ticker];
@@ -1409,11 +1429,19 @@ async function tradingBotLoop() {
                 if (dynamicCheck.shouldExit) exitReason = dynamicCheck.reason;
             }
 
-            // Strategy indicator exits — only fire after minimum 5 min hold time.
-            // On 5m/15m candles, indicators are noisy and whipsaw constantly.
-            // Training on 1h candles showed trades need room to develop.
+            // Strategy indicator exits — only fire after minimum hold time.
+            // Fix #12 (Tier 2): Adaptive hold time based on asset volatility + timeframe.
+            // High-vol assets (SOL, DOGE) need less hold time; slow movers (BTC) need more.
             const indicatorHoldMs = Date.now() - (position.entryTime || 0);
-            const MIN_HOLD_FOR_INDICATOR_EXIT = 5 * 60 * 1000; // 5 minutes
+            const holdBaseCurrency = ticker.replace(/USD$/, '');
+            const ASSET_HOLD_SCALE = {
+                BTC: 1.5, ETH: 1.0, SOL: 0.5, XRP: 0.8, DOGE: 0.4,
+                ADA: 1.0, LINK: 0.9, DOT: 1.0, AVAX: 0.6, BNB: 1.0,
+            };
+            const holdScale = ASSET_HOLD_SCALE[holdBaseCurrency] || 1.0;
+            // Base hold: 5 minutes, scaled by asset volatility profile
+            // Fast assets (SOL, DOGE) → ~2-2.5 min; BTC → ~7.5 min
+            const MIN_HOLD_FOR_INDICATOR_EXIT = Math.round(5 * 60 * 1000 * holdScale);
 
             if (!exitReason && indicatorHoldMs >= MIN_HOLD_FOR_INDICATOR_EXIT) {
                 const tcValue = calculateTCSeries(candles).pop() ?? 50;
@@ -1628,6 +1656,19 @@ async function tradingBotLoop() {
                 let entryStrategy = null;
                 let triggerValue = tcValue; // default for TREND
                 if (profileStrategies) {
+                    // Fix #8 (Tier 2): Adaptive Lookback Periods Per Asset
+                    // Extract base currency from ticker (e.g., 'BTCUSD' → 'BTC') and get asset-specific lookback scale
+                    const baseCurrency = ticker.replace(/USD$/, '');
+                    const ASSET_LOOKBACK_SCALE = {
+                        BTC: 1.5, ETH: 1.0, SOL: 0.6, XRP: 0.85, DOGE: 0.6,
+                        ADA: 1.0, LINK: 0.85, DOT: 1.0, AVAX: 0.7, BNB: 1.0,
+                    };
+                    const lookbackScale = ASSET_LOOKBACK_SCALE[baseCurrency] || 1.0;
+                    // Scale indicator periods: fast-moving assets (SOL, DOGE) → shorter periods; slow (BTC) → longer
+                    const scaledBreakoutLen = Math.max(4, Math.round(8 * lookbackScale));
+                    const scaledWhaleLen = Math.max(5, Math.round(10 * lookbackScale));
+                    const scaledMfiLen = Math.max(7, Math.round(14 * lookbackScale));
+
                     // Evaluate all profile-allowed strategies, pick the one with strongest signal
                     // Signal strength = how far past threshold (normalized 0-1 range)
                     const stratCandidates = [];
@@ -1645,7 +1686,7 @@ async function tradingBotLoop() {
                         }
                     }
                     if (profileStrategies.includes('BREAKOUT')) {
-                        const bkout = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
+                        const bkout = calculateBreakoutDetectorSeries(candles, scaledBreakoutLen).pop() ?? 50;
                         if (bkout > optParams.BREAKOUT_SQUEEZE_ENTRY) {
                             const strength = (bkout - optParams.BREAKOUT_SQUEEZE_ENTRY) / (100 - optParams.BREAKOUT_SQUEEZE_ENTRY);
                             stratCandidates.push({ strategy: 'BREAKOUT', value: bkout, strength });
@@ -1658,9 +1699,9 @@ async function tradingBotLoop() {
                             stratCandidates.push({ strategy: 'ADAPTIVE', value: adpValue, strength });
                         }
                     }
-                    // WHALE: high whale money flow = smart money buying
+                    // WHALE: high whale money flow = smart money buying (with adaptive lookback)
                     if (profileStrategies.includes('WHALE')) {
-                        const whaleValue = calculateWhaleMoneyFlowSeries(candles).pop() ?? 50;
+                        const whaleValue = calculateWhaleMoneyFlowSeries(candles, scaledWhaleLen, scaledMfiLen).pop() ?? 50;
                         const whaleThreshold = optParams.WHALE_BUYING_ENTRY || 48;
                         if (whaleValue > whaleThreshold) {
                             const strength = (whaleValue - whaleThreshold) / (100 - whaleThreshold);
@@ -1678,9 +1719,15 @@ async function tradingBotLoop() {
                         }
                     }
 
-                    // Pick the strongest signal that passes regime + throttle filters
+                    // Fix #14 (Tier 2): Pick strategies weighted by signal strength × historical win rate
+                    // Instead of pure signal strength, blend in adaptive weights from past performance
                     if (stratCandidates.length > 0) {
-                        stratCandidates.sort((a, b) => b.strength - a.strength);
+                        for (const cand of stratCandidates) {
+                            const adaptiveWeight = getStrategyWeight(cand.strategy); // 0 to 1
+                            // Blended score: 60% signal strength + 40% historical performance weight
+                            cand.blendedScore = cand.strength * 0.6 + adaptiveWeight * 0.4;
+                        }
+                        stratCandidates.sort((a, b) => b.blendedScore - a.blendedScore);
                         for (const cand of stratCandidates) {
                             // Check regime filter
                             if (!isStrategyEnabledForRegime(cand.strategy, currentRegime)) {
@@ -1970,6 +2017,30 @@ async function tradingBotLoop() {
                     positionPercent = Math.min(positionPercent, kellyFraction * 2); // Don't exceed 2x Kelly
 
                     let investmentAmount = Math.min(portfolio.cash * 0.95, totalValue * positionPercent * riskAmount);
+
+                    // Fix #7 (Tier 2): Confidence-based position sizing
+                    // Scale position size by signal compositeScore: weak signals (30-50) → 0.7x, avg (50-70) → 1.0x, strong (70+) → 1.2x
+                    const confidenceScore = adjustedComposite || score.compositeScore || 50;
+                    let confidenceSizeMultiplier = 1.0;
+                    if (confidenceScore >= 80) confidenceSizeMultiplier = 1.25;
+                    else if (confidenceScore >= 70) confidenceSizeMultiplier = 1.15;
+                    else if (confidenceScore >= 60) confidenceSizeMultiplier = 1.05;
+                    else if (confidenceScore >= 50) confidenceSizeMultiplier = 1.0;
+                    else if (confidenceScore >= 40) confidenceSizeMultiplier = 0.85;
+                    else confidenceSizeMultiplier = 0.70;
+                    investmentAmount *= confidenceSizeMultiplier;
+
+                    // Fix #15 (Tier 2): Drawdown-graduated position sizing
+                    // Instead of binary halt at max drawdown, gradually reduce sizes as drawdown grows.
+                    // 0-3% drawdown: 100% size, 3-5%: 85%, 5-8%: 65%, 8-12%: 45%, 12%+: 25%
+                    if (drawdown > 0) {
+                        let drawdownMultiplier = 1.0;
+                        if (drawdown >= 12) drawdownMultiplier = 0.25;
+                        else if (drawdown >= 8) drawdownMultiplier = 0.45;
+                        else if (drawdown >= 5) drawdownMultiplier = 0.65;
+                        else if (drawdown >= 3) drawdownMultiplier = 0.85;
+                        investmentAmount *= drawdownMultiplier;
+                    }
 
                     // Apply beast mode compound multiplier (cold streak 0.5x, hot streak 1.5x)
                     const compMult = getCompoundMultiplier();
