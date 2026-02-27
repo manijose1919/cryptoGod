@@ -86,6 +86,61 @@ try {
   getFlag = () => true; // Default: all flags enabled
 }
 
+// Phase 1-8 imports (all optional — fail gracefully)
+let tfEngine;
+try {
+  const mod = await import('./tfEngine.js');
+  tfEngine = mod.tfEngine;
+} catch (err) {
+  console.warn('[ML Prediction] tfEngine not available:', err.message);
+}
+
+let rlAgent;
+try {
+  const mod = await import('./rlAgent.js');
+  rlAgent = mod.rlAgent;
+} catch (err) {
+  console.warn('[ML Prediction] rlAgent not available:', err.message);
+}
+
+let warRoom;
+try {
+  const mod = await import('./multiAgentSystem.js');
+  warRoom = mod.warRoom;
+} catch (err) {
+  console.warn('[ML Prediction] multiAgentSystem not available:', err.message);
+}
+
+let syntheticEngine;
+try {
+  const mod = await import('./syntheticDataEngine.js');
+  syntheticEngine = mod.syntheticEngine;
+} catch (err) {
+  console.warn('[ML Prediction] syntheticDataEngine not available:', err.message);
+}
+
+let onlineLearner;
+try {
+  const mod = await import('./onlineLearner.js');
+  onlineLearner = mod.onlineLearner;
+} catch (err) {
+  console.warn('[ML Prediction] onlineLearner not available:', err.message);
+}
+
+let shapModule;
+try {
+  shapModule = await import('./shapExplainer.js');
+} catch (err) {
+  console.warn('[ML Prediction] shapExplainer not available:', err.message);
+}
+
+let advancedFeatures;
+try {
+  advancedFeatures = await import('./advancedFeatures.js');
+} catch (err) {
+  console.warn('[ML Prediction] advancedFeatures not available:', err.message);
+}
+
 // Worker thread for offloading training
 let Worker;
 try {
@@ -339,8 +394,123 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       // Non-critical — regime prediction error
     }
 
-    // Combine anomaly check + prediction into decision
+    // Step 6: TF.js LSTM prediction (Phase 1)
+    let tfLSTMPrediction = null;
+    try {
+      if (tfEngine && getFlag('TF_ENABLED') && tfEngine.isLSTMTrained) {
+        const sequence = featureSequenceBuffer.get(ticker);
+        if (sequence && sequence.length >= LSTM_SEQUENCE_LENGTH) {
+          tfLSTMPrediction = tfEngine.predictLSTM(sequence.slice(-LSTM_SEQUENCE_LENGTH));
+        }
+      }
+    } catch (tfErr) {
+      // Non-critical
+    }
+
+    // Step 7: TFT multi-horizon prediction (Phase 2)
+    let tftPrediction = null;
+    try {
+      if (tfEngine && getFlag('TFT_ENABLED') && tfEngine.isTFTTrained) {
+        const sequence = featureSequenceBuffer.get(ticker);
+        if (sequence && sequence.length >= LSTM_SEQUENCE_LENGTH) {
+          tftPrediction = tfEngine.predictTFT(sequence.slice(-LSTM_SEQUENCE_LENGTH));
+        }
+      }
+    } catch (tftErr) {
+      // Non-critical
+    }
+
+    // Step 8: RL Agent action (Phase 3)
+    let rlPrediction = null;
+    try {
+      if (rlAgent && getFlag('RL_AGENT_ENABLED') && rlAgent.isTrained) {
+        rlPrediction = rlAgent.predict(featureArray, options.portfolioState);
+      }
+    } catch (rlErr) {
+      // Non-critical
+    }
+
+    // Step 9: Multi-Agent War Room (Phase 4)
+    let warRoomResult = null;
+    try {
+      if (warRoom && getFlag('MULTI_AGENT_ENABLED')) {
+        warRoomResult = warRoom.evaluate(featureArray, prediction, {
+          mlConfidence: confidence,
+          tftConsensus: tftPrediction?.consensus,
+          rlAction: rlPrediction?.action,
+          marketRegime,
+          fearGreedIndex: featureArray[40],
+          sentimentScore: featureArray[41],
+          rsi: featureArray[0] * 100,
+        });
+      }
+    } catch (wrErr) {
+      // Non-critical
+    }
+
+    // Step 10: Meta-Ensemble with dynamic weights (Phase 6 Thompson Sampling)
+    let metaWeights = { rf_gbt_lr: 0.25, tf_lstm: 0.10, tft: 0.20, war_room: 0.15 };
+    try {
+      if (onlineLearner && getFlag('ONLINE_LEARNING_ENABLED')) {
+        metaWeights = onlineLearner.getExpectedWeights();
+      }
+    } catch {}
+
+    // Blend all model predictions into final confidence
     const direction = prediction.prediction === 1 ? 'UP' : 'DOWN';
+    let blendedUpProb = prediction.probabilities?.up || (direction === 'UP' ? confidence : 1 - confidence);
+
+    // Apply model weights
+    let totalWeight = metaWeights.rf_gbt_lr || 0.25;
+    let weightedProb = blendedUpProb * totalWeight;
+
+    if (tfLSTMPrediction) {
+      const w = metaWeights.tf_lstm || 0.10;
+      weightedProb += tfLSTMPrediction.probabilities.up * w;
+      totalWeight += w;
+    }
+
+    if (tftPrediction) {
+      const w = metaWeights.tft || 0.20;
+      weightedProb += tftPrediction.probabilities.up * w;
+      totalWeight += w;
+      // Apply TFT consensus modifier
+      confidence += (tftPrediction.consensusModifier || 0) * 100;
+    }
+
+    if (warRoomResult && warRoomResult.action !== 'HOLD') {
+      const w = metaWeights.war_room || 0.15;
+      weightedProb += warRoomResult.probabilities.up * w;
+      totalWeight += w;
+    }
+
+    // Normalize
+    if (totalWeight > 0) {
+      blendedUpProb = weightedProb / totalWeight;
+    }
+
+    // Apply isotonic calibration (Phase 7)
+    try {
+      if (shapModule?.IsotonicCalibrator && mlEngine._isotonicCalibrator?.isFitted) {
+        blendedUpProb = mlEngine._isotonicCalibrator.calibrate(blendedUpProb);
+      }
+    } catch {}
+
+    // Update confidence from blended probability
+    const finalDirection = blendedUpProb >= 0.5 ? 'UP' : 'DOWN';
+    confidence = Math.max(blendedUpProb, 1 - blendedUpProb) * 100;
+
+    // RL agent position sizing override (Phase 3)
+    let sizeMultiplier = 1.0;
+    if (rlPrediction) {
+      sizeMultiplier = rlPrediction.positionSize;
+      // If RL says HOLD despite ML saying BUY, reduce confidence
+      if (rlPrediction.action === 'HOLD' && finalDirection === 'UP') {
+        confidence *= 0.85;
+      }
+    }
+
+    // Combine anomaly check + prediction into decision
     let take = true;
     let reason = '';
 
@@ -357,21 +527,49 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
     if (confidence < 60) {
       take = true;
       reason = reason || `ML confidence ${confidence.toFixed(1)}% below threshold, deferring to existing logic`;
-    } else if (direction === 'UP') {
+    } else if (finalDirection === 'UP') {
       take = true;
       reason = reason || `ML predicts upward move with ${confidence.toFixed(1)}% confidence`;
-    } else if (direction === 'DOWN') {
+    } else if (finalDirection === 'DOWN') {
       take = false;
       reason = reason || `ML predicts downward move with ${confidence.toFixed(1)}% confidence`;
     }
 
+    // Build model contributions for online learning
+    const modelContributions = {};
+    modelContributions.rf_gbt_lr = direction;
+    if (tfLSTMPrediction) modelContributions.tf_lstm = tfLSTMPrediction.prediction;
+    if (tftPrediction) modelContributions.tft = tftPrediction.prediction;
+    if (warRoomResult) modelContributions.war_room = warRoomResult.prediction;
+
+    // SHAP drift tracking (Phase 7)
+    try {
+      if (shapModule?.trackSHAPDrift && shapModule?.explainPrediction && getFeatureNames) {
+        const explanation = shapModule.explainPrediction(mlEngine, featureArray, getFeatureNames());
+        if (explanation?.topFeatures) {
+          const contributions = new Array(featureArray.length).fill(0);
+          explanation.topFeatures.forEach(f => {
+            const idx = getFeatureNames().indexOf(f.name);
+            if (idx >= 0) contributions[idx] = f.contribution;
+          });
+          shapModule.trackSHAPDrift(contributions, ticker, blendedUpProb);
+        }
+      }
+    } catch {}
+
     // Log decision
-    console.log(`[ML Prediction] ${ticker} ${strategy}: take=${take}, confidence=${confidence.toFixed(1)}%, direction=${direction}, anomaly=${anomalyResult.severity}`);
+    const modelInfo = [
+      tfLSTMPrediction ? `LSTM=${tfLSTMPrediction.prediction}` : null,
+      tftPrediction ? `TFT=${tftPrediction.consensus}` : null,
+      rlPrediction ? `RL=${rlPrediction.action}` : null,
+      warRoomResult ? `WR=${warRoomResult.action}` : null,
+    ].filter(Boolean).join(', ');
+    console.log(`[ML Prediction] ${ticker} ${strategy}: take=${take}, confidence=${confidence.toFixed(1)}%, direction=${finalDirection}, anomaly=${anomalyResult.severity}${modelInfo ? ` | ${modelInfo}` : ''}`);
 
     return {
       take,
       confidence: Math.round(confidence),
-      direction,
+      direction: finalDirection,
       anomaly: anomalyResult,
       prediction: {
         prediction: prediction.prediction,
@@ -380,7 +578,17 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       },
       reason,
       mlAvailable: true,
-      lastFeatureVector: featureArray, // Batch 2B: expose for SHAP
+      lastFeatureVector: featureArray,
+      sizeMultiplier,
+      modelContributions,
+      tftPrediction: tftPrediction ? {
+        h1: tftPrediction.h1?.direction,
+        h4: tftPrediction.h4?.direction,
+        h24: tftPrediction.h24?.direction,
+        consensus: tftPrediction.consensus,
+      } : null,
+      rlAction: rlPrediction?.action,
+      warRoomVotes: warRoomResult?.agentVotes,
     };
 
   } catch (err) {
@@ -475,6 +683,30 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
     } catch (err) {
       console.warn('[ML Prediction] Failed to resolve predictions:', err.message);
     }
+
+    // Phase 6: Online learning update
+    try {
+      if (onlineLearner && getFlag('ONLINE_LEARNING_ENABLED')) {
+        const actualDirection = outcome === 'WIN' ? 'UP' : 'DOWN';
+        const parsedFeatures = matchingFeature ? JSON.parse(matchingFeature.features_json) : null;
+        onlineLearner.update(
+          { ticker, predicted: label, actual: actualDirection },
+          mlEngine,
+          parsedFeatures
+        );
+      }
+    } catch (olErr) {
+      // Non-critical — online learning update error
+    }
+
+    // Phase 4: War Room outcome recording
+    try {
+      if (warRoom && getFlag('MULTI_AGENT_ENABLED')) {
+        const actualDirection = outcome === 'WIN' ? 'UP' : 'DOWN';
+        // The agentVotes from the last prediction are tracked by caller
+        warRoom.recordOutcome(ticker, actualDirection, null);
+      }
+    } catch {}
 
   } catch (err) {
     console.error('[ML Prediction] recordTradeOutcome error:', err);
@@ -723,6 +955,121 @@ export async function trainModel() {
       }
     } catch (regimeErr) {
       console.warn('[ML Prediction] Regime model training error:', regimeErr.message);
+    }
+
+    // Phase 1: Train TF.js LSTM
+    try {
+      if (tfEngine && getFlag('TF_ENABLED') && features2D.length >= 200) {
+        console.log('[ML Prediction] Training TF.js LSTM...');
+        const sequences = [];
+        const seqLabels = [];
+        for (let i = LSTM_SEQUENCE_LENGTH; i < features2D.length; i++) {
+          sequences.push(features2D.slice(i - LSTM_SEQUENCE_LENGTH, i));
+          seqLabels.push(labels[i]);
+        }
+        if (sequences.length >= 100) {
+          await tfEngine.trainLSTM(sequences, seqLabels);
+          await tfEngine.saveLSTM();
+        }
+      }
+    } catch (tfErr) {
+      console.warn('[ML Prediction] TF.js LSTM training error:', tfErr.message);
+    }
+
+    // Phase 2: Train TFT (multi-horizon)
+    try {
+      if (tfEngine && getFlag('TFT_ENABLED') && features2D.length >= 300) {
+        console.log('[ML Prediction] Training TFT...');
+        const sequences = [];
+        const multiLabels = { h1: [], h4: [], h24: [] };
+        for (let i = LSTM_SEQUENCE_LENGTH; i < features2D.length - 24; i++) {
+          sequences.push(features2D.slice(i - LSTM_SEQUENCE_LENGTH, i));
+          multiLabels.h1.push(labels[i]);
+          multiLabels.h4.push(i + 4 < labels.length ? labels[i + 4] : labels[i]);
+          multiLabels.h24.push(i + 24 < labels.length ? labels[i + 24] : labels[i]);
+        }
+        if (sequences.length >= 100) {
+          await tfEngine.trainTFT(sequences, multiLabels);
+          await tfEngine.saveTFT();
+        }
+      }
+    } catch (tftErr) {
+      console.warn('[ML Prediction] TFT training error:', tftErr.message);
+    }
+
+    // Phase 3: Train RL Agent
+    try {
+      if (rlAgent && getFlag('RL_AGENT_ENABLED') && features2D.length >= 200) {
+        console.log('[ML Prediction] Training RL agent...');
+        // Need candle data for the RL environment
+        // Use labeled samples to reconstruct approximate price movements
+        const { trainRLAgent } = await import('./rlAgent.js');
+        // Build approximate candle array from features
+        const approxCandles = features2D.map((f, i) => ({
+          close: 100 * (1 + (f[11] || 0)), // price_change_1c feature
+          c: 100 * (1 + (f[11] || 0)),
+          h: 100 * (1 + Math.abs(f[14] || 0)),
+          l: 100 * (1 - Math.abs(f[14] || 0)),
+          v: f[20] || 1, // volume_sma_ratio
+        }));
+        const episodes = getFlag('RL_TRAINING_EPISODES') || 100;
+        await trainRLAgent(rlAgent, approxCandles, features2D, episodes);
+      }
+    } catch (rlErr) {
+      console.warn('[ML Prediction] RL agent training error:', rlErr.message);
+    }
+
+    // Phase 5: Synthetic data augmentation (if enabled)
+    try {
+      if (syntheticEngine && getFlag('SYNTHETIC_DATA_ENABLED') && features2D.length >= 200) {
+        console.log('[ML Prediction] Generating synthetic training data...');
+        const sequences = [];
+        for (let i = 30; i < features2D.length; i++) {
+          sequences.push(features2D.slice(i - 30, i));
+        }
+        if (sequences.length >= 50) {
+          await syntheticEngine.train(sequences, 30);
+          const multiplier = getFlag('SYNTHETIC_MULTIPLIER') || 3;
+          const syntheticSeqs = syntheticEngine.generate(Math.min(sequences.length * multiplier, 2000));
+          const quality = syntheticEngine.validateQuality(sequences.slice(0, 50), syntheticSeqs.slice(0, 50));
+          if (quality.passed) {
+            console.log(`[ML Prediction] Synthetic data quality passed (KS=${quality.ksMaxDiff?.toFixed(3)})`);
+            // Note: synthetic data is available for future training cycles
+          } else {
+            console.log('[ML Prediction] Synthetic data quality check failed, skipping');
+          }
+        }
+      }
+    } catch (synthErr) {
+      console.warn('[ML Prediction] Synthetic data error:', synthErr.message);
+    }
+
+    // Phase 6: Save model snapshot for potential rollback
+    try {
+      if (onlineLearner) {
+        onlineLearner.saveSnapshot(mlEngine);
+      }
+    } catch {}
+
+    // Phase 7: Fit isotonic calibration on OOF predictions
+    try {
+      if (shapModule?.IsotonicCalibrator && features2D.length >= 200) {
+        const calibrator = new shapModule.IsotonicCalibrator();
+        // Use last 20% as calibration set
+        const calStart = Math.floor(features2D.length * 0.8);
+        const calFeatures = features2D.slice(calStart);
+        const calLabels = labels.slice(calStart);
+        const calProbs = calFeatures.map(f => {
+          const pred = mlEngine.predict(f);
+          return pred.probabilities?.up || 0.5;
+        });
+        calibrator.fit(calProbs, calLabels);
+        mlEngine._isotonicCalibrator = calibrator;
+        const metrics = shapModule.IsotonicCalibrator.computeMetrics(calProbs, calLabels);
+        console.log(`[ML Prediction] Calibration: Brier=${metrics.brierScore.toFixed(4)}, ECE=${metrics.ece.toFixed(4)}`);
+      }
+    } catch (calErr) {
+      console.warn('[ML Prediction] Calibration error:', calErr.message);
     }
 
     // Save model to database

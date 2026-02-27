@@ -10,6 +10,13 @@ import { BaseExchangeAdapter } from './baseAdapter.js';
 
 const KRAKEN_BASE_URL = 'https://api.kraken.com';
 
+// Session manager reference (set via init)
+let _SessionManager = null;
+
+export function setKrakenSessionManager(sm) {
+    _SessionManager = sm;
+}
+
 // Timeframe mapping: internal → Kraken interval (minutes)
 const TIMEFRAME_MAP = {
     '1m': 1,
@@ -65,12 +72,26 @@ function createKrakenSignature(path, nonce, postData, secret) {
     return hmac.digest('base64');
 }
 
-async function krakenPrivateRequest(endpoint, params = {}) {
-    const apiKey = process.env.KRAKEN_API_KEY;
-    const secret = process.env.KRAKEN_SECRET;
+async function krakenPrivateRequest(endpoint, params = {}, sessionId = null) {
+    let apiKey, secret;
+
+    // First: try session-based credentials (from user login)
+    if (sessionId && _SessionManager) {
+        const session = _SessionManager.getSession(sessionId);
+        if (session) {
+            apiKey = session.apiKey;
+            secret = session.secretKey;
+        }
+    }
+
+    // Fallback: environment variables
+    if (!apiKey || !secret) {
+        apiKey = process.env.KRAKEN_API_KEY;
+        secret = process.env.KRAKEN_SECRET;
+    }
 
     if (!apiKey || !secret) {
-        throw new Error('Kraken API credentials not configured. Set KRAKEN_API_KEY and KRAKEN_SECRET.');
+        throw new Error('Kraken API credentials not available. Please authenticate first.');
     }
 
     const path = `/0/private/${endpoint}`;
@@ -166,24 +187,103 @@ export class KrakenAdapter extends BaseExchangeAdapter {
     }
 
     async getBalance(sessionId) {
-        const result = await krakenPrivateRequest('Balance');
+        const result = await krakenPrivateRequest('Balance', {}, sessionId);
+        console.log('[Kraken] Raw balance response:', JSON.stringify(result));
 
         let cashBalance = 0;
+        let cadBalance = 0;
         const holdings = {};
 
         for (const [asset, balance] of Object.entries(result)) {
             const qty = parseFloat(balance);
             if (qty <= 0) continue;
 
-            const normalized = asset.replace(/^X/, '').replace(/^Z/, '').replace('XBT', 'BTC');
+            // Normalize: strip X prefix (crypto), Z prefix (fiat), XBT→BTC
+            // Also handle staked/flex suffixes: ETH2.S → ETH, CAD.F → CAD, DOT.S → DOT
+            let normalized = asset.replace(/^X/, '').replace(/^Z/, '').replace('XBT', 'BTC');
+            const baseAsset = normalized.replace(/[\d]*\.[A-Z]+$/, '');  // Strip any suffix like .S .F .M .HOLD
 
-            if (normalized === 'USD' || asset === 'ZUSD') {
+            console.log(`[Kraken] Asset: ${asset} → normalized: ${normalized}, base: ${baseAsset}, qty: ${qty}`);
+
+            // Check fiat using baseAsset (handles ZCAD, CAD, CAD.F, CAD.S, USD.F, etc.)
+            if (baseAsset === 'USD' || asset === 'ZUSD') {
                 cashBalance += qty;
+            } else if (baseAsset === 'CAD' || asset === 'ZCAD') {
+                cadBalance += qty;
+            } else if (baseAsset === 'EUR' || baseAsset === 'GBP') {
+                // Skip other fiat for now
             } else {
-                holdings[normalized] = { quantity: qty, usdValue: 0 };
+                // Merge staked + unstaked into same base asset
+                if (holdings[baseAsset]) {
+                    holdings[baseAsset].quantity += qty;
+                } else {
+                    holdings[baseAsset] = { quantity: qty, usdValue: 0 };
+                }
             }
         }
 
+        // Look up current prices for all crypto holdings
+        const cryptoAssets = Object.keys(holdings);
+        if (cryptoAssets.length > 0) {
+            for (const asset of cryptoAssets) {
+                try {
+                    // Try USD pair first
+                    const pair = toKrakenPair(asset + 'USD');
+                    const tickerResult = await krakenPublicRequest('Ticker', { pair });
+                    for (const [, data] of Object.entries(tickerResult)) {
+                        const price = parseFloat(data.c?.[0] || '0');
+                        if (price > 0) {
+                            holdings[asset].usdValue = holdings[asset].quantity * price;
+                            holdings[asset].price = price;
+                        }
+                    }
+                } catch (e) {
+                    console.warn(`[Kraken] USD price failed for ${asset}: ${e.message}, trying CAD...`);
+                    // Fallback: try CAD pair and convert (~0.72 USD/CAD)
+                    try {
+                        const cadPair = toKrakenPair(asset + 'CAD');
+                        const cadResult = await krakenPublicRequest('Ticker', { pair: cadPair });
+                        for (const [, data] of Object.entries(cadResult)) {
+                            const cadPrice = parseFloat(data.c?.[0] || '0');
+                            if (cadPrice > 0) {
+                                // Also fetch USD/CAD rate for accurate conversion
+                                let usdCadRate = 1.38; // fallback estimate
+                                try {
+                                    const fxResult = await krakenPublicRequest('Ticker', { pair: 'USDCAD' });
+                                    for (const [, fxData] of Object.entries(fxResult)) {
+                                        const rate = parseFloat(fxData.c?.[0] || '0');
+                                        if (rate > 0) usdCadRate = rate;
+                                    }
+                                } catch { /* use fallback rate */ }
+                                const usdPrice = cadPrice / usdCadRate;
+                                holdings[asset].usdValue = holdings[asset].quantity * usdPrice;
+                                holdings[asset].price = usdPrice;
+                                console.log(`[Kraken] ${asset} priced via CAD: ${cadPrice} CAD → ${usdPrice.toFixed(2)} USD`);
+                            }
+                        }
+                    } catch (e2) {
+                        console.warn(`[Kraken] CAD price also failed for ${asset}: ${e2.message}`);
+                    }
+                }
+            }
+        }
+
+        // Convert CAD balance to USD and add to cash
+        if (cadBalance > 0) {
+            let usdCadRate = 1.38; // fallback
+            try {
+                const fxResult = await krakenPublicRequest('Ticker', { pair: 'USDCAD' });
+                for (const [, data] of Object.entries(fxResult)) {
+                    const rate = parseFloat(data.c?.[0] || '0');
+                    if (rate > 0) usdCadRate = rate;
+                }
+            } catch { /* use fallback rate */ }
+            const cadInUsd = cadBalance / usdCadRate;
+            console.log(`[Kraken] CAD balance: ${cadBalance} CAD → ${cadInUsd.toFixed(2)} USD (rate: ${usdCadRate})`);
+            cashBalance += cadInUsd;
+        }
+
+        console.log('[Kraken] Final balance:', { cashBalance, holdings });
         return { cashBalance, holdings };
     }
 
@@ -205,7 +305,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             type: 'buy',
             ordertype: 'market',
             volume,
-        });
+        }, sessionId);
 
         const orderId = result.txid?.[0] || '';
 
@@ -240,7 +340,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             type: 'sell',
             ordertype: 'market',
             volume,
-        });
+        }, sessionId);
 
         const orderId = result.txid?.[0] || '';
 
@@ -294,7 +394,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             ordertype: 'limit',
             price: price.toFixed(8),
             volume: volume.toFixed(8),
-        });
+        }, sessionId);
 
         return {
             orderId: result.txid?.[0] || '',
@@ -319,7 +419,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             ordertype: 'limit',
             price: price.toFixed(8),
             volume: volume.toFixed(8),
-        });
+        }, sessionId);
 
         return {
             orderId: result.txid?.[0] || '',
@@ -336,7 +436,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
      * Get all open orders.
      */
     async getOpenOrders(sessionId) {
-        const result = await krakenPrivateRequest('OpenOrders');
+        const result = await krakenPrivateRequest('OpenOrders', {}, sessionId);
         const orders = [];
 
         for (const [txid, order] of Object.entries(result.open || {})) {
@@ -362,7 +462,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
     async cancelOrder(orderId, sessionId) {
         const result = await krakenPrivateRequest('CancelOrder', {
             txid: orderId,
-        });
+        }, sessionId);
 
         return {
             success: true,
@@ -377,7 +477,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
     async getOrderStatus(orderId, sessionId) {
         const result = await krakenPrivateRequest('QueryOrders', {
             txid: orderId,
-        });
+        }, sessionId);
 
         const order = result[orderId];
         if (!order) {

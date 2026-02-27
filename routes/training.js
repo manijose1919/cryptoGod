@@ -19,6 +19,9 @@ import {
   getTrainingStatus,
   getTrainingResults,
   getLearnedState,
+  distillSeed,
+  breedSeeds,
+  modifySeed,
 } from '../services/historicalTrainingEngine.js';
 import {
   getTrainingRuns,
@@ -116,7 +119,9 @@ router.get('/data/summary', (req, res) => {
 
 /**
  * POST /api/training/start — Start a training run
- * Body: { tickers?: string[], initialCash?: number, startTime?: number, endTime?: number, seedRunId?: string }
+ * Body: { tickers?: string[], initialCash?: number, startTime?: number, endTime?: number,
+ *         seedRunId?: string, strategyFilter?: string[], targetWinRate?: number,
+ *         aggressiveCompounding?: boolean, selectivity?: 'normal'|'high' }
  */
 router.post('/start', async (req, res) => {
   try {
@@ -329,7 +334,9 @@ router.post('/apply', async (req, res) => {
 
 /**
  * POST /api/training/walk-forward/start — Start walk-forward validation
- * Body: { trainMonths?: number, testMonths?: number, stepMonths?: number, tickers?: string[], initialCash?: number, seedRunId?: string, skipMTF?: boolean, selectivity?: 'normal'|'high' }
+ * Body: { trainMonths?: number, testMonths?: number, stepMonths?: number, tickers?: string[],
+ *         initialCash?: number, seedRunId?: string, skipMTF?: boolean, selectivity?: 'normal'|'high',
+ *         strategyFilter?: string[], targetWinRate?: number, aggressiveCompounding?: boolean }
  */
 router.post('/walk-forward/start', async (req, res) => {
   try {
@@ -414,6 +421,57 @@ router.get('/progress-stream', (req, res) => {
   req.on('close', () => {
     clearInterval(interval);
   });
+});
+
+// ============================================
+// SEED DISTILLATION
+// ============================================
+
+/**
+ * POST /api/training/distill — Create a winners-only distilled seed from a training run.
+ * Body: { runId: string, minProfitPct?: number, amplifyBigWins?: boolean }
+ */
+router.post('/distill', (req, res) => {
+  try {
+    const { runId, minProfitPct, amplifyBigWins, profitFocused } = req.body;
+    if (!runId) return res.status(400).json({ error: 'runId required' });
+    const result = distillSeed(runId, { minProfitPct, amplifyBigWins, profitFocused });
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/training/breed — Genetic crossover of multiple seeds.
+ * Body: { seedIds: string[], consensusThreshold?: number }
+ */
+router.post('/breed', (req, res) => {
+  try {
+    const { seedIds, consensusThreshold } = req.body;
+    if (!seedIds || seedIds.length < 2) {
+      return res.status(400).json({ error: 'Need at least 2 seedIds' });
+    }
+    const result = breedSeeds(seedIds, { consensusThreshold });
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * POST /api/training/modify-seed — Create a modified copy of a seed.
+ * Body: { seedId: string, exitParams?: object, optimizedParams?: object }
+ */
+router.post('/modify-seed', (req, res) => {
+  try {
+    const { seedId, exitParams, optimizedParams, regimeExitOverrides, blockedHours } = req.body;
+    if (!seedId) return res.status(400).json({ error: 'seedId required' });
+    const result = modifySeed(seedId, { exitParams, optimizedParams, regimeExitOverrides, blockedHours });
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 export default router;

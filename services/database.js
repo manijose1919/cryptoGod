@@ -537,11 +537,54 @@ export function initializeDatabase() {
   // Add regime column to ml_features (safe migration)
   try { db.exec(`ALTER TABLE ml_features ADD COLUMN regime TEXT`); } catch(e) { /* already exists */ }
 
+  // Phase 1-8: ML Pipeline tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tf_models (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      model_type TEXT NOT NULL,
+      model_path TEXT,
+      accuracy REAL,
+      loss REAL,
+      config_json TEXT,
+      sample_count INTEGER,
+      trained_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS agent_performance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_name TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      was_correct INTEGER NOT NULL,
+      confidence REAL,
+      meta_weight REAL,
+      ticker TEXT,
+      created_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS drift_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_type TEXT NOT NULL,
+      details_json TEXT,
+      accuracy_before REAL,
+      accuracy_after REAL,
+      created_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS shap_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT,
+      feature_importances_json TEXT,
+      prediction TEXT,
+      confidence REAL,
+      created_at INTEGER
+    );
+  `);
+
   // Performance indexes
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_ml_features_lookup ON ml_features(ticker, timestamp)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_ml_predictions_lookup ON ml_predictions(ticker, timestamp)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_trades_strategy_outcome ON trades(strategy, outcome)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_execution_metrics_lookup ON execution_metrics(ticker, timestamp)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_agent_performance_name ON agent_performance(agent_name, created_at)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_drift_events_time ON drift_events(created_at DESC)`); } catch(e) {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_shap_history_ticker ON shap_history(ticker, created_at DESC)`); } catch(e) {}
 
   console.log(`[Database] Initialized SQLite at ${dbPath}`);
   return db;

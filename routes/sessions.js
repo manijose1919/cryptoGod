@@ -270,6 +270,7 @@ export default function createSessionsRouter(ctx) {
                         highestPrice: pos.highestPrice,
                         lowestPrice: pos.lowestPrice,
                     })),
+                    holdings: ctx.portfolio.holdings || {},
                 },
 
                 logs: ctx.logs.slice(0, 50),

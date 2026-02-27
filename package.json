@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
+    "@tensorflow/tfjs": "^4.22.0",
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

@@ -50,7 +50,7 @@ import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategy
 import { calculateAllIndicators } from './services/advancedIndicators.js';
 import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
 import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment } from './services/socialSentiment.js';
-import { setGeminiKey, getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
+import { getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
 import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, fullResetBeastMode, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee, setTargetOverrides } from './services/beastMode.js';
 import { triggerOptimization, getOptimizedEntryParams, getOptimizedTargets, getOptimizerStatus, forceOptimize, recordPostOptTrade, resetToDefaults as resetOptimizer, setFeeForSimulation, exportState as optExportState, importState as optImportState } from './services/parameterOptimizer.js';
 
@@ -389,7 +389,7 @@ const CONFIG = {
     TICKER_REFRESH_MS: 3600000,
     MAX_LOGS: 100,
     RATE_LIMIT_WINDOW_MS: 60000,
-    RATE_LIMIT_MAX_REQUESTS: 100,
+    RATE_LIMIT_MAX_REQUESTS: 600,
 
     // Signal thresholds (BEAST MODE - further relaxed ~10-15%)
     THRESHOLDS: {
@@ -497,6 +497,10 @@ setInterval(() => {
 
 const rateLimit = (req, res, next) => {
     const ip = req.ip || req.connection.remoteAddress;
+    // Skip rate limiting for localhost (personal trading app)
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') {
+        return next();
+    }
     const now = Date.now();
     const windowStart = now - CONFIG.RATE_LIMIT_WINDOW_MS;
 
@@ -539,7 +543,8 @@ app.use(cors({
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' })); // Increased for candle batch inserts
-app.use(rateLimit);
+// Rate limiting disabled for local development — re-enable for production/VPS
+// app.use(rateLimit);
 
 // Serve built frontend (production)
 const __filename = fileURLToPath(import.meta.url);
@@ -2881,13 +2886,13 @@ const startServer = async () => {
     initJournalTable();
     initTelegram();
 
-    // Validate exchange credentials at startup
+    // Check exchange credentials at startup (no longer fatal — user can provide via login)
     if (getActiveExchangeId() === 'kraken') {
         if (!process.env.KRAKEN_API_KEY || !process.env.KRAKEN_SECRET) {
-            console.error('[Server] FATAL: Kraken mode requires KRAKEN_API_KEY and KRAKEN_SECRET env vars');
-            process.exit(1);
+            console.log('[Server] Kraken mode: no env vars set — user must authenticate via UI');
+        } else {
+            console.log('[Server] Kraken mode: env credentials available');
         }
-        console.log('[Server] Kraken mode: credentials verified');
     }
 
     // Restore previous session state before anything else
@@ -2940,7 +2945,7 @@ const startServer = async () => {
 
     await logPublicIp();
     await updateAvailableTickers();
-    if (process.env.GEMINI_API_KEY) setGeminiKey(process.env.GEMINI_API_KEY);
+    // preTradeAI is a local rule engine — no API key needed
     restoreAILearning();
     
     // Create HTTP server and attach WebSocket relay for frontend clients

@@ -79,7 +79,7 @@ export function LeftPanel({ onStart, toggleBot, onCloseAll, onStopSession }: Lef
                 onCloseAll={onCloseAll}
                 onStopSession={onStopSession}
             />
-            <PortfolioSummary portfolio={portfolio} watchlistData={watchlistDataRef.current} />
+            <PortfolioSummary portfolio={portfolio} watchlistData={watchlistDataRef.current} tradingMode={tradingMode} />
             <SessionSummary trades={trades} initialBudget={portfolio.initialBudget} />
             <TradeHistory trades={trades} />
         </div>

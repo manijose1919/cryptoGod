@@ -3,8 +3,8 @@
  * Returns the correct adapter based on exchange ID.
  * Runtime switchable via setActiveExchange().
  */
-import { cryptoComAdapter, setSessionManager } from './cryptocomAdapter.js';
-import { krakenAdapter } from './krakenAdapter.js';
+import { cryptoComAdapter, setSessionManager as setCryptoComSessionManager } from './cryptocomAdapter.js';
+import { krakenAdapter, setKrakenSessionManager } from './krakenAdapter.js';
 import * as cryptoComWs from '../websocketService.js';
 import * as krakenWs from '../krakenWebsocketService.js';
 
@@ -64,4 +64,8 @@ export function getWebSocketService(exchangeId) {
     return wsServices[id];
 }
 
-export { setSessionManager };
+/** Set session manager on all adapters that need it */
+export function setSessionManager(sm) {
+    setCryptoComSessionManager(sm);
+    setKrakenSessionManager(sm);
+}

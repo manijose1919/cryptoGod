@@ -48,6 +48,47 @@ const DEFAULT_FLAGS = {
   SMART_EXECUTION_ENABLED: true,
   PORTFOLIO_OPTIMIZER_ENABLED: true,
   CONTINUOUS_BACKTEST_ENABLED: true,  // Batch 4C: background strategy quality monitoring
+
+  // Phase 1: TF.js LSTM
+  TF_ENABLED: true,
+  TF_LSTM_HIDDEN_UNITS: 128,
+  TF_DROPOUT_RATE: 0.3,
+  TF_LEARNING_RATE: 0.001,
+  TF_MAX_EPOCHS: 50,
+
+  // Phase 2: Temporal Fusion Transformer
+  TFT_ENABLED: true,
+  TFT_ATTENTION_HEADS: 4,
+  TFT_HIDDEN_DIM: 32,
+  TFT_HORIZONS: 3,    // 1h, 4h, 24h
+
+  // Phase 3: Deep RL Agent
+  RL_AGENT_ENABLED: true,
+  RL_CLIP_RATIO: 0.2,
+  RL_TRAINING_EPISODES: 100,
+
+  // Phase 4: Multi-Agent War Room
+  MULTI_AGENT_ENABLED: true,
+  META_LEARNER_ALPHA: 0.1,
+
+  // Phase 5: Synthetic Data
+  SYNTHETIC_DATA_ENABLED: false,    // Off by default — experimental
+  SYNTHETIC_MULTIPLIER: 3,
+  SYNTHETIC_QUALITY_THRESHOLD: 0.35,
+
+  // Phase 6: Online Learning
+  ONLINE_LEARNING_ENABLED: true,
+  DRIFT_DETECTION_ENABLED: true,
+  ROLLBACK_ENABLED: true,
+
+  // Phase 7: SHAP Enhancements
+  SHAP_DRIFT_TRACKING_ENABLED: true,
+  CALIBRATION_METHOD: 'isotonic',   // 'isotonic' | 'platt' | 'none'
+
+  // Phase 8: Advanced Features
+  FEATURE_INTERACTIONS_ENABLED: true,
+  MTF_FEATURES_ENABLED: true,
+  WAVELET_FEATURES_ENABLED: true,
 };
 
 // In-memory cache of current flags (seeded from defaults, overwritten by DB on init)
