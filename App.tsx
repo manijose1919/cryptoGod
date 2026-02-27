@@ -25,9 +25,9 @@ function AppContent() {
         showReconnect, setShowReconnect, isBotActive,
         setIsVPSReconnect, setIsTradingActive, setIsBotActive,
         setIsScannerActive, setIsLoading, addLog, isTradingActive,
-        tradingMode,
+        tradingMode, isApiAuthenticated,
     } = useTradingContext();
-    const { setUnlimitedTrades } = useSettingsContext();
+    const { setUnlimitedTrades, currentExchange } = useSettingsContext();
     const { setLearningState } = useMarketDataContext();
 
     useMarketData();
@@ -42,14 +42,20 @@ function AppContent() {
 
     useKeyboardShortcuts(toggleBot);
 
-    // Unified start handler: REAL mode opens auth modal, SIMULATION starts session
+    // Unified start handler: REAL mode opens auth modal (or re-activates if already authenticated)
     const handleStart = useCallback((budget: number, ticker: string) => {
         if (tradingMode === 'REAL') {
-            setIsAuthModalOpen(true);
+            if (isApiAuthenticated) {
+                // Already authenticated — re-activate the trading session
+                setIsTradingActive(true);
+                addLog('Real trading session re-activated.', 'SPECIAL');
+            } else {
+                setIsAuthModalOpen(true);
+            }
         } else {
             handleStartSimulation(budget, ticker);
         }
-    }, [tradingMode, handleStartSimulation, setIsAuthModalOpen]);
+    }, [tradingMode, handleStartSimulation, setIsAuthModalOpen, isApiAuthenticated, setIsTradingActive, addLog]);
 
     // Poll AI learning state from backend
     useEffect(() => {
@@ -103,6 +109,7 @@ function AppContent() {
                 <RealTradingModal
                     onClose={() => setIsAuthModalOpen(false)}
                     onAuthenticate={handleAuthenticate}
+                    exchangeName={currentExchange === 'kraken' ? 'Kraken' : 'Crypto.com'}
                 />
             )}
             <SessionHistory

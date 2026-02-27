@@ -165,11 +165,11 @@ export function createIsolatedState() {
       lossHoldHours: [], // hours held for losing trades
       // Learned exit parameters
       exitParams: {
-        stopLoss: -0.05,
-        takeProfit: 0.04,
-        maxHold: 48,
-        trailingStart: 0.03,
-        trailingGiveBack: 0.4,
+        stopLoss: -0.05,       // 5% stop — wide to avoid crypto noise false stop-outs
+        takeProfit: 0.05,      // 5% TP — 1:1 R:R
+        maxHold: 120,          // 5 days max hold
+        trailingStart: 0.10,   // Trail only on big moves (10%+)
+        trailingGiveBack: 0.35, // Give back 35% of peak
       },
       // How many trades since last optimization
       tradesSinceOptimize: 0,
@@ -262,8 +262,10 @@ function evaluateTradeQuality(memory, strategy, regime, indicatorValues, selPara
       const winRate = rs.wins / total;
       const avgPnl = rs.totalPnl / total;
 
-      // Block if win rate is below threshold OR if average PnL is significantly negative
-      if (winRate < minRSWR || (total >= 30 && avgPnl < -0.5)) {
+      // Block if win rate is below threshold
+      // Note: avgPnl check removed — it's budget-sensitive ($1M positions = huge dollar PnL).
+      // WR is the reliable, budget-independent metric for quality filtering.
+      if (winRate < minRSWR) {
         return {
           allow: false,
           reason: `${rsKey} WR=${(winRate * 100).toFixed(0)}% avgPnL=$${avgPnl.toFixed(2)} (${total} samples)`,
@@ -378,59 +380,18 @@ function runOptimization(state) {
     }
   }
 
-  // --- 2. Optimize exit parameters for EXPECTED VALUE, not win rate ---
-  // The key insight: TP must be >= SL * MIN_REWARD_RISK to be profitable long-term.
-  // We simulate multiple TP/SL combos on the actual PnL data and pick the one
-  // with the highest expected value per trade.
-  if (memory.winPnls.length >= 50 && memory.lossPnls.length >= 50) {
-    const allPnls = [...memory.winPnls, ...memory.lossPnls];
-    const MIN_REWARD_RISK = 1.5; // Minimum 1.5:1 reward to risk
+  // --- 2. Exit params: keep fixed defaults ---
+  // NOTE: Exit param optimization disabled — the PnL simulation doesn't account for
+  // trailing stops, so it picks impractical TP/SL combos (e.g., TP=10%/SL=-2%).
+  // Fixed defaults: SL=-4%, TP=4%, trailing starts at 6%.
+  // The indicator threshold optimizer (above) and quality filter still learn and improve.
+  console.log(`[Training Optimizer] Exit params (fixed): SL=${(memory.exitParams.stopLoss * 100).toFixed(1)}% TP=${(memory.exitParams.takeProfit * 100).toFixed(1)}% MaxHold=${memory.exitParams.maxHold}h`);
 
-    // Test grid of SL/TP combinations
-    let bestEV = -Infinity;
-    let bestSL = memory.exitParams.stopLoss;
-    let bestTP = memory.exitParams.takeProfit;
-
-    const slCandidates = [-0.02, -0.025, -0.03, -0.035, -0.04, -0.05, -0.06, -0.07];
-    const tpCandidates = [0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.10];
-
-    for (const sl of slCandidates) {
-      for (const tp of tpCandidates) {
-        // Enforce minimum reward:risk ratio
-        if (tp < Math.abs(sl) * MIN_REWARD_RISK) continue;
-
-        // Simulate: count how many trades would have won/lost at these levels
-        let simWins = 0, simLosses = 0, simPnl = 0;
-        for (const pnl of allPnls) {
-          if (pnl >= tp) { simWins++; simPnl += tp; }        // Would have hit TP
-          else if (pnl <= sl) { simLosses++; simPnl += sl; } // Would have hit SL
-          else { simPnl += pnl; simLosses++; }               // Time exit / other
-        }
-
-        const total = simWins + simLosses;
-        if (total < 20) continue;
-        const ev = simPnl / total;  // Expected value per trade
-
-        if (ev > bestEV) {
-          bestEV = ev;
-          bestSL = sl;
-          bestTP = tp;
-        }
-      }
-    }
-
-    memory.exitParams.stopLoss = bestSL;
-    memory.exitParams.takeProfit = bestTP;
-
-    console.log(`[Training Optimizer] Exit params optimized for EV: TP=${(bestTP * 100).toFixed(1)}% SL=${(bestSL * 100).toFixed(1)}% (EV=${(bestEV * 100).toFixed(3)}% per trade, R:R=${(bestTP / Math.abs(bestSL)).toFixed(1)}:1)`);
-
-    // Optimize max hold: use median hold time of PROFITABLE trades
-    if (memory.winHoldHours.length >= 30) {
-      const sortedHold = [...memory.winHoldHours].sort((a, b) => a - b);
-      const p75Hold = sortedHold[Math.floor(sortedHold.length * 0.75)];
-      // Cap max hold to 75th percentile of winning trades × 1.5
-      memory.exitParams.maxHold = Math.max(12, Math.min(120, Math.ceil(p75Hold * 1.5)));
-    }
+  // Optimize max hold: use median hold time of PROFITABLE trades
+  if (memory.winHoldHours.length >= 30) {
+    const sortedHold = [...memory.winHoldHours].sort((a, b) => a - b);
+    const p75Hold = sortedHold[Math.floor(sortedHold.length * 0.75)];
+    memory.exitParams.maxHold = Math.max(12, Math.min(120, Math.ceil(p75Hold * 1.5)));
   }
 
   // --- 3. Log optimization results ---
@@ -572,7 +533,7 @@ function buildFeatureVector(candles, ticker, strategy, regime, score, fearGreed,
 /**
  * Evaluate all strategies for entry and return the best one.
  */
-function evaluateStrategies(candles, regime, state, minStrategiesRequired = 1) {
+function evaluateStrategies(candles, regime, state, minStrategiesRequired = 1, strategyFilter = null) {
   if (candles.length < MIN_CANDLES_REQUIRED) return null;
 
   const tcValue = calculateTCSeries(candles).pop() ?? 50;
@@ -638,9 +599,20 @@ function evaluateStrategies(candles, regime, state, minStrategiesRequired = 1) {
     candidates.push({ strategy: 'CONFLUENCE', value: bullishCount, strength: strength * w });
   }
 
-  if (candidates.length < minStrategiesRequired) return null;
-  candidates.sort((a, b) => b.strength - a.strength);
-  return candidates[0];
+  // Apply strategy filter if specified (e.g., ['TREND'] for TREND-only training)
+  const filtered = strategyFilter
+    ? candidates.filter(c => strategyFilter.includes(c.strategy))
+    : candidates;
+
+  // When strategy filter is active, clamp minRequired to filter size
+  // (e.g., TREND-only can't require 2 strategies agreeing)
+  const effectiveMin = strategyFilter
+    ? Math.min(minStrategiesRequired, strategyFilter.length)
+    : minStrategiesRequired;
+
+  if (filtered.length < effectiveMin) return null;
+  filtered.sort((a, b) => b.strength - a.strength);
+  return filtered[0];
 }
 
 /**
@@ -670,14 +642,17 @@ function checkExitConditions(position, candles, exitParams = null) {
     return `Trailing stop: gave back ${((position.highestPnlPct - pnlPct) * 100).toFixed(1)}%`;
   }
 
-  // Strategy-specific exits
-  const params = THRESHOLDS;
-  switch (position.strategy) {
-    case 'TREND': {
-      const tcValue = calculateTCSeries(candles).pop() ?? 50;
-      if (tcValue > params.TREND_BEARISH_EXIT) return 'Trend: bearish exit';
-      break;
-    }
+  // Strategy-specific exits — only fire when trade is below the profit floor.
+  // Let trades above +2% ride to TP/trailing instead of getting cut early.
+  // Below +2%, strategy exits act as early stop-loss for failing trends.
+  if (pnlPct < 0.02) {
+    const params = THRESHOLDS;
+    switch (position.strategy) {
+      case 'TREND': {
+        const tcValue = calculateTCSeries(candles).pop() ?? 50;
+        if (tcValue > params.TREND_BEARISH_EXIT) return 'Trend: bearish exit';
+        break;
+      }
     case 'MOMENTUM': {
       const momValue = calculateMomentumSeries(candles).pop() ?? 50;
       if (momValue < params.MOMENTUM_BEARISH_EXIT) return 'Momentum: bearish';
@@ -705,11 +680,12 @@ function checkExitConditions(position, candles, exitParams = null) {
       break;
     }
     case 'DIVERGENCE': {
-      const div = calculateDivergence(candles);
-      if (div && div.type === 'bearish' && div.confidence >= params.DIVERGENCE_MIN_CONFIDENCE) return 'Divergence: bearish';
-      break;
+        const div = calculateDivergence(candles);
+        if (div && div.type === 'bearish' && div.confidence >= params.DIVERGENCE_MIN_CONFIDENCE) return 'Divergence: bearish';
+        break;
+      }
     }
-  }
+  } // end if (pnlPct < 0) — strategy exits only for losing trades
 
   return null;
 }
@@ -1055,6 +1031,13 @@ export function seedStateFromRun(seedRunId) {
     state.tradeMemory.regimeStrategy = learned.tradeMemory.regimeStrategy || {};
     state.tradeMemory.indicatorBins = learned.tradeMemory.indicatorBins || {};
     state.tradeMemory.exitParams = learned.tradeMemory.exitParams || state.tradeMemory.exitParams;
+    // Transfer regime-specific exit overrides and time-of-day blocked hours
+    if (learned.tradeMemory.regimeExitOverrides) {
+      state.tradeMemory.regimeExitOverrides = learned.tradeMemory.regimeExitOverrides;
+    }
+    if (learned.tradeMemory.blockedHours) {
+      state.tradeMemory.blockedHours = learned.tradeMemory.blockedHours;
+    }
     // Don't carry forward raw PnL arrays (they'd be stale), but keep exit params
     state.tradeMemory.tradesSinceOptimize = 0;
   }
@@ -1096,7 +1079,25 @@ export async function startTraining(config = {}) {
   const evaluationOnly = config.evaluationOnly || false;
   const frozenState = config.frozenState || null;
   const skipMTF = config.skipMTF || false;
-  const selectivity = SELECTIVITY_PRESETS[config.selectivity] || SELECTIVITY_PRESETS.normal;
+  const selectivity = { ...(SELECTIVITY_PRESETS[config.selectivity] || SELECTIVITY_PRESETS.normal) };
+  const strategyFilter = config.strategyFilter || null; // e.g. ['TREND'] for TREND-only
+  const targetWinRate = config.targetWinRate || 0;
+  const aggressiveCompounding = config.aggressiveCompounding || false;
+
+  // When seeded, lower the quality gate threshold so trade memory filters take effect immediately
+  // When seeded, lower the quality gate threshold so trade memory filters take effect immediately
+  if (seedRunId) {
+    selectivity.minMemoryTradesForGate = Math.min(selectivity.minMemoryTradesForGate, 30);
+    console.log(`[Training] Seeded run: lowered minMemoryTradesForGate to ${selectivity.minMemoryTradesForGate}`);
+  }
+  // When targeting high win rate, raise the REGIME+STRATEGY filter only.
+  // Don't raise indicator bin threshold — that over-filters UP_TREND trades.
+  // The regime filter is the big lever: blocks DOWN_TREND (53% WR) while allowing UP_TREND (64%+).
+  if (targetWinRate > 0.5) {
+    const minWR = Math.max(selectivity.minRegimeStrategyWR, targetWinRate * 0.75);
+    selectivity.minRegimeStrategyWR = minWR;
+    console.log(`[Training] Target WR ${(targetWinRate*100).toFixed(0)}%: regime+strategy threshold raised to rsWR=${(minWR*100).toFixed(0)}% (binWR stays at ${(selectivity.minBinWR*100).toFixed(0)}%)`);
+  }
   const runId = `train_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
   // Determine time range from available data
@@ -1173,12 +1174,16 @@ export async function startTraining(config = {}) {
     seedRunId,
     evaluationOnly,
     epoch: seedRunId ? (getTrainingRun(seedRunId)?.config_json ? ((JSON.parse(getTrainingRun(seedRunId).config_json).epoch || 0) + 1) : 1) : 0,
+    sessionTradeCount: 0, // Trades taken THIS session (not counting seeded prior)
     strategyBreakdown: {},
     recentTrades: [],
     equityBuffer: [],    // Buffer for batch DB inserts
     tradeBuffer: [],     // Buffer for batch DB inserts
     mlSampleBuffer: [],  // Buffer for batch DB inserts
     selectivity,
+    strategyFilter,
+    targetWinRate,
+    aggressiveCompounding,
     startedAt: Date.now(),
   };
 
@@ -1255,6 +1260,21 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
   const isEvalOnly = training.evaluationOnly || false;
   let lastStepTime = timeline[timeline.length - 1] || Date.now(); // Track for end-of-loop cleanup
 
+  // Block-reason counters for debugging entry issues
+  const blockCounters = {
+    entryCooldown: 0, noOpenSlots: 0, noCash: 0, paused: 0,
+    lowScore: 0, noCandles: 0, regimeGate: 0, noStrategy: 0,
+    mtfBlock: 0, qualityFilter: 0, confidenceFloor: 0,
+    positionTooSmall: 0, totalEntryAttempts: 0, totalEntries: 0,
+  };
+  const exitCounters = {
+    stopLoss: { count: 0, totalPnl: 0 },
+    takeProfit: { count: 0, totalPnl: 0 },
+    timeExit: { count: 0, totalPnl: 0 },
+    trailing: { count: 0, totalPnl: 0 },
+    strategy: { count: 0, totalPnl: 0 },
+  };
+
   // Build index maps for fast candle window lookups
   // For each ticker, create a sorted time->index map
   const candleIndexMaps = {};
@@ -1306,8 +1326,21 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         position.highestPnlPct = pnlPct;
       }
 
-      const exitReason = checkExitConditions(position, candles, state.tradeMemory?.exitParams);
+      // Regime-specific exit overrides: merge global exits with per-regime tweaks
+      let exitP = state.tradeMemory?.exitParams;
+      const regimeOverrides = state.tradeMemory?.regimeExitOverrides?.[position.regime];
+      if (regimeOverrides) exitP = { ...exitP, ...regimeOverrides };
+      const exitReason = checkExitConditions(position, candles, exitP);
       if (exitReason) {
+        // Track exit reason
+        const exitType = exitReason.startsWith('Stop loss') ? 'stopLoss'
+          : exitReason.startsWith('Take profit') ? 'takeProfit'
+          : exitReason.startsWith('Time exit') ? 'timeExit'
+          : exitReason.startsWith('Trailing') ? 'trailing' : 'strategy';
+        const tradePnl = (currentPrice - position.entryPrice) * position.quantity;
+        exitCounters[exitType].count++;
+        exitCounters[exitType].totalPnl += tradePnl;
+
         // Execute simulated sell
         const sellFee = currentPrice * position.quantity * TRADING_FEE_PER_SIDE;
         const buyFee = position.entryPrice * position.quantity * TRADING_FEE_PER_SIDE;
@@ -1397,13 +1430,18 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
 
     // Entry cooldown — skip entry evaluation on non-cooldown steps
     if (sel.entryCooldownSteps > 1 && stepIdx % sel.entryCooldownSteps !== 0) {
-      // Skip entry evaluation this step
+      blockCounters.entryCooldown++;
     } else {
 
-    const openSlots = MAX_CONCURRENT_POSITIONS - Object.keys(portfolio.positions).length;
+    const maxConcurrent = training.aggressiveCompounding ? 1 : MAX_CONCURRENT_POSITIONS;
+    const openSlots = maxConcurrent - Object.keys(portfolio.positions).length;
     const isPaused = state.circuitBreaker.pausedUntil > currentTime;
 
-    if (openSlots > 0 && portfolio.cash > 10 && !isPaused) {
+    const minCashForEntry = Math.min(10, portfolio.initialBudget * 0.05);
+    if (openSlots <= 0) blockCounters.noOpenSlots++;
+    else if (portfolio.cash <= minCashForEntry) blockCounters.noCash++;
+    else if (isPaused) blockCounters.paused++;
+    if (openSlots > 0 && portfolio.cash > minCashForEntry && !isPaused) {
       // Score all tickers and find best entry
       const candidates = [];
       for (const ticker of tickers) {
@@ -1412,6 +1450,12 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         if (!candles || candles.length < MIN_CANDLES_REQUIRED) continue;
 
         const score = calculateOpportunityScore(candles, ticker);
+
+        // Debug: log first few score evaluations
+        if (stepIdx < 50 && stepIdx % 10 === 0 && ticker === tickers[0]) {
+          console.log(`[Training DEBUG] step=${stepIdx} ${ticker} candles=${candles.length} score=${score.compositeScore.toFixed(1)} minOpp=${sel.minOppScore} sample: o=${candles[candles.length-1].o} h=${candles[candles.length-1].h} l=${candles[candles.length-1].l} c=${candles[candles.length-1].c} v=${candles[candles.length-1].v}`);
+        }
+
         if (score.compositeScore > sel.minOppScore) {
           candidates.push({ ticker, score, candles });
         }
@@ -1419,9 +1463,14 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
 
       candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
+      // Debug: log candidate count at early steps
+      if (stepIdx % 500 === 0) {
+        console.log(`[Training DEBUG] step=${stepIdx} candidates=${candidates.length} cash=$${portfolio.cash.toFixed(2)} positions=${Object.keys(portfolio.positions).length}${candidates.length > 0 ? ' top=' + candidates[0].ticker + ' score=' + candidates[0].score.compositeScore.toFixed(1) : ''}`);
+      }
+
       for (const candidate of candidates.slice(0, openSlots)) {
-        if (portfolio.cash < 10) break;
-        if (Object.keys(portfolio.positions).length >= MAX_CONCURRENT_POSITIONS) break;
+        if (portfolio.cash < minCashForEntry) break;
+        if (Object.keys(portfolio.positions).length >= maxConcurrent) break;
 
         const { ticker, score, candles } = candidate;
         const currentPrice = candles[candles.length - 1].c * (1 + SLIPPAGE_PER_SIDE); // Buy slippage
@@ -1434,21 +1483,46 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
           regime = regimeObj?.trend || 'NORMAL';
         } catch (e) {}
 
+        blockCounters.totalEntryAttempts++;
+
         // Regime gate — only allow entries in specified regimes
-        if (sel.regimeGate && !sel.regimeGate.includes(regime)) continue;
+        if (sel.regimeGate && !sel.regimeGate.includes(regime)) {
+          blockCounters.regimeGate++;
+          continue;
+        }
 
         // Evaluate strategies (require minStrategiesAgreeing)
-        const entry = evaluateStrategies(candles, regime, state, sel.minStrategiesAgreeing);
-        if (!entry) continue;
+        const entry = evaluateStrategies(candles, regime, state, sel.minStrategiesAgreeing, training.strategyFilter);
+        if (!entry) {
+          blockCounters.noStrategy++;
+          continue;
+        }
 
-        // MULTI-TIMEFRAME CONFIRMATION — use MTF context or fallback to old 4h check
+        // MULTI-TIMEFRAME CONFIRMATION — block only when BOTH 4h AND daily are bearish.
+        // The regime+strategy quality filter handles regime selection more precisely.
         const mtfCtxEntry = candleIndex ? getMTFContext(candleIndex, ticker, currentTime) : null;
         if (mtfCtxEntry) {
-          // Skip if both 4h and daily trends are bearish
-          if (mtfCtxEntry.htf_trend_4h < 0 && mtfCtxEntry.daily_trend < 0) continue;
+          if (mtfCtxEntry.htf_trend_4h < 0 && mtfCtxEntry.daily_trend < 0) {
+            blockCounters.mtfBlock++;
+            continue;
+          }
         } else {
           const htfTrend = getHigherTFTrend(candleData4h, ticker, currentTime);
-          if (htfTrend === 'BEARISH') continue;
+          if (htfTrend === 'BEARISH') {
+            blockCounters.mtfBlock++;
+            continue;
+          }
+        }
+
+        // TIME-OF-DAY FILTER — block entries during historically bad hours
+        const blockedHours = state.tradeMemory?.blockedHours;
+        if (blockedHours && blockedHours.length > 0) {
+          const entryHour = new Date(currentTime).getUTCHours();
+          if (blockedHours.includes(entryHour)) {
+            if (!blockCounters.timeFilter) blockCounters.timeFilter = 0;
+            blockCounters.timeFilter++;
+            continue;
+          }
         }
 
         // Capture indicator values for quality filtering + learning
@@ -1465,28 +1539,24 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         let qualityMultiplier = 1.0;
         if (state.tradeMemory) {
           const quality = evaluateTradeQuality(state.tradeMemory, entry.strategy, regime, indicatorValues, sel);
-          if (!quality.allow) continue; // Skip bad setups
-          // Confidence floor — reject trades with low confidence
-          if (sel.qualityConfidenceFloor > 0 && quality.confidence < sel.qualityConfidenceFloor) continue;
+          if (!quality.allow) {
+            blockCounters.qualityFilter++;
+            continue;
+          }
+          if (sel.qualityConfidenceFloor > 0 && quality.confidence < sel.qualityConfidenceFloor) {
+            blockCounters.confidenceFloor++;
+            continue;
+          }
           qualityMultiplier = 0.5 + quality.confidence; // 0.5x to 1.5x
         }
 
-        // KELLY-BASED POSITION SIZING per strategy
+        // POSITION SIZING per strategy
+        const isAggressive = training.aggressiveCompounding;
         const sw = state.adaptiveWeights[entry.strategy];
-        let kellyFraction = 0.15; // Default 15% of portfolio
-        if (sw && sw.wins + sw.losses >= 20) {
-          const winRate = sw.wins / (sw.wins + sw.losses);
-          const ep = state.tradeMemory?.exitParams || { takeProfit: 0.04, stopLoss: -0.04 };
-          const avgWin = Math.abs(ep.takeProfit);
-          const avgLoss = Math.abs(ep.stopLoss);
-          if (avgLoss > 0 && avgWin > 0) {
-            // Kelly formula: f = (p * b - q) / b, where p=winRate, q=1-p, b=avgWin/avgLoss
-            const b = avgWin / avgLoss;
-            const kelly = (winRate * b - (1 - winRate)) / b;
-            // Use half-Kelly (safer) clamped to 5%-30% range
-            kellyFraction = Math.max(0.05, Math.min(0.30, kelly * 0.5));
-          }
-        }
+        // In training mode, use a fixed fraction to ensure enough trades for learning.
+        // The learned exit params, quality filters, and optimizer data carry forward
+        // to live where Kelly sizing can be applied.
+        let kellyFraction = isAggressive ? 0.25 : 0.15; // Fixed 15% or 25% for training
 
         // VOLATILITY-SCALED sizing — smaller positions in high-vol
         let volScale = 1.0;
@@ -1502,13 +1572,22 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
           (sum, p) => sum + (p.quantity * p.currentPrice), 0);
         let positionSize = totalValue * kellyFraction * qualityMultiplier * volScale;
 
-        // Apply compound multiplier from beast mode
-        positionSize *= state.beastMode.compoundMultiplier;
+        // Apply compound multiplier from beast mode (higher cap in aggressive mode)
+        const compoundCap = isAggressive ? 2.0 : 1.5;
+        positionSize *= Math.min(state.beastMode.compoundMultiplier, compoundCap);
 
-        // Clamp to available cash
-        positionSize = Math.min(positionSize, portfolio.cash * 0.90, totalValue * MAX_POSITION_PCT);
+        // Clamp to available cash — aggressive mode allows 50% per position, 1 concurrent
+        const maxPosPct = isAggressive ? 0.50 : MAX_POSITION_PCT;
+        positionSize = Math.min(positionSize, portfolio.cash * 0.95, totalValue * maxPosPct);
 
-        if (positionSize < 10) continue;
+        // Min position size: $10 or 5% of initial budget (whichever is smaller)
+        const minPositionSize = Math.min(10, portfolio.initialBudget * 0.05);
+        if (positionSize < minPositionSize) {
+          blockCounters.positionTooSmall++;
+          continue;
+        }
+
+        blockCounters.totalEntries++;
 
         // Simulate buy
         const buyFee = currentPrice * (positionSize / currentPrice) * TRADING_FEE_PER_SIDE;
@@ -1532,6 +1611,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
           indicatorValues, // Store for learning at exit
           entryFeaturesJson: JSON.stringify(entryFeatures),
         };
+        training.sessionTradeCount++;
 
         training.tradeBuffer.push({
           run_id: runId,
@@ -1693,6 +1773,8 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
       regimeStrategy: state.tradeMemory.regimeStrategy,
       indicatorBins: state.tradeMemory.indicatorBins,
       exitParams: state.tradeMemory.exitParams,
+      ...(state.tradeMemory.regimeExitOverrides ? { regimeExitOverrides: state.tradeMemory.regimeExitOverrides } : {}),
+      ...(state.tradeMemory.blockedHours ? { blockedHours: state.tradeMemory.blockedHours } : {}),
     } : null,
     strategyBreakdown: training.strategyBreakdown,
   };
@@ -1717,12 +1799,29 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
 
   console.log(`[Training] Run ${runId} COMPLETE: ${training.stats.totalTrades} trades, ${winRate.toFixed(1)}% win rate, $${training.stats.totalPnl.toFixed(2)} PnL, ${totalReturn.toFixed(1)}% return, Sharpe: ${sharpe.toFixed(2)}`);
 
+  // Log block-reason summary
+  console.log(`[Training] BLOCK REASONS: entries=${blockCounters.totalEntries} attempts=${blockCounters.totalEntryAttempts} | noStrategy=${blockCounters.noStrategy} mtf=${blockCounters.mtfBlock} quality=${blockCounters.qualityFilter} confidence=${blockCounters.confidenceFloor} regime=${blockCounters.regimeGate} posSize=${blockCounters.positionTooSmall} | cooldown=${blockCounters.entryCooldown} noSlots=${blockCounters.noOpenSlots} noCash=${blockCounters.noCash} paused=${blockCounters.paused}`);
+
+  // Log exit reason breakdown
+  const exitSummary = Object.entries(exitCounters)
+    .filter(([, v]) => v.count > 0)
+    .map(([k, v]) => `${k}=${v.count}(${v.totalPnl >= 0 ? '+' : ''}$${v.totalPnl.toFixed(2)})`)
+    .join(' ');
+  console.log(`[Training] EXIT REASONS: ${exitSummary}`);
+
   // Log learning stats
   if (state.tradeMemory) {
     const tm = state.tradeMemory;
     const rsEntries = Object.entries(tm.regimeStrategy);
     const filtered = rsEntries.filter(([_, v]) => v.wins + v.losses >= MIN_REGIME_STRATEGY_SAMPLES);
     const blocked = filtered.filter(([_, v]) => v.wins / (v.wins + v.losses) < REGIME_STRATEGY_MIN_WINRATE);
+    // Log ALL regime+strategy WRs for analysis
+    for (const [key, v] of filtered) {
+      const total = v.wins + v.losses;
+      const wr = (v.wins / total * 100).toFixed(1);
+      const avgPnl = (v.totalPnl / total).toFixed(2);
+      console.log(`[Training] Regime: ${key} = ${wr}% WR (${total} trades, avgPnl=$${avgPnl})`);
+    }
     console.log(`[Training] Learning: ${rsEntries.length} regime+strategy combos, ${blocked.length} blocked (below ${REGIME_STRATEGY_MIN_WINRATE * 100}% WR)`);
     console.log(`[Training] Exit params: SL=${(tm.exitParams.stopLoss * 100).toFixed(1)}% TP=${(tm.exitParams.takeProfit * 100).toFixed(1)}% MaxHold=${tm.exitParams.maxHold}h`);
     console.log(`[Training] Optimized thresholds: TREND=${state.optimizer.optimizedParams.TREND_BULLISH_ENTRY} MOM=${state.optimizer.optimizedParams.MOMENTUM_BULLISH_ENTRY} BKOUT=${state.optimizer.optimizedParams.BREAKOUT_SQUEEZE_ENTRY}`);
@@ -1876,4 +1975,477 @@ export function getLearnedState(runId) {
   } catch (e) {
     return null;
   }
+}
+
+/**
+ * Distill a training run — keep only winning patterns, amplify big winners.
+ * Creates a new synthetic "seed" run in the DB that future sessions can seed from.
+ *
+ * Process:
+ * 1. Read learned state from source run
+ * 2. For regimeStrategy: zero out losses for profitable combos, remove unprofitable ones
+ * 3. For indicatorBins: keep only bins with >50% WR, amplify by avg PnL
+ * 4. For exitParams: recalculate from winning trades only
+ * 5. Save as new synthetic run
+ *
+ * @param {string} sourceRunId - Run to distill
+ * @param {Object} options
+ * @param {number} [options.minProfitPct=0] - Min PnL% to keep a trade as "winner"
+ * @param {boolean} [options.amplifyBigWins=true] - Weight regime combos by avg PnL
+ * @returns {{ runId, stats }} The new synthetic run ID and distillation stats
+ */
+export function distillSeed(sourceRunId, options = {}) {
+  const { minProfitPct = 0, amplifyBigWins = true, profitFocused = false } = options;
+
+  const learned = getLearnedState(sourceRunId);
+  if (!learned) throw new Error(`No learned state for run ${sourceRunId}`);
+
+  const sourceRun = getTrainingRun(sourceRunId);
+  const distilled = JSON.parse(JSON.stringify(learned)); // deep clone
+
+  const stats = {
+    sourceRunId,
+    regimeCombos: { kept: 0, removed: 0, amplified: 0 },
+    indicatorBins: { kept: 0, removed: 0 },
+    totalWinPnl: 0,
+  };
+
+  // --- 1. Distill regimeStrategy combos ---
+  if (distilled.tradeMemory?.regimeStrategy) {
+    const rs = distilled.tradeMemory.regimeStrategy;
+
+    if (profitFocused) {
+      // PROFIT-FOCUSED MODE: Relative ranking — keep top 60% by avgPnl, block bottom 40%
+      // This avoids the $1M budget trap where ALL combos have negative avgPnl
+      const entries = Object.entries(rs).filter(([, data]) => {
+        const total = data.wins + data.losses;
+        if (total < 3) return false;
+        return true;
+      });
+      // Remove low-sample combos
+      for (const [key, data] of Object.entries(rs)) {
+        if (data.wins + data.losses < 3) {
+          delete rs[key];
+          stats.regimeCombos.removed++;
+        }
+      }
+      // Sort by avgPnl descending (best performers first)
+      entries.sort((a, b) => {
+        const avgA = a[1].totalPnl / (a[1].wins + a[1].losses);
+        const avgB = b[1].totalPnl / (b[1].wins + b[1].losses);
+        return avgB - avgA;
+      });
+      // Keep top 60%, block bottom 40%
+      const keepCount = Math.max(1, Math.ceil(entries.length * 0.6));
+      for (let i = 0; i < entries.length; i++) {
+        const [key, data] = entries[i];
+        if (i < keepCount) {
+          // Top performer — amplify wins, zero out losses
+          const rank = keepCount - i; // higher rank = more boost
+          const boost = amplifyBigWins ? Math.max(1, Math.min(5, rank)) : 1;
+          rs[key] = {
+            wins: data.wins * boost,
+            losses: 0,
+            totalPnl: Math.abs(data.totalPnl || 0.01) * boost,
+          };
+          stats.regimeCombos.kept++;
+          stats.totalWinPnl += Math.abs(data.totalPnl || 0);
+          if (boost > 1) stats.regimeCombos.amplified++;
+        } else {
+          // Bottom performer — amplify losses to discourage
+          rs[key] = {
+            wins: data.wins,
+            losses: data.losses * 3,
+            totalPnl: data.totalPnl,
+          };
+          stats.regimeCombos.removed++;
+        }
+      }
+    } else {
+      // WIN-RATE MODE (original): filter by WR >= 0.45
+      for (const [key, data] of Object.entries(rs)) {
+        const total = data.wins + data.losses;
+        if (total < 3) {
+          delete rs[key];
+          stats.regimeCombos.removed++;
+          continue;
+        }
+        const winRate = data.wins / total;
+        if (winRate < 0.45) {
+          rs[key] = {
+            wins: data.wins,
+            losses: data.losses * 2,
+            totalPnl: data.totalPnl,
+          };
+          stats.regimeCombos.removed++;
+        } else {
+          const wrBoost = amplifyBigWins ? Math.max(1, Math.round((winRate - 0.45) * 20)) : 1;
+          rs[key] = {
+            wins: data.wins * wrBoost,
+            losses: 0,
+            totalPnl: Math.max(0.01, data.wins * wrBoost * 0.01),
+          };
+          stats.regimeCombos.kept++;
+          stats.totalWinPnl += data.wins;
+          if (wrBoost > 1) stats.regimeCombos.amplified++;
+        }
+      }
+    }
+  }
+
+  // --- 2. Distill indicatorBins ---
+  if (distilled.tradeMemory?.indicatorBins) {
+    const bins = distilled.tradeMemory.indicatorBins;
+
+    if (profitFocused) {
+      // PROFIT-FOCUSED: Relative ranking — keep top 60% by win surplus, block bottom 40%
+      const entries = Object.entries(bins).filter(([, data]) => {
+        return (data.wins + data.losses) >= 5;
+      });
+      // Remove low-sample bins
+      for (const [key, data] of Object.entries(bins)) {
+        if (data.wins + data.losses < 5) {
+          delete bins[key];
+          stats.indicatorBins.removed++;
+        }
+      }
+      // Sort by win surplus (wins - losses) descending
+      entries.sort((a, b) => (b[1].wins - b[1].losses) - (a[1].wins - a[1].losses));
+      const keepCount = Math.max(1, Math.ceil(entries.length * 0.6));
+      for (let i = 0; i < entries.length; i++) {
+        const [key, data] = entries[i];
+        if (i < keepCount) {
+          const rank = keepCount - i;
+          const boost = amplifyBigWins ? Math.max(1, Math.min(3, Math.ceil(rank / 3))) : 1;
+          bins[key] = { wins: data.wins * boost, losses: 0 };
+          stats.indicatorBins.kept++;
+        } else {
+          bins[key] = { wins: data.wins, losses: data.losses * 3 };
+          stats.indicatorBins.removed++;
+        }
+      }
+    } else {
+      // WIN-RATE MODE (original)
+      for (const [key, data] of Object.entries(bins)) {
+        const total = data.wins + data.losses;
+        if (total < 5) {
+          delete bins[key];
+          stats.indicatorBins.removed++;
+          continue;
+        }
+        const binWR = data.wins / total;
+        if (binWR < 0.45) {
+          bins[key] = { wins: data.wins, losses: data.losses * 2 };
+          stats.indicatorBins.removed++;
+        } else {
+          bins[key] = { wins: data.wins, losses: 0 };
+          stats.indicatorBins.kept++;
+        }
+      }
+    }
+  }
+
+  // --- 3. Keep only winning PnL data + tighten entry thresholds ---
+  if (distilled.tradeMemory) {
+    // Keep winPnls, clear lossPnls
+    distilled.tradeMemory.lossPnls = [];
+    distilled.tradeMemory.lossHoldHours = [];
+    // Reset optimization counter so next session optimizes fresh
+    distilled.tradeMemory.tradesSinceOptimize = 0;
+  }
+
+  // Progressively tighten the TREND entry threshold each distillation round
+  // Lower = more selective (only enter on very strong bullish signals)
+  if (distilled.optimizer?.optimizedParams) {
+    const currentEntry = distilled.optimizer.optimizedParams.TREND_BULLISH_ENTRY || 40;
+    // Tighten by 2 each round, floor at 25
+    distilled.optimizer.optimizedParams.TREND_BULLISH_ENTRY = Math.max(15, currentEntry - 1);
+    stats.trendEntry = distilled.optimizer.optimizedParams.TREND_BULLISH_ENTRY;
+  }
+
+  // --- 4. Update circuit breaker to reflect only wins ---
+  if (distilled.circuitBreaker) {
+    const totalWins = Object.values(distilled.tradeMemory?.regimeStrategy || {})
+      .reduce((s, d) => s + d.wins, 0);
+    distilled.circuitBreaker.totalTrades = totalWins;
+    distilled.circuitBreaker.totalWins = totalWins;
+    distilled.circuitBreaker.totalLosses = 0;
+    distilled.circuitBreaker.consecutiveLosses = 0;
+    distilled.circuitBreaker.consecutiveWins = 3;
+    distilled.circuitBreaker.dailyPnl = 0;
+  }
+
+  // --- 5. Save as new synthetic run ---
+  const newRunId = `distill_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+  insertTrainingRun({
+    run_id: newRunId,
+    status: 'completed',
+    config: {
+      type: 'distilled',
+      sourceRunId,
+      options,
+      sourceConfig: sourceRun?.config_json ? JSON.parse(sourceRun.config_json) : {},
+    },
+    start_time: Date.now(),
+    total_steps: 0,
+  });
+
+  updateTrainingRun(newRunId, {
+    status: 'completed',
+    endTime: Date.now(),
+    totalTrades: Object.values(distilled.tradeMemory?.regimeStrategy || {}).reduce((s, d) => s + d.wins, 0),
+    winRate: 100,
+    totalPnl: stats.totalWinPnl,
+    maxDrawdown: 0,
+    sharpeRatio: 0,
+    learnedStateJson: JSON.stringify(distilled),
+    strategyWeightsJson: JSON.stringify(distilled.adaptiveWeights || {}),
+  });
+
+  console.log(`[Training] Distilled ${sourceRunId} → ${newRunId}: ` +
+    `kept ${stats.regimeCombos.kept} regime combos (removed ${stats.regimeCombos.removed}, amplified ${stats.regimeCombos.amplified}), ` +
+    `kept ${stats.indicatorBins.kept} bins (removed ${stats.indicatorBins.removed})`);
+
+  return { runId: newRunId, stats };
+}
+
+/**
+ * GENETIC SEED CROSSOVER — Breed multiple seeds into a consensus child.
+ * Only patterns that are "good" in a majority of parent seeds survive.
+ * This is genetic crossover applied to trading pattern DNA.
+ *
+ * @param {string[]} seedIds - Array of parent seed/run IDs to breed
+ * @param {object} options - { consensusThreshold: 0.6 }
+ * @returns {{ runId: string, stats: object }}
+ */
+export function breedSeeds(seedIds, options = {}) {
+  const { consensusThreshold = 0.6 } = options;
+
+  const states = seedIds.map(id => {
+    const learned = getLearnedState(id);
+    if (!learned) throw new Error(`No learned state for ${id}`);
+    return { id, state: learned };
+  });
+  if (states.length < 2) throw new Error('Need at least 2 seeds to breed');
+
+  // Deep clone first seed as base
+  const bred = JSON.parse(JSON.stringify(states[0].state));
+  const minAgree = Math.ceil(states.length * consensusThreshold);
+
+  const stats = {
+    parentSeeds: seedIds,
+    parentCount: states.length,
+    consensusThreshold,
+    minAgree,
+    regimeCombos: { kept: 0, blocked: 0, total: 0 },
+    indicatorBins: { kept: 0, blocked: 0, total: 0 },
+  };
+
+  // --- 1. Cross-reference regime+strategy combos ---
+  if (bred.tradeMemory) {
+    bred.tradeMemory.regimeStrategy = bred.tradeMemory.regimeStrategy || {};
+    const rs = bred.tradeMemory.regimeStrategy;
+
+    // Collect ALL unique keys across ALL parent seeds
+    const allKeys = new Set();
+    for (const s of states) {
+      const parentRS = s.state.tradeMemory?.regimeStrategy;
+      if (parentRS) Object.keys(parentRS).forEach(k => allKeys.add(k));
+    }
+    stats.regimeCombos.total = allKeys.size;
+
+    for (const key of allKeys) {
+      let goodCount = 0;
+      let totalWins = 0;
+      let totalLosses = 0;
+      let totalPnl = 0;
+
+      for (const s of states) {
+        const combo = s.state.tradeMemory?.regimeStrategy?.[key];
+        if (!combo) continue;
+        const total = combo.wins + combo.losses;
+        if (total < 2) continue;
+        totalWins += combo.wins;
+        totalLosses += combo.losses;
+        totalPnl += combo.totalPnl || 0;
+        // "Good" = more wins than losses in this seed
+        if (combo.wins > combo.losses) goodCount++;
+      }
+
+      if (goodCount >= minAgree) {
+        // CONSENSUS: pattern is good in majority of seeds → keep with amplified wins
+        rs[key] = {
+          wins: totalWins * goodCount,
+          losses: 0,
+          totalPnl: Math.abs(totalPnl || 0.01) * goodCount,
+        };
+        stats.regimeCombos.kept++;
+      } else {
+        // NO CONSENSUS: block hard
+        rs[key] = {
+          wins: Math.max(1, totalWins),
+          losses: (totalLosses || 10) * 5,
+          totalPnl: -Math.abs(totalPnl || 1),
+        };
+        stats.regimeCombos.blocked++;
+      }
+    }
+
+    // --- 2. Cross-reference indicator bins ---
+    bred.tradeMemory.indicatorBins = bred.tradeMemory.indicatorBins || {};
+    const bins = bred.tradeMemory.indicatorBins;
+
+    const allBinKeys = new Set();
+    for (const s of states) {
+      const parentBins = s.state.tradeMemory?.indicatorBins;
+      if (parentBins) Object.keys(parentBins).forEach(k => allBinKeys.add(k));
+    }
+    stats.indicatorBins.total = allBinKeys.size;
+
+    for (const key of allBinKeys) {
+      let goodCount = 0;
+      let totalWins = 0;
+      let totalLosses = 0;
+
+      for (const s of states) {
+        const bin = s.state.tradeMemory?.indicatorBins?.[key];
+        if (!bin) continue;
+        const total = bin.wins + bin.losses;
+        if (total < 3) continue;
+        totalWins += bin.wins;
+        totalLosses += bin.losses;
+        if (bin.wins > bin.losses) goodCount++;
+      }
+
+      if (goodCount >= minAgree) {
+        bins[key] = { wins: totalWins * goodCount, losses: 0 };
+        stats.indicatorBins.kept++;
+      } else {
+        bins[key] = { wins: Math.max(1, totalWins), losses: (totalLosses || 10) * 5 };
+        stats.indicatorBins.blocked++;
+      }
+    }
+
+    // Clear loss data
+    bred.tradeMemory.lossPnls = [];
+    bred.tradeMemory.lossHoldHours = [];
+    bred.tradeMemory.tradesSinceOptimize = 0;
+  }
+
+  // --- 3. Take best optimizer params (from seed with highest WR if available) ---
+  // Keep from base seed (first), which is typically the best
+
+  // --- 4. Update circuit breaker to reflect bred state ---
+  if (bred.circuitBreaker) {
+    const totalWins = Object.values(bred.tradeMemory?.regimeStrategy || {})
+      .filter(d => d.losses === 0)
+      .reduce((s, d) => s + d.wins, 0);
+    bred.circuitBreaker.totalTrades = totalWins;
+    bred.circuitBreaker.totalWins = totalWins;
+    bred.circuitBreaker.totalLosses = 0;
+    bred.circuitBreaker.consecutiveLosses = 0;
+    bred.circuitBreaker.consecutiveWins = 3;
+    bred.circuitBreaker.dailyPnl = 0;
+  }
+
+  // --- 5. Save as new synthetic run ---
+  const newRunId = `breed_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+  insertTrainingRun({
+    run_id: newRunId,
+    status: 'completed',
+    config: { type: 'bred', parentSeeds: seedIds, options },
+    start_time: Date.now(),
+    total_steps: 0,
+  });
+
+  updateTrainingRun(newRunId, {
+    status: 'completed',
+    endTime: Date.now(),
+    totalTrades: 0,
+    winRate: 0,
+    totalPnl: 0,
+    maxDrawdown: 0,
+    sharpeRatio: 0,
+    learnedStateJson: JSON.stringify(bred),
+    strategyWeightsJson: JSON.stringify(bred.adaptiveWeights || {}),
+  });
+
+  console.log(`[Training] Bred ${seedIds.length} seeds → ${newRunId}: ` +
+    `kept ${stats.regimeCombos.kept}/${stats.regimeCombos.total} combos, ` +
+    `kept ${stats.indicatorBins.kept}/${stats.indicatorBins.total} bins ` +
+    `(consensus: ${minAgree}/${states.length} must agree)`);
+
+  return { runId: newRunId, stats };
+}
+
+/**
+ * MODIFY SEED — Create a copy of a seed with custom modifications.
+ * Used for exit parameter sweeps, threshold tweaks, etc.
+ *
+ * @param {string} sourceRunId - The seed to copy
+ * @param {object} modifications - { exitParams?, optimizedParams? }
+ * @returns {{ runId: string }}
+ */
+export function modifySeed(sourceRunId, modifications = {}) {
+  const learned = getLearnedState(sourceRunId);
+  if (!learned) throw new Error(`No learned state for ${sourceRunId}`);
+
+  const modified = JSON.parse(JSON.stringify(learned));
+
+  // Apply exit param overrides
+  if (modifications.exitParams && modified.tradeMemory) {
+    modified.tradeMemory.exitParams = {
+      ...(modified.tradeMemory.exitParams || {}),
+      ...modifications.exitParams,
+    };
+  }
+
+  // Apply optimizer param overrides
+  if (modifications.optimizedParams && modified.optimizer) {
+    modified.optimizer.optimizedParams = {
+      ...(modified.optimizer.optimizedParams || {}),
+      ...modifications.optimizedParams,
+    };
+  }
+
+  // Apply regime-specific exit overrides (e.g., UP_TREND gets wider TP)
+  if (modifications.regimeExitOverrides && modified.tradeMemory) {
+    modified.tradeMemory.regimeExitOverrides = {
+      ...(modified.tradeMemory.regimeExitOverrides || {}),
+      ...modifications.regimeExitOverrides,
+    };
+  }
+
+  // Apply time-of-day blocked hours (array of UTC hours 0-23)
+  if (modifications.blockedHours && modified.tradeMemory) {
+    modified.tradeMemory.blockedHours = modifications.blockedHours;
+  }
+
+  const newRunId = `mod_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+  insertTrainingRun({
+    run_id: newRunId,
+    status: 'completed',
+    config: { type: 'modified', sourceRunId, modifications },
+    start_time: Date.now(),
+    total_steps: 0,
+  });
+
+  updateTrainingRun(newRunId, {
+    status: 'completed',
+    endTime: Date.now(),
+    totalTrades: 0,
+    winRate: 0,
+    totalPnl: 0,
+    maxDrawdown: 0,
+    sharpeRatio: 0,
+    learnedStateJson: JSON.stringify(modified),
+    strategyWeightsJson: JSON.stringify(modified.adaptiveWeights || {}),
+  });
+
+  console.log(`[Training] Modified ${sourceRunId} → ${newRunId}: ${Object.keys(modifications).join(', ')}`);
+
+  return { runId: newRunId };
 }

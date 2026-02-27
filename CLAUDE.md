@@ -88,8 +88,8 @@ The `TradingStrategy` type includes: TREND, BREAKOUT, WHALE, CONFLUENCE, MOMENTU
 - ML models use 0.67% break-even threshold (Kraken fees + slippage)
 
 ### Environment Variables
-- `.env` / `.env.local` - Contains `GEMINI_API_KEY` for AI learning
-- Vite exposes it via `process.env.GEMINI_API_KEY` (defined in vite.config.ts)
+- `.env` / `.env.local` - Contains `ANTHROPIC_API_KEY` for Claude AI analysis
+- Vite exposes it via `process.env.ANTHROPIC_API_KEY` (defined in vite.config.ts)
 
 ## Common Issues
 1. **Blank window / app won't load**: Backend crash. Check `node server.js` output for missing module errors

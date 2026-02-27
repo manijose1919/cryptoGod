@@ -6,6 +6,7 @@ import { tradingBotService } from '../services/tradingBotService';
 interface RealTradingModalProps {
   onClose: () => void;
   onAuthenticate: (credentials: ApiCredentials) => void;
+  exchangeName?: string;
 }
 
 type TestStatus = 'idle' | 'testing' | 'success' | 'error';
@@ -18,7 +19,7 @@ const parseWhitelistError = (errorMessage: string | null) => {
     return { isWhitelistError: true, ip: ipMatch ? ipMatch[0] : 'not found' };
 };
 
-export const RealTradingModal: React.FC<RealTradingModalProps> = ({ onClose, onAuthenticate }) => {
+export const RealTradingModal: React.FC<RealTradingModalProps> = ({ onClose, onAuthenticate, exchangeName = 'Exchange' }) => {
   const [apiKey, setApiKey] = useState('');
   const [secretKey, setSecretKey] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
@@ -48,8 +49,7 @@ export const RealTradingModal: React.FC<RealTradingModalProps> = ({ onClose, onA
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async () => {
     setLoginError(null);
     setTestStatus('idle');
     setTestMessage('');
@@ -85,10 +85,10 @@ export const RealTradingModal: React.FC<RealTradingModalProps> = ({ onClose, onA
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
       <div className="bg-gray-800 border border-red-500/50 rounded-2xl shadow-2xl p-8 max-w-md w-full m-4">
-        <h2 className="text-2xl font-bold text-red-400 mb-2">Connect to Crypto.com</h2>
-        <p className="text-gray-400 text-sm mb-4">Enter your API credentials to enable real trading. Keys are sent to your secure backend only.</p>
+        <h2 className="text-2xl font-bold text-red-400 mb-2">Connect to {exchangeName}</h2>
+        <p className="text-gray-400 text-sm mb-4">Enter your {exchangeName} API credentials to enable real trading. Keys are sent to your secure backend only.</p>
         
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-300">API Key</label>
             <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="mt-1 w-full bg-gray-900 border border-gray-600 rounded-md p-2 text-white focus:ring-red-500 focus:border-red-500" />
@@ -109,19 +109,25 @@ export const RealTradingModal: React.FC<RealTradingModalProps> = ({ onClose, onA
                         {isWhitelistError ? 'Action Required: Whitelist IP' : 'Server IP for Whitelisting'}
                     </h4>
                     <p className="text-xs mt-1 mb-2">
-                        {isWhitelistError 
-                            ? "The API is rejecting connections. You must add the IP below to your API key's whitelist on Crypto.com."
-                            : "Add this IP to your API key's whitelist on Crypto.com to enable trading."}
+                        {isWhitelistError
+                            ? `The API is rejecting connections. You must add the IP below to your API key's whitelist on ${exchangeName}.`
+                            : `Add this IP to your API key's whitelist on ${exchangeName} to enable trading.`}
                     </p>
                     <div className="flex items-center gap-2 my-1">
                         <p className="font-mono flex-grow text-center bg-gray-800 py-1 px-2 rounded-md text-white tracking-widest">{ipToDisplay}</p>
                         <button type="button" onClick={() => handleCopyIp(ipToDisplay)} className="py-1 px-3 text-xs bg-gray-600 hover:bg-gray-500 rounded-md transition-colors">{isIpCopied ? 'Copied!' : 'Copy'}</button>
                     </div>
                     <p className="text-xs mt-2">
-                        {isWhitelistError && <strong>Important:</strong>} It may take up to 30 minutes for API changes to take effect. 
-                        <a href="https://crypto.com/exchange/user/settings/api-management" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline ml-1">
-                            Go to API settings &rarr;
-                        </a>
+                        {isWhitelistError && <strong>Important:</strong>} It may take up to 30 minutes for API changes to take effect.
+                        {exchangeName === 'Kraken' ? (
+                            <a href="https://www.kraken.com/u/security/api" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline ml-1">
+                                Go to API settings &rarr;
+                            </a>
+                        ) : (
+                            <a href="https://crypto.com/exchange/user/settings/api-management" target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline ml-1">
+                                Go to API settings &rarr;
+                            </a>
+                        )}
                     </p>
                 </div>
             )}
@@ -143,12 +149,12 @@ export const RealTradingModal: React.FC<RealTradingModalProps> = ({ onClose, onA
             </button>
             <div className="flex-grow flex justify-end gap-4">
               <button type="button" onClick={handleClose} className="py-2 px-4 text-gray-300 bg-gray-600 hover:bg-gray-500 rounded-lg transition">Cancel</button>
-              <button type="submit" className="py-2 px-4 text-white bg-red-600 hover:bg-red-500 rounded-lg transition disabled:bg-red-800 disabled:cursor-not-allowed" disabled={isConnecting}>
+              <button type="button" onClick={handleSubmit} className="py-2 px-4 text-white bg-red-600 hover:bg-red-500 rounded-lg transition disabled:bg-red-800 disabled:cursor-not-allowed" disabled={isConnecting}>
                 {isConnecting ? 'Connecting...' : 'Connect Securely'}
               </button>
             </div>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );

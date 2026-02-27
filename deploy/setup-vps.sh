@@ -461,8 +461,8 @@ if [ ! -f "$APP_DIR/.env" ]; then
 SESSION_API_KEY="your_api_key_here"
 SESSION_SECRET_KEY="your_secret_key_here"
 
-# Gemini AI (for pre-trade gating)
-GEMINI_API_KEY="your_gemini_key_here"
+# Anthropic Claude AI (for trade analysis)
+ANTHROPIC_API_KEY="your_anthropic_key_here"
 
 # Questrade
 QUESTRADE_REFRESH_TOKEN="your_questrade_token_here"

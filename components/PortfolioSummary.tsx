@@ -13,12 +13,18 @@ const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, wat
   const { cash, initialBudget, positions } = portfolio;
   const isRealMode = tradingMode === 'REAL';
   
-  const holdingsValue = Object.values(positions).reduce((acc, position) => {
+  const positionsValue = Object.values(positions).reduce((acc, position) => {
 // FIX: Property 'at' does not exist on type 'Candle[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.
     const currentPrice = watchlistData[position.ticker]?.candles?.[watchlistData[position.ticker]?.candles.length - 1]?.close ?? position.openPrice;
     return acc + (position.quantity * currentPrice);
   }, 0);
 
+  // Include wallet holdings value (crypto in exchange wallet) for REAL mode
+  const walletHoldingsValue = isRealMode && portfolio.holdings
+    ? Object.values(portfolio.holdings).reduce((sum, h) => sum + (h.usdValue || 0), 0)
+    : 0;
+
+  const holdingsValue = positionsValue + walletHoldingsValue;
   const totalValue = cash + holdingsValue;
   const pnl = totalValue - initialBudget;
   const pnlPercent = initialBudget > 0 ? (pnl / initialBudget) * 100 : 0;

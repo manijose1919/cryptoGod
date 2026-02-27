@@ -133,6 +133,9 @@ export async function startWalkForward(config = {}) {
   const seedRunId = config.seedRunId || null;
   const skipMTF = config.skipMTF || false;
   const selectivity = config.selectivity || 'normal';
+  const strategyFilter = config.strategyFilter || null;
+  const targetWinRate = config.targetWinRate || 0;
+  const aggressiveCompounding = config.aggressiveCompounding || false;
 
   // Determine data range from 1h candles
   let earliestTime = Infinity;
@@ -160,7 +163,7 @@ export async function startWalkForward(config = {}) {
     id: wfId,
     created_at: Date.now(),
     status: 'running',
-    config: { trainMonths, testMonths, stepMonths, tickers, initialCash, seedRunId, skipMTF, selectivity },
+    config: { trainMonths, testMonths, stepMonths, tickers, initialCash, seedRunId, skipMTF, selectivity, strategyFilter, targetWinRate, aggressiveCompounding },
     total_folds: foldWindows.length,
     completed_folds: 0,
   });
@@ -184,7 +187,7 @@ export async function startWalkForward(config = {}) {
   activeWF = {
     id: wfId,
     status: 'running',
-    config: { trainMonths, testMonths, stepMonths, tickers, initialCash, seedRunId, skipMTF, selectivity },
+    config: { trainMonths, testMonths, stepMonths, tickers, initialCash, seedRunId, skipMTF, selectivity, strategyFilter, targetWinRate, aggressiveCompounding },
     totalFolds: foldWindows.length,
     completedFolds: 0,
     currentFold: 0,
@@ -205,7 +208,7 @@ export async function startWalkForward(config = {}) {
   console.log(`[WalkForward] Starting run ${wfId}: ${foldWindows.length} folds, ${trainMonths}mo train / ${testMonths}mo test / ${stepMonths}mo step`);
 
   // Run the walk-forward loop asynchronously
-  runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedRunId, skipMTF, selectivity).catch(err => {
+  runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedRunId, skipMTF, selectivity, strategyFilter, targetWinRate, aggressiveCompounding).catch(err => {
     console.error(`[WalkForward] Fatal error: ${err.message}`);
     if (activeWF && activeWF.id === wfId) {
       activeWF.status = 'failed';
@@ -224,7 +227,7 @@ export async function startWalkForward(config = {}) {
 /**
  * Core walk-forward loop — runs each fold sequentially.
  */
-async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedRunId = null, skipMTF = false, selectivity = 'normal') {
+async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedRunId = null, skipMTF = false, selectivity = 'normal', strategyFilter = null, targetWinRate = 0, aggressiveCompounding = false) {
   let previousRunId = seedRunId || null; // Seed first fold from prior WF's best (or null)
   let oosTradesTotal = 0;
   let oosWinsTotal = 0;
@@ -257,6 +260,9 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
         evaluationOnly: false,
         skipMTF,
         selectivity,
+        strategyFilter,
+        targetWinRate,
+        aggressiveCompounding,
         _isSubRun: true,
       });
 
@@ -316,6 +322,9 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
         frozenState,
         skipMTF,
         selectivity,
+        strategyFilter,
+        targetWinRate,
+        aggressiveCompounding,
         _isSubRun: true,
       });
 

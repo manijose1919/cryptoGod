@@ -30,20 +30,76 @@ export default function createAuthRouter(ctx) {
 
             const sessionId = ctx.SessionManager.createSession(apiKey, secretKey);
             const adapter = ctx.getExchangeAdapter();
-            const { cashBalance, holdings } = await adapter.getBalance(sessionId);
+            let { cashBalance, holdings } = await adapter.getBalance(sessionId);
 
-            const totalBalance = cashBalance;
-            ctx.portfolio.cash = cashBalance;
+            // Safety net: if CAD/USD/EUR/GBP ended up in holdings, move to cashBalance
+            const fiatKeys = Object.keys(holdings).filter(k => /^(CAD|USD|EUR|GBP)$/i.test(k));
+            for (const fk of fiatKeys) {
+                const fiatQty = holdings[fk].quantity || 0;
+                if (fk.toUpperCase() === 'CAD' && fiatQty > 0) {
+                    // Convert CAD to USD (approximate)
+                    const cadToUsd = fiatQty / 1.37;
+                    log.info(`Moving ${fiatQty} CAD from holdings to cash as $${cadToUsd.toFixed(2)} USD`);
+                    cashBalance += cadToUsd;
+                } else {
+                    cashBalance += fiatQty;
+                }
+                delete holdings[fk];
+            }
+
+            // Also price any holdings that have usdValue=0 but valid quantity
+            for (const [asset, h] of Object.entries(holdings)) {
+                if (h.usdValue === 0 && h.quantity > 0) {
+                    try {
+                        const pairName = asset === 'BTC' ? 'XBTUSD' : asset + 'USD';
+                        const tickerRes = await fetch(`https://api.kraken.com/0/public/Ticker?pair=${pairName}`);
+                        const tickerData = await tickerRes.json();
+                        if (!tickerData.error?.length) {
+                            const key = Object.keys(tickerData.result || {})[0];
+                            if (key) {
+                                const price = parseFloat(tickerData.result[key]?.c?.[0] || '0');
+                                if (price > 0) {
+                                    h.usdValue = h.quantity * price;
+                                    h.price = price;
+                                }
+                            }
+                        }
+                    } catch { /* non-fatal */ }
+                }
+            }
+
+            const holdingsValue = Object.values(holdings).reduce((sum, h) => sum + (h.usdValue || 0), 0);
+            const totalBalance = cashBalance + holdingsValue;
+            log.info('Auth balance breakdown', { cashBalance, holdingsValue, totalBalance, holdings });
+            // Use totalBalance as cash so frontend shows full account value
+            ctx.portfolio.cash = totalBalance;
             ctx.portfolio.initialBudget = totalBalance;
             ctx.portfolio.positions = {};
             ctx.portfolio.holdings = holdings;
             ctx.botState.sessionId = sessionId;
+            ctx.botState.tradingMode = 'REAL';
+            ctx.botState.isActive = true;
             ctx.beastSetSessionBalance(totalBalance);
             ctx.saveSessionState();
 
-            res.status(200).json({ balance: totalBalance, holdings, sessionId, portfolio: ctx.portfolio });
+            const response = { balance: totalBalance, holdings, sessionId, portfolio: ctx.portfolio, _debug: { cashBalance, holdingsValue, codeVersion: 'v2-cad-fix' } };
+            log.info('Auth response', { balance: totalBalance, holdingsCount: Object.keys(holdings).length });
+            res.status(200).json(response);
         } catch (error) {
             next(error);
+        }
+    });
+
+    // GET /debug-balance — temporary debug endpoint
+    router.get('/debug-balance', async (req, res) => {
+        try {
+            const sessionId = ctx.botState.sessionId;
+            if (!sessionId) return res.status(400).json({ error: 'No active session. Login first.' });
+            const adapter = ctx.getExchangeAdapter();
+            const balanceData = await adapter.getBalance(sessionId);
+            res.json({ balanceData, currentPortfolio: { cash: ctx.portfolio.cash, holdings: ctx.portfolio.holdings } });
+        } catch (error) {
+            res.status(500).json({ error: error.message });
         }
     });
 

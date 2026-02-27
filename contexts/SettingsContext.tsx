@@ -71,7 +71,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const [stopLossPercent, setStopLossPercent] = useState<number>(RISK_DEFAULTS.DEFAULT_STOP_LOSS_PERCENT);
     const [trailingStopPercent, setTrailingStopPercent] = useState<number>(RISK_DEFAULTS.DEFAULT_TRAILING_STOP_PERCENT);
     const [useTrailingStop, setUseTrailingStop] = useState(true);
-    const [currentExchange, setCurrentExchange] = useState('crypto.com');
+    const [currentExchange, setCurrentExchange] = useState('kraken');
     const [currentExchangeFees, setCurrentExchangeFees] = useState<{ takerFee: number; roundTripFee: number }>({
         takerFee: TRADING_FEES.TAKER_FEE_PERCENT,
         roundTripFee: TRADING_FEES.ROUND_TRIP_FEE_PERCENT,

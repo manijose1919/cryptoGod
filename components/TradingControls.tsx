@@ -276,7 +276,7 @@ export const TradingControls: React.FC<TradingControlsProps> = ({
   const startButtonText = isTradingActive
     ? 'Reset Session'
     : tradingMode === 'REAL'
-      ? 'Connect to Exchange'
+      ? (isApiAuthenticated ? 'Start Real Trading' : 'Connect to Exchange')
       : 'Start Simulation';
 
   return (

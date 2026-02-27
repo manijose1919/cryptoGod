@@ -36,13 +36,14 @@ class TradingBotService {
 
       if (!response.ok) {
         // Try to get a meaningful error message from the backend's JSON response
+        let errorMessage = `Request failed with status ${response.status}`;
         try {
           const errorData = await response.json();
-          throw new Error(errorData.message || `Request failed with status ${response.status}`);
-        } catch (e) {
-          // If the response isn't JSON, throw a generic status error
-          throw new Error(`Request to backend failed with status ${response.status}`);
+          if (errorData.message) errorMessage = errorData.message;
+        } catch {
+          // Response wasn't JSON, use generic message
         }
+        throw new Error(errorMessage);
       }
       return response.json() as Promise<T>;
     } catch (error) {

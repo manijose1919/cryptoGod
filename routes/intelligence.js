@@ -17,22 +17,24 @@ export default function createIntelligenceRouter(ctx) {
                 return res.status(200).json({ analysis: typeof analysis === 'string' ? analysis : JSON.stringify(analysis) });
             }
 
-            // Generic prompt analysis via Gemini proxy
+            // Generic prompt analysis via Claude API
             if (prompt) {
-                const apiKey = process.env.GEMINI_API_KEY;
+                const apiKey = process.env.ANTHROPIC_API_KEY;
                 if (!apiKey) return res.status(503).json({ error: 'AI service not configured' });
 
-                const response = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-                    {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: prompt + (context ? '\n\nContext: ' + context : '') }] }],
-                            generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
-                        })
-                    }
-                );
+                const response = await fetch('https://api.anthropic.com/v1/messages', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': apiKey,
+                        'anthropic-version': '2023-06-01',
+                    },
+                    body: JSON.stringify({
+                        model: 'claude-haiku-4-5-20251001',
+                        max_tokens: 1024,
+                        messages: [{ role: 'user', content: prompt + (context ? '\n\nContext: ' + context : '') }],
+                    }),
+                });
 
                 if (!response.ok) {
                     const errText = await response.text();
@@ -40,7 +42,7 @@ export default function createIntelligenceRouter(ctx) {
                 }
 
                 const data = await response.json();
-                const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response';
+                const text = data?.content?.[0]?.text || 'No response';
                 return res.status(200).json({ analysis: text });
             }
 
@@ -204,6 +206,157 @@ export default function createIntelligenceRouter(ctx) {
             }
         } catch (e) {
             log.error('self-teaching/status failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // ================================================================
+    // Phase 1-8: Advanced ML Pipeline Endpoints
+    // ================================================================
+
+    // GET /ml/pipeline-status — Full status of all ML systems
+    router.get('/ml/pipeline-status', async (req, res) => {
+        try {
+            const status = {};
+
+            // TF.js Engine (Phase 1+2)
+            try {
+                const { tfEngine } = await import('../services/tfEngine.js');
+                status.tfEngine = tfEngine.getStatus();
+            } catch { status.tfEngine = { available: false }; }
+
+            // RL Agent (Phase 3)
+            try {
+                const { rlAgent } = await import('../services/rlAgent.js');
+                status.rlAgent = rlAgent.getStatus();
+            } catch { status.rlAgent = { available: false }; }
+
+            // War Room (Phase 4)
+            try {
+                const { warRoom } = await import('../services/multiAgentSystem.js');
+                status.warRoom = warRoom.getStats();
+            } catch { status.warRoom = { available: false }; }
+
+            // Synthetic Data (Phase 5)
+            try {
+                const { syntheticEngine } = await import('../services/syntheticDataEngine.js');
+                status.syntheticData = syntheticEngine.getStatus();
+            } catch { status.syntheticData = { available: false }; }
+
+            // Online Learner (Phase 6)
+            try {
+                const { onlineLearner } = await import('../services/onlineLearner.js');
+                status.onlineLearner = onlineLearner.getStats();
+            } catch { status.onlineLearner = { available: false }; }
+
+            // System Config flags
+            try {
+                const { getAllFlags } = await import('../services/systemConfig.js');
+                const flags = getAllFlags();
+                status.flags = Object.fromEntries(
+                    Object.entries(flags).filter(([k]) =>
+                        k.startsWith('TF_') || k.startsWith('TFT_') || k.startsWith('RL_') ||
+                        k.startsWith('MULTI_') || k.startsWith('SYNTHETIC_') || k.startsWith('ONLINE_') ||
+                        k.startsWith('DRIFT_') || k.startsWith('ROLLBACK_') || k.startsWith('SHAP_') ||
+                        k.startsWith('CALIBRATION_') || k.startsWith('FEATURE_') || k.startsWith('MTF_') ||
+                        k.startsWith('WAVELET_') || k.startsWith('META_')
+                    )
+                );
+            } catch {}
+
+            res.json(status);
+        } catch (e) {
+            log.error('ml/pipeline-status failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /ml/shap/:ticker — SHAP explanation for latest prediction
+    router.get('/ml/shap/:ticker', async (req, res) => {
+        try {
+            const { ticker } = req.params;
+            const { explainPrediction, computeInteractionSHAP } = await import('../services/shapExplainer.js');
+            const { getMLEngine } = await import('../services/mlPredictionService.js');
+            const { getFeatureNames } = await import('../services/featureEngineering.js');
+
+            const mlEngine = getMLEngine();
+            if (!mlEngine || !mlEngine.isTrained) {
+                return res.json({ error: 'No trained model available' });
+            }
+
+            // Get most recent features for this ticker from DB
+            const features = ctx.getRecentFeatures?.(ticker);
+            if (!features) {
+                return res.json({ error: 'No recent features for ticker' });
+            }
+
+            const featureNames = getFeatureNames();
+            const explanation = explainPrediction(mlEngine, features, featureNames);
+            const interactions = computeInteractionSHAP(
+                explanation?.topFeatures?.map(() => 0) || [],
+                featureNames
+            );
+
+            res.json({ ticker, explanation, interactions });
+        } catch (e) {
+            log.error('ml/shap failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /ml/feature-drift — Feature importance drift alerts
+    router.get('/ml/feature-drift', async (req, res) => {
+        try {
+            const { detectFeatureDrift } = await import('../services/shapExplainer.js');
+            const { getFeatureNames } = await import('../services/featureEngineering.js');
+            const drift = detectFeatureDrift(getFeatureNames());
+            res.json({ driftAlerts: drift });
+        } catch (e) {
+            log.error('ml/feature-drift failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /ml/calibration — Calibration curve and metrics
+    router.get('/ml/calibration', async (req, res) => {
+        try {
+            const { getMLEngine } = await import('../services/mlPredictionService.js');
+            const mlEngine = getMLEngine();
+            const calibrator = mlEngine?._isotonicCalibrator;
+
+            res.json({
+                calibrated: !!calibrator?.isFitted,
+                breakpoints: calibrator?.breakpoints?.length || 0,
+            });
+        } catch (e) {
+            log.error('ml/calibration failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /ml/online-weights — Current Thompson Sampling model weights
+    router.get('/ml/online-weights', async (req, res) => {
+        try {
+            const { onlineLearner } = await import('../services/onlineLearner.js');
+            res.json({
+                expectedWeights: onlineLearner.getExpectedWeights(),
+                sampledWeights: onlineLearner.getModelWeights(),
+                driftActive: onlineLearner.isDriftActive(),
+                stats: onlineLearner.getStats(),
+            });
+        } catch (e) {
+            log.error('ml/online-weights failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /ml/war-room — Multi-agent war room status
+    router.get('/ml/war-room', async (req, res) => {
+        try {
+            const { warRoom } = await import('../services/multiAgentSystem.js');
+            res.json(warRoom.getStats());
+        } catch (e) {
+            log.error('ml/war-room failed', { error: e.message });
             res.status(500).json({ error: e.message });
         }
     });
