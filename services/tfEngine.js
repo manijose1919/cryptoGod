@@ -22,6 +22,27 @@ try {
 
 const MODEL_DIR = 'data/tf-models';
 
+// Custom layer: extract last timestep from sequence (tf.layers.lambda not available in TF.js)
+class LastTimestepLayer extends (tf?.layers?.Layer || class {}) {
+  constructor(config) {
+    super(config || {});
+  }
+  computeOutputShape(inputShape) {
+    return [inputShape[0], inputShape[2]];
+  }
+  call(inputs) {
+    const input = Array.isArray(inputs) ? inputs[0] : inputs;
+    return tf.tidy(() => {
+      const lastIdx = input.shape[1] - 1;
+      return input.slice([0, lastIdx, 0], [-1, 1, -1]).squeeze([1]);
+    });
+  }
+  static get className() { return 'LastTimestep'; }
+}
+if (tf) {
+  try { tf.serialization.registerClass(LastTimestepLayer); } catch {}
+}
+
 class TFEngine {
   constructor() {
     this.lstmModel = null;
@@ -246,8 +267,13 @@ class TFEngine {
       layer: tf.layers.dense({ units: hiddenDim })
     }).apply(temporal);
 
-    // Attention: softmax(Q*K^T / sqrt(d)) * V — use dot product attention
-    const attention = tf.layers.attention().apply([query, value, key]);
+    // Attention: softmax(Q*K^T / sqrt(d)) * V — manual dot product attention
+    // Q·K^T → (batch, seq, seq) attention scores
+    const scores = tf.layers.dot({ axes: 2 }).apply([query, key]);
+    // Softmax on last axis → attention weights
+    const attnWeights = tf.layers.softmax().apply(scores);
+    // Weighted sum: attnWeights · V → (batch, seq, hiddenDim)
+    const attention = tf.layers.dot({ axes: [2, 1] }).apply([attnWeights, value]);
 
     // Post-attention GRN
     let postAttn = tf.layers.timeDistributed({
@@ -258,11 +284,8 @@ class TFEngine {
       layer: tf.layers.dense({ units: hiddenDim })
     }).apply(postAttn);
 
-    // Take last timestep for predictions
-    const lastStep = tf.layers.lambda({
-      func: (x) => x.slice([0, x.shape[1] - 1, 0], [-1, 1, -1]).squeeze([1]),
-      outputShape: [hiddenDim],
-    }).apply(postAttn);
+    // Take last timestep for predictions (custom layer — tf.layers.lambda not in TF.js)
+    const lastStep = new LastTimestepLayer({ name: 'last_timestep' }).apply(postAttn);
 
     // Multi-horizon output heads: 1h, 4h, 24h
     const head1h = tf.layers.dense({

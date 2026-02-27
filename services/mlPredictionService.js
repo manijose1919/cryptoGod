@@ -643,7 +643,7 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
         const parsedFeatures = JSON.parse(matchingFeature.features_json);
         if (parsedFeatures.length === FEATURE_COUNT) {
           incrementalBuffer.features.push(parsedFeatures);
-          incrementalBuffer.labels.push(label === 'UP' ? 1 : 0);
+          incrementalBuffer.labels.push(label === 'UP' || label === 'WIN' ? 1 : 0);
           incrementalSampleCount++;
 
           // Trigger incremental update every INCREMENTAL_THRESHOLD samples
@@ -824,7 +824,7 @@ export async function trainModel() {
         const features = JSON.parse(sample.features_json);
         if (features.length === FEATURE_COUNT) {
           features2D.push(features);
-          labels.push(sample.label === 'UP' ? 1 : 0);
+          labels.push(sample.label === 'UP' || sample.label === 'WIN' ? 1 : 0);
         }
       } catch (err) {
         console.warn(`[ML Prediction] Failed to parse sample #${sample.id}:`, err.message);
@@ -1077,13 +1077,15 @@ export async function trainModel() {
       if (db.insertMLModel) {
         const modelData = mlEngine.serialize();
         db.insertMLModel({
-          model_data: JSON.stringify(modelData),
+          modelType: 'ensemble',
+          modelData: JSON.stringify(modelData),
           accuracy: metrics.accuracy,
-          precision: metrics.precision,
+          precisionScore: metrics.precision,
           recall: metrics.recall,
-          f1_score: metrics.f1Score,
-          sample_count: features2D.length,
-          trained_at: Date.now()
+          f1Score: metrics.f1,
+          sampleCount: features2D.length,
+          featureImportanceJson: JSON.stringify(mlEngine.featureImportance || {}),
+          configJson: JSON.stringify(mlEngine.config || {})
         });
         console.log('[ML Prediction] Model saved to database');
       }
@@ -1094,7 +1096,10 @@ export async function trainModel() {
     // Update anomaly detector with new data
     try {
       if (anomalyDetector) {
-        anomalyDetector.fit(features2D);
+        for (const row of features2D.slice(-500)) {
+          anomalyDetector.addSample(row);
+        }
+        anomalyDetector.retrain();
         console.log('[ML Prediction] Anomaly detector updated');
       }
     } catch (err) {

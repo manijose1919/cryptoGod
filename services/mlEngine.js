@@ -766,19 +766,16 @@ class MLEngine {
     if (useCrossValidation) {
       console.log(`[MLEngine] Walk-forward CV: ${nFolds} folds, ${n} samples, purgeGap=${purgeGap}`);
 
-      // Expanding-window fold boundaries
-      // Fold 0: train [0..40%],  val (40%+gap .. 55%]
-      // Fold 1: train [0..55%],  val (55%+gap .. 65%]
-      // Fold 2: train [0..65%],  val (65%+gap .. 75%]
-      // Fold 3: train [0..75%],  val (75%+gap .. 85%]
-      // Fold 4: train [0..85%],  val (85%+gap .. 100%]
-      const foldBoundaries = [
-        { trainEnd: 0.40, valStart: 0.40, valEnd: 0.55 },
-        { trainEnd: 0.55, valStart: 0.55, valEnd: 0.65 },
-        { trainEnd: 0.65, valStart: 0.65, valEnd: 0.75 },
-        { trainEnd: 0.75, valStart: 0.75, valEnd: 0.85 },
-        { trainEnd: 0.85, valStart: 0.85, valEnd: 1.00 },
-      ];
+      // Expanding-window fold boundaries (dynamically generated for nFolds)
+      // Each fold trains on [0..trainEnd], validates on (trainEnd+gap..valEnd]
+      const foldBoundaries = [];
+      const startPct = 0.40; // First fold trains on 40% of data
+      const step = (1.0 - startPct) / nFolds;
+      for (let f = 0; f < nFolds; f++) {
+        const trainEnd = startPct + f * step;
+        const valEnd = Math.min(trainEnd + step, 1.0);
+        foldBoundaries.push({ trainEnd, valStart: trainEnd, valEnd });
+      }
 
       const cvAccuracies = [];
       let validFolds = 0;
@@ -884,13 +881,15 @@ class MLEngine {
       });
       this.logisticRegression.fit(scaledFeatures, labels, allWeights);
 
+      // Feature importance from the final RF (trained on all data)
+      this.featureImportance = this.randomForest.featureImportances;
+
+      // Mark as trained so ensemble predict() works for evaluation
+      this.isTrained = true;
+
       // Training accuracy on full data
       const trainMetrics = this.evaluate(scaledFeatures, labels);
       this.accuracy = trainMetrics.accuracy;
-
-      // Feature importance from the final RF (trained on all data)
-      this.featureImportance = this.randomForest.featureImportances;
-      this.isTrained = true;
       this.trainedAt = new Date().toISOString();
       this.cvFolds = validFolds;
       this.cvAccuracies = cvAccuracies;
@@ -996,6 +995,9 @@ class MLEngine {
 
     console.log('[MLEngine] Model weights:', this.modelWeights);
 
+    // Mark as trained so ensemble predict() works for evaluation
+    this.isTrained = true;
+
     // Evaluate ensemble on validation set
     const ensembleMetrics = this.evaluate(valFeatures, valLabels);
 
@@ -1004,7 +1006,6 @@ class MLEngine {
 
     this.accuracy = trainMetrics.accuracy;
     this.validationAccuracy = ensembleMetrics.accuracy;
-    this.isTrained = true;
     this.trainedAt = new Date().toISOString();
     this.cvFolds = null;
     this.cvAccuracies = null;
