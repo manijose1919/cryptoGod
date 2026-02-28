@@ -3205,6 +3205,11 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 process.on('uncaughtException', (error) => {
+    // EADDRINUSE is handled by server.on('error') retry — don't exit
+    if (error.code === 'EADDRINUSE') {
+        console.warn(`[CRASH-GUARD] Port in use, server will retry automatically`);
+        return;
+    }
     console.error('[CRASH-GUARD] Uncaught exception:', error);
     try { addLog(`[CRASH-GUARD] Uncaught exception: ${error.message}`, 'ERROR'); } catch (e) {}
     try { saveSessionState(); } catch (e) {}
