@@ -3107,6 +3107,16 @@ const startServer = async () => {
         get availableTickers() { return availableTickers; },
     }, 60000);
 
+    server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.warn(`[Server] Port ${CONFIG.PORT} in use, retrying in 5 seconds...`);
+            setTimeout(() => server.listen(CONFIG.PORT), 5000);
+        } else {
+            console.error('[Server] Fatal server error:', err);
+            process.exit(1);
+        }
+    });
+
     server.listen(CONFIG.PORT, () => {
         console.log(`Server running on port ${CONFIG.PORT} (HTTP + WebSocket relay)`);
     });
