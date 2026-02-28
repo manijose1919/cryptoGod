@@ -47,21 +47,19 @@ let lastMessageTime = 0;
 // PAIR FORMAT CONVERSION
 // ============================================
 
-/** Convert our internal ticker (BTCUSD) to Kraken WS v2 format (XBT/USD) */
+/** Convert our internal ticker (BTCUSD) to Kraken WS v2 format (BTC/USD) */
 function toKrakenWsPair(ticker) {
-    // BTCUSD → XBT/USD, ETHUSD → ETH/USD, etc.
-    let base = ticker.replace(/USD$/, '');
+    // BTCUSD → BTC/USD, ETHUSD → ETH/USD, etc.
+    // Kraken WS v2 uses standard symbols (BTC not XBT, DOGE not XDG)
+    const base = ticker.replace(/USD$/, '');
     const quote = 'USD';
-    if (base === 'BTC') base = 'XBT';
     return `${base}/${quote}`;
 }
 
-/** Convert Kraken WS pair (XBT/USD) back to internal format (BTCUSD) */
+/** Convert Kraken WS pair (BTC/USD) back to internal format (BTCUSD) */
 function fromKrakenWsPair(krakenPair) {
-    // XBT/USD → BTCUSD, ETH/USD → ETHUSD
-    let pair = krakenPair.replace('/', '');
-    pair = pair.replace('XBT', 'BTC');
-    return pair;
+    // BTC/USD → BTCUSD, ETH/USD → ETHUSD
+    return krakenPair.replace('/', '');
 }
 
 // ============================================
