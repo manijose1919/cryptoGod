@@ -102,11 +102,10 @@ export function evaluateEntry(ticker, candles, ruleStrategy, ruleStrength, optio
       marketIntelligence: options.marketIntelligence || null,
     });
 
-    // Append genetic signals if available
-    let features = featureResult.features;
-    if (options.geneticSignals && Array.isArray(options.geneticSignals)) {
-      features = [...features, ...options.geneticSignals];
-    }
+    // Use only the base feature vector (103 features) for ML prediction.
+    // Do NOT append genetic signals — model was trained on 103 features only.
+    // Appending extra features corrupts the scaler and produces NaN in tree predictions.
+    const features = featureResult.features;
 
     // Get ML prediction
     const mlPrediction = mlEngine.predict(features);

@@ -2027,7 +2027,8 @@ async function tradingBotLoop() {
                             });
                         }
                     } catch (e) {
-                        // ML gatekeeper error — fail open
+                        // ML gatekeeper error — fail open, but log for diagnosis
+                        console.warn(`[MLGatekeeper] Error for ${ticker}: ${e.message}`);
                     }
                 }
                 // ===== END ML PIPELINE =====
