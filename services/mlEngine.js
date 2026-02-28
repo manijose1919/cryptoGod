@@ -1449,25 +1449,61 @@ class MLEngine {
       throw new Error('Cannot serialize untrained model');
     }
 
+    // Serialize tree node recursively (compact keys to save space)
+    const serializeNode = (node) => {
+      if (!node) return null;
+      if (node.isLeaf()) {
+        return { v: node.value, s: node.samples };
+      }
+      return {
+        f: node.featureIndex,
+        t: node.threshold,
+        l: serializeNode(node.left),
+        r: serializeNode(node.right),
+        s: node.samples,
+      };
+    };
+
+    const serializeTree = (tree) => ({
+      maxDepth: tree.maxDepth,
+      minSamples: tree.minSamples,
+      maxFeatures: tree.maxFeatures,
+      root: serializeNode(tree.root),
+      featureImportances: tree.featureImportances,
+    });
+
     return JSON.stringify({
+      version: 2, // v2 includes full tree serialization
       config: this.config,
-      scaler: {
-        means: this.scaler.means,
-        stds: this.scaler.stds
-      },
+      scaler: { means: this.scaler.means, stds: this.scaler.stds },
       modelWeights: this.modelWeights,
       featureImportance: this.featureImportance,
       accuracy: this.accuracy,
       validationAccuracy: this.validationAccuracy,
       sampleCount: this.sampleCount,
       trainedAt: this.trainedAt,
-      // Note: Tree structures are complex to serialize, omitted for now
-      // In production, would use a more sophisticated serialization format
+      // Full model serialization
+      randomForest: this.randomForest ? {
+        nTrees: this.randomForest.nTrees,
+        trees: this.randomForest.trees.map(serializeTree),
+        featureImportances: this.randomForest.featureImportances,
+      } : null,
+      gbt: this.gradientBoosted ? {
+        nEstimators: this.gradientBoosted.nEstimators,
+        learningRate: this.gradientBoosted.learningRate,
+        maxDepth: this.gradientBoosted.maxDepth,
+        initialPrediction: this.gradientBoosted.initialPrediction,
+        trees: this.gradientBoosted.trees.map(serializeNode), // GBT trees are raw nodes
+      } : null,
+      lr: this.logisticRegression ? {
+        weights: this.logisticRegression.weights,
+        bias: this.logisticRegression.bias,
+      } : null,
     });
   }
 
   /**
-   * Deserialize model from JSON
+   * Deserialize model from JSON (supports v1 metadata-only and v2 full models)
    * @param {string} json - JSON string
    */
   deserialize(json) {
@@ -1483,11 +1519,68 @@ class MLEngine {
     this.sampleCount = data.sampleCount;
     this.trainedAt = data.trainedAt;
 
-    // Note: Would need to deserialize tree structures
-    // For now, model needs to be retrained after load
-    this.isTrained = false;
+    // v2: Full tree deserialization
+    if (data.version >= 2 && data.randomForest) {
+      const deserializeNode = (obj) => {
+        if (!obj) return null;
+        const node = new DecisionTreeNode();
+        node.samples = obj.s || 0;
+        if (obj.v !== undefined) {
+          // Leaf node
+          node.value = obj.v;
+        } else {
+          // Internal node
+          node.featureIndex = obj.f;
+          node.threshold = obj.t;
+          node.left = deserializeNode(obj.l);
+          node.right = deserializeNode(obj.r);
+        }
+        return node;
+      };
 
-    console.log('[MLEngine] Model metadata loaded, retraining required');
+      const deserializeTree = (treeObj) => {
+        const tree = new DecisionTree({
+          maxDepth: treeObj.maxDepth,
+          minSamples: treeObj.minSamples,
+          maxFeatures: treeObj.maxFeatures,
+        });
+        tree.root = deserializeNode(treeObj.root);
+        tree.featureImportances = treeObj.featureImportances;
+        return tree;
+      };
+
+      // Restore Random Forest
+      this.randomForest = new RandomForest({ nTrees: data.randomForest.nTrees });
+      this.randomForest.trees = data.randomForest.trees.map(deserializeTree);
+      this.randomForest.featureImportances = data.randomForest.featureImportances;
+
+      // Restore GBT (trees are raw DecisionTreeNode roots, not DecisionTree instances)
+      if (data.gbt) {
+        this.gradientBoosted = new GradientBoostedTrees({
+          nEstimators: data.gbt.nEstimators,
+          learningRate: data.gbt.learningRate,
+          maxDepth: data.gbt.maxDepth || 6,
+        });
+        this.gradientBoosted.initialPrediction = data.gbt.initialPrediction;
+        this.gradientBoosted.trees = data.gbt.trees.map(deserializeNode);
+      }
+
+      // Restore LR
+      if (data.lr) {
+        this.logisticRegression = new LogisticRegression();
+        this.logisticRegression.weights = data.lr.weights;
+        this.logisticRegression.bias = data.lr.bias;
+      }
+
+      this.isTrained = true;
+      const rfCount = this.randomForest?.trees?.length || 0;
+      const gbtCount = this.gradientBoosted?.trees?.length || 0;
+      console.log(`[MLEngine] Full model restored: RF(${rfCount} trees) + GBT(${gbtCount} trees) + LR, accuracy=${this.accuracy}`);
+    } else {
+      // v1: metadata only, needs retraining
+      this.isTrained = false;
+      console.log('[MLEngine] Model metadata loaded (v1), retraining required');
+    }
   }
 
   /**
