@@ -30,48 +30,48 @@ const KRAKEN_RT_FEE = 0.52;
 
 const PM_CONFIG = {
   GRID: {
-    ENABLED: true,
-    GRID_COUNT: 5,                        // Was 10: wider spacing per level to exceed 0.52% fees
+    ENABLED: false,                       // DISABLED: untested in live, loses to fees in backtests
+    GRID_COUNT: 5,
     PORTFOLIO_ALLOCATION: 0.05,
-    MIN_RANGE_PERCENT: 3.0,               // Was 1.0: each of 5 levels = 0.6% spacing (above fees)
-    MIN_GRID_SPACING_PCT: 0.7,            // Min spacing between grid levels (must exceed RT fees)
+    MIN_RANGE_PERCENT: 3.0,
+    MIN_GRID_SPACING_PCT: 0.7,
   },
   DCA: {
-    ENABLED: true,
-    INTERVAL_MS: 5 * 60 * 1000,           // Was 2min: slower DCA to avoid fee drag
+    ENABLED: false,                       // DISABLED: blind buying loses money — 11/11 losses in sim
+    INTERVAL_MS: 5 * 60 * 1000,
     BASE_ALLOCATION: 0.02,
     MAX_DIP_MULTIPLIER: 3.0,
     MIN_PUMP_MULTIPLIER: 0.3,
-    TAKE_PROFIT_PERCENT: 1.5,             // Was 5%: unreachable. 1.5% = ~1% net after 0.52% fees
-    DIP_THRESHOLD: 2.0,                   // Was 1.0: require real dips, not noise
-    PUMP_THRESHOLD: 1.5,                  // Was 1.0: don't reduce too aggressively
-    MAX_DCA_BUYS: 3,                      // Cap to prevent endless averaging down
+    TAKE_PROFIT_PERCENT: 1.5,
+    DIP_THRESHOLD: 2.0,
+    PUMP_THRESHOLD: 1.5,
+    MAX_DCA_BUYS: 3,
   },
   ARBITRAGE: {
-    ENABLED: true,
-    MIN_SPREAD_ZSCORE: 1.5,               // Was 1.2: tighter filter
-    MIN_CONFIDENCE: 55,                   // Was 50
+    ENABLED: false,                       // DISABLED: stat arb requires sub-second execution, not viable
+    MIN_SPREAD_ZSCORE: 1.5,
+    MIN_CONFIDENCE: 55,
     PORTFOLIO_ALLOCATION: 0.10,
   },
   PAIR_TRADING: {
-    ENABLED: true,
+    ENABLED: false,                       // DISABLED: -$37 from 6 pair trades in sim, all losses
     ENTRY_ZSCORE: 2.0,
     EXIT_ZSCORE: 0.5,
     MIN_CORRELATION: 0.5,
     PORTFOLIO_ALLOCATION: 0.10,
   },
   SWING: {
-    ENABLED: true,
-    MIN_CONFIDENCE: 55,                   // Was 50: require 4+ strong signals
-    MIN_RISK_REWARD: 2.5,                 // Was 1.5: fee-adjusted (need wider edge)
+    ENABLED: false,                       // DISABLED: untested, let TREND strategy handle entries
+    MIN_CONFIDENCE: 55,
+    MIN_RISK_REWARD: 2.5,
     PORTFOLIO_ALLOCATION: 0.05,
     TRAILING_STOP_TRIGGER: 2,
-    TRAILING_STOP_PCT: 1.5,              // Trail 1.5% below highest price (was 0.5% of pnl)
-    MIN_TARGET_PCT: 2.0,                  // Was 1%: min target must exceed fees meaningfully
+    TRAILING_STOP_PCT: 1.5,
+    MIN_TARGET_PCT: 2.0,
   },
   MARKET_MAKING: {
     ENABLED: false,                       // DISABLED: virtual spread capture is unrealistic
-    PORTFOLIO_ALLOCATION: 0.05,           // 0.06% spread capture vs 0.52% fees = guaranteed loss
+    PORTFOLIO_ALLOCATION: 0.05,
     ORDER_EXPIRY_MS: 5 * 60 * 1000,
     MIN_SPREAD_PERCENT: 0.01,
   },
@@ -1112,16 +1112,9 @@ export function checkProfitMethodExits(positions, marketDataMap) {
         break;
       }
       default: {
-        // Non-profit-method positions (TREND, MOMENTUM, BREAKOUT, etc.)
-        // Apply a universal stale-position timeout: if down after 30 min, exit
-        const defaultElapsed = Date.now() - position.entryTime;
-        const defaultPnl = ((price - position.openPrice) / position.openPrice) * 100;
-        if (defaultElapsed > 30 * 60 * 1000 && defaultPnl < -0.5) {
-          exits.push({
-            ticker,
-            reason: `[PM-TIMEOUT] Stale ${position.entryStrategy} position: ${defaultPnl.toFixed(2)}% after ${Math.round(defaultElapsed / 60000)}min`,
-          });
-        }
+        // Non-profit-method positions (TREND, ADAPTIVE, etc.)
+        // beastMode.js handles stale position exits (4h/-0.5% or 8h/breakeven)
+        // Do NOT add aggressive timeouts here — TREND holds up to 168h
         break;
       }
     }

@@ -174,12 +174,14 @@ const _defById = new Map(TIMEFRAME_DEFINITIONS.map(d => [d.id, d]));
 // ============================================
 
 /** Strategies appropriate for slow / ranging markets.
- *  Time Machine training proved WHALE (+$15K), MOMENTUM (+$6.7K), CONFLUENCE (+$11K)
- *  are profitable across ALL regimes. Restricting them kills opportunity. */
-const SLOW_STRATEGIES = ['ADAPTIVE', 'DIVERGENCE', 'WHALE', 'MOMENTUM', 'CONFLUENCE'];
+ *  Walk-forward OOS validation (Feb 2026): Only TREND is net profitable.
+ *  All other strategies (BREAKOUT, MOMENTUM, WHALE, CONFLUENCE, DIVERGENCE) lose money OOS.
+ *  ADAPTIVE kept as fallback — it adapts based on learned adaptive weights. */
+const SLOW_STRATEGIES = ['TREND', 'ADAPTIVE'];
 
-/** Strategies appropriate for fast / trending markets. */
-const FAST_STRATEGIES = ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE', 'WHALE', 'ADAPTIVE'];
+/** Strategies appropriate for fast / trending markets.
+ *  TREND-only validated profitable: +16.68% OOS, 50.5% WR, 7/9 folds profitable. */
+const FAST_STRATEGIES = ['TREND', 'ADAPTIVE'];
 
 /** Profit methods suited to slow markets (spread-capture / accumulation). */
 const SLOW_PROFIT_METHODS = ['Grid', 'MarketMaking'];
