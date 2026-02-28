@@ -206,7 +206,7 @@ export async function initializeML() {
       console.warn('[ML Prediction] Failed to load saved model:', err.message);
     }
 
-    // If no saved model, check if we can train one
+    // If no saved model, kick off training in background (don't block server startup)
     if (!mlEngine.getModelStatus().isTrained) {
       try {
         if (db && db.getLabeledFeatures) {
@@ -214,8 +214,12 @@ export async function initializeML() {
           console.log(`[ML Prediction] Found ${labeledSamples.length} labeled samples`);
 
           if (labeledSamples.length >= MIN_SAMPLES_TO_TRAIN) {
-            console.log('[ML Prediction] Enough samples to train initial model...');
-            await trainModel();
+            console.log('[ML Prediction] Starting background model training (non-blocking)...');
+            trainModel().then(() => {
+              console.log('[ML Prediction] Background training complete');
+            }).catch(err => {
+              console.warn('[ML Prediction] Background training failed:', err.message);
+            });
           } else {
             console.log(`[ML Prediction] Need ${MIN_SAMPLES_TO_TRAIN - labeledSamples.length} more samples to train initial model`);
           }
@@ -727,9 +731,9 @@ async function trainOnWorker(features2D, labels, config, labeledSamples) {
       const timeout = setTimeout(() => {
         worker.terminate();
         workerTraining = false;
-        console.warn('[ML Prediction] Worker training timed out after 120s');
+        console.warn('[ML Prediction] Worker training timed out after 600s');
         resolve(false);
-      }, 120000);
+      }, 600000);
 
       worker.on('message', (msg) => {
         if (msg.type === 'ready') {
