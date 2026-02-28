@@ -199,7 +199,7 @@ export async function initializeML() {
           mlEngine.deserialize(modelData);
           console.log('[ML Prediction] Loaded saved model from database');
           console.log(`[ML Prediction] Model metrics: accuracy=${savedModel.accuracy?.toFixed(2)}%, precision=${savedModel.precision?.toFixed(2)}%`);
-          lastTrainTime = new Date(savedModel.trained_at).getTime();
+          lastTrainTime = new Date(savedModel.created_at).getTime();
         }
       }
     } catch (err) {
@@ -756,13 +756,15 @@ async function trainOnWorker(features2D, labels, config, labeledSamples) {
             // Save to DB
             if (db?.insertMLModel) {
               db.insertMLModel({
-                model_data: JSON.stringify(msg.modelData),
+                modelType: 'ensemble',
+                modelData: JSON.stringify(msg.modelData),
                 accuracy: msg.metrics?.accuracy,
-                precision: msg.metrics?.precision,
+                precisionScore: msg.metrics?.precision,
                 recall: msg.metrics?.recall,
-                f1_score: msg.metrics?.f1Score,
-                sample_count: msg.sampleCount,
-                trained_at: Date.now(),
+                f1Score: msg.metrics?.f1Score,
+                sampleCount: msg.sampleCount,
+                featureImportanceJson: null,
+                configJson: null,
               });
             }
             console.log(`[ML Prediction] Worker training complete: acc=${msg.metrics?.accuracy?.toFixed(2)}%`);
@@ -1288,9 +1290,7 @@ export async function getMLAdvice(ticker, candles, options = {}) {
   }
 }
 
-// Auto-initialize on module load
-initializeML().catch(err => {
-  console.error('[ML Prediction] Auto-initialization failed:', err);
-});
+// NOTE: Do NOT auto-initialize here — database must be initialized first.
+// server.js calls initializeML() after initializeDatabase().
 
 console.log('[ML Prediction Service] Loaded');
