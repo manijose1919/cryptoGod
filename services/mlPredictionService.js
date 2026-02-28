@@ -195,8 +195,7 @@ export async function initializeML() {
       if (db && db.getLatestMLModel) {
         const savedModel = db.getLatestMLModel();
         if (savedModel && savedModel.model_data) {
-          const modelData = JSON.parse(savedModel.model_data);
-          mlEngine.deserialize(modelData);
+          mlEngine.deserialize(savedModel.model_data);
           console.log('[ML Prediction] Loaded saved model from database');
           console.log(`[ML Prediction] Model metrics: accuracy=${savedModel.accuracy?.toFixed(2)}%, precision=${savedModel.precision?.toFixed(2)}%`);
           lastTrainTime = new Date(savedModel.created_at).getTime();
@@ -308,10 +307,11 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       if (db && db.insertMLFeatures) {
         db.insertMLFeatures({
           ticker,
-          strategy,
-          features_json: JSON.stringify(featureArray),
+          featuresJson: JSON.stringify(featureArray),
           timestamp: Date.now(),
-          regime: marketRegime || null
+          label: null,
+          labelValue: null,
+          labeledAt: null,
         });
       }
     } catch (err) {
@@ -366,12 +366,10 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       if (db && db.insertMLPrediction) {
         db.insertMLPrediction({
           ticker,
-          strategy,
-          features_json: JSON.stringify(featureArray),
+          modelId: 'ensemble',
           prediction: prediction.prediction,
           confidence: prediction.confidence,
-          up_prob: prediction.probabilities?.up || 0,
-          down_prob: prediction.probabilities?.down || 0,
+          featuresSnapshot: JSON.stringify(featureArray),
           timestamp: Date.now()
         });
       }
