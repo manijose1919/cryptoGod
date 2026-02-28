@@ -22,6 +22,24 @@ try {
 
 const MODEL_DIR = 'data/tf-models';
 
+// Custom layer: softmax on last axis for 3D tensors (tf.layers.softmax fails on rank>2)
+class Softmax3DLayer extends (tf?.layers?.Layer || class {}) {
+  constructor(config) {
+    super(config || {});
+  }
+  computeOutputShape(inputShape) {
+    return inputShape;
+  }
+  call(inputs) {
+    const input = Array.isArray(inputs) ? inputs[0] : inputs;
+    return tf.tidy(() => tf.softmax(input, -1));
+  }
+  static get className() { return 'Softmax3D'; }
+}
+if (tf) {
+  try { tf.serialization.registerClass(Softmax3DLayer); } catch {}
+}
+
 // Custom layer: extract last timestep from sequence (tf.layers.lambda not available in TF.js)
 class LastTimestepLayer extends (tf?.layers?.Layer || class {}) {
   constructor(config) {
@@ -270,8 +288,8 @@ class TFEngine {
     // Attention: softmax(Q*K^T / sqrt(d)) * V — manual dot product attention
     // Q·K^T → (batch, seq, seq) attention scores
     const scores = tf.layers.dot({ axes: 2 }).apply([query, key]);
-    // Softmax on last axis → attention weights
-    const attnWeights = tf.layers.softmax().apply(scores);
+    // Softmax on last axis → attention weights (custom layer — tf.layers.softmax fails on 3D)
+    const attnWeights = new Softmax3DLayer({ name: 'attn_softmax' }).apply(scores);
     // Weighted sum: attnWeights · V → (batch, seq, hiddenDim)
     const attention = tf.layers.dot({ axes: [2, 1] }).apply([attnWeights, value]);
 
