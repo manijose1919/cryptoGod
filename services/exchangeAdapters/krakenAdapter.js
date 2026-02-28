@@ -164,12 +164,31 @@ export class KrakenAdapter extends BaseExchangeAdapter {
     async getInstruments() {
         const result = await krakenPublicRequest('AssetPairs');
 
+        // Kraken asset name aliases → standard symbols
+        const KRAKEN_ALIASES = {
+            'XBT': 'BTC', 'XXBT': 'BTC', 'XDG': 'DOGE', 'XXDG': 'DOGE',
+            'XETH': 'ETH', 'XXRP': 'XRP', 'XLTC': 'LTC', 'XMLN': 'MLN',
+            'XREP': 'REP', 'XXLM': 'XLM', 'XXMR': 'XMR', 'XZEC': 'ZEC',
+        };
+        // Skip fiat currencies that appear in USD pairs
+        const FIAT_BASES = new Set(['AUD', 'EUR', 'GBP', 'CAD', 'CHF', 'JPY',
+            'ZAUD', 'ZEUR', 'ZGBP', 'ZCAD', 'ZCHF', 'ZJPY']);
+
         const instruments = [];
         for (const [pairName, info] of Object.entries(result)) {
             if (pairName.includes('.d')) continue; // Skip dark pool pairs
 
-            const base = (info.base || '').replace(/^X/, '').replace('XBT', 'BTC');
+            const rawBase = (info.base || '');
             const quote = (info.quote || '').replace(/^Z/, '');
+
+            // Skip fiat-to-fiat pairs
+            if (FIAT_BASES.has(rawBase)) continue;
+
+            // Normalize base: check aliases, then strip leading X
+            let base = KRAKEN_ALIASES[rawBase] || rawBase.replace(/^X/, '').replace('XBT', 'BTC');
+
+            // Skip very short bases (likely fragments) and fiat leaks
+            if (base.length < 3) continue;
 
             // Only include USD pairs (Canadian compliance)
             if (quote === 'USD') {
