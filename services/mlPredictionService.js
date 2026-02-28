@@ -160,6 +160,7 @@ let lstmModel = null;        // Upgrade #8: LSTM sequence model
 let isInitialized = false;
 let lastTrainTime = 0;
 let predictionCount = 0;
+let currentModelId = null;   // Database ID for ML predictions FK
 const MIN_SAMPLES_TO_TRAIN = 100;
 const RETRAIN_INTERVAL = 30 * 60 * 1000; // 30 min (Batch 5B: increased from 1 hour)
 const RETRAIN_SAMPLE_THRESHOLD = 200; // retrain every 200 new samples
@@ -196,8 +197,9 @@ export async function initializeML() {
         const savedModel = db.getLatestMLModel();
         if (savedModel && savedModel.model_data) {
           mlEngine.deserialize(savedModel.model_data);
-          console.log('[ML Prediction] Loaded saved model from database');
-          console.log(`[ML Prediction] Model metrics: accuracy=${savedModel.accuracy?.toFixed(2)}%, precision=${savedModel.precision?.toFixed(2)}%`);
+          currentModelId = savedModel.id;
+          console.log('[ML Prediction] Loaded saved model from database (id=' + savedModel.id + ')');
+          console.log(`[ML Prediction] Model metrics: accuracy=${savedModel.accuracy?.toFixed(2)}%, precision=${savedModel.precision_score?.toFixed(2)}%`);
           lastTrainTime = new Date(savedModel.created_at).getTime();
         }
       }
@@ -363,10 +365,10 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       predictionCount++;
 
       // Store prediction in DB for later resolution
-      if (db && db.insertMLPrediction) {
+      if (db && db.insertMLPrediction && currentModelId) {
         db.insertMLPrediction({
           ticker,
-          modelId: 'ensemble',
+          modelId: currentModelId,
           prediction: prediction.prediction,
           confidence: prediction.confidence,
           featuresSnapshot: JSON.stringify(featureArray),
