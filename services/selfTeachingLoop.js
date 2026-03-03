@@ -175,7 +175,12 @@ export async function onTradeComplete(tradeData) {
   try {
     // 1. Record trade outcome in ML service (labels the feature vector)
     if (mlPredictionService?.recordTradeOutcome) {
-      await mlPredictionService.recordTradeOutcome(tradeData);
+      await mlPredictionService.recordTradeOutcome(
+        tradeData.ticker,
+        tradeData.entryTime,
+        tradeData.outcome,
+        tradeData.pnlPercent != null ? tradeData.pnlPercent : (tradeData.pnl != null ? tradeData.pnl : 0)
+      );
     } else {
       console.warn('[SelfTeach] ML prediction service not available, cannot label features');
     }
