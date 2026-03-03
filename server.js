@@ -2571,6 +2571,24 @@ const handleSell = async (position, price, reason) => {
         autoJournal();
         recordSessionTrade(pnl);
 
+        // Feed trade outcome to ML self-teaching loop
+        try {
+          recordTradeForLearning({
+            ticker: position.ticker,
+            strategy: position.entryStrategy,
+            outcome: pnl >= 0 ? 'WIN' : 'LOSS',
+            pnl,
+            pnlPercent: ((avgPrice - position.openPrice) / position.openPrice) * 100,
+            entryPrice: position.openPrice,
+            exitPrice: avgPrice,
+            entryTime: position.entryTime,
+            exitTime: Date.now(),
+            holdDuration: Date.now() - position.entryTime,
+          });
+        } catch (mlErr) {
+          console.warn('[ML Feedback] Error recording trade for learning:', mlErr.message);
+        }
+
         // Log the thought
         logThought({
             type: 'SELL',
