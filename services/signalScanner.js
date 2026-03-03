@@ -13,7 +13,7 @@
 // CONFIGURATION
 // ============================================
 const SCAN_INTERVAL_MS = 60000; // Scan every 60 seconds
-const SCAN_TIMEFRAMES = ['5m', '15m', '1h']; // Multiple timeframes for confirmation
+const SCAN_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1D']; // Multiple timeframes for confirmation
 const SIGNAL_COOLDOWN_MS = 300000; // 5 min cooldown per ticker to avoid spam
 const MIN_SCORE_BUY = 8;  // Fix #21 (Tier 3): Raised from 5→8 to reduce false positives
 const MIN_SCORE_SELL = 8; // Fix #21: Raised from 5→8
@@ -256,7 +256,7 @@ function combineTimeframeSignals(results) {
   for (const [tf, analysis] of Object.entries(results)) {
     if (!analysis.signal) continue;
 
-    const weight = tf === '1h' ? 2 : tf === '15m' ? 1.5 : 1;
+    const weight = tf === '1D' ? 3 : tf === '4h' ? 2.5 : tf === '1h' ? 2 : tf === '15m' ? 1.5 : 1;
     if (!signals[analysis.signal]) {
       signals[analysis.signal] = { totalScore: 0, timeframes: [], details: [], price: analysis.price, rsi: analysis.rsi };
     }

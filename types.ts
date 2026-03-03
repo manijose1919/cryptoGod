@@ -65,7 +65,7 @@ export interface Trade {
   pnl?: number; // Only for SELL trades
 }
 
-export type TradingStrategy = 'TREND' | 'BREAKOUT' | 'WHALE' | 'CONFLUENCE' | 'MOMENTUM' | 'DIVERGENCE' | 'ADAPTIVE' | 'MA_CROSSOVER' | 'MEAN_REVERSION' | 'REVERSAL' | 'RANGE' | 'VWAP';
+export type TradingStrategy = 'TREND' | 'BREAKOUT' | 'WHALE' | 'CONFLUENCE' | 'MOMENTUM' | 'DIVERGENCE' | 'ADAPTIVE' | 'MA_CROSSOVER' | 'MEAN_REVERSION' | 'REVERSAL' | 'RANGE' | 'VWAP' | 'SWING';
 
 export type TradingMode = 'SIMULATION' | 'REAL';
 
