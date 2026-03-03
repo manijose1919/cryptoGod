@@ -423,6 +423,7 @@ export const DEFAULT_PROFIT_GOALS: Record<TradingStrategy, number> = {
     REVERSAL: 400,
     RANGE: 250,
     VWAP: 300,
+    SWING: 800,
 };
 
 export const DEFAULT_SESSION_PROFIT_GOAL = 11000;
@@ -670,6 +671,11 @@ export const STRATEGY_INFO: Record<TradingStrategy, { name: string; description:
     VWAP: {
         name: 'VWAP Trading',
         description: 'Uses the Volume-Weighted Average Price as a dynamic support/resistance level.',
+        riskLevel: 'MEDIUM',
+    },
+    SWING: {
+        name: 'Swing Trading',
+        description: 'Multi-day holds using 4h/1D candles with wider targets',
         riskLevel: 'MEDIUM',
     },
 };

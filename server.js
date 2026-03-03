@@ -1289,6 +1289,8 @@ let botLoopStartTime = 0;
 let _mtfCache5m = { data: null, ts: 0 };
 let _mtfCache15m = { data: null, ts: 0 };
 let _mtfCache1h = { data: null, ts: 0 };
+let _mtfCache4h = { data: null, ts: 0 };
+let _mtfCache1d = { data: null, ts: 0 };
 async function tradingBotLoop() {
     if (!botState.isActive) return;
     if (botLoopRunning) return; // prevent overlapping async iterations
@@ -1655,6 +1657,84 @@ async function tradingBotLoop() {
 
                 const score = calculateOpportunityScore(candles, ticker);
                 if (score.compositeScore > minOppScore) candidates.push({ ticker, score, candles });
+
+                // === SWING STRATEGY: 4h + 1D candle fetch and evaluation ===
+                const now4h = Date.now();
+                // 4h candles for swing trading (cache 3 hours)
+                let candles4h = _mtfCache4h.data;
+                if (!candles4h || (now4h - _mtfCache4h.ts) > 180 * 60 * 1000) {
+                  try {
+                    candles4h = await getMarketData(ticker, '4h', 100) || [];
+                    _mtfCache4h = { data: candles4h, ts: now4h };
+                  } catch (err) { candles4h = []; }
+                }
+
+                // 1D candles for swing trading (cache 12 hours)
+                let candles1d = _mtfCache1d.data;
+                if (!candles1d || (now4h - _mtfCache1d.ts) > 720 * 60 * 1000) {
+                  try {
+                    candles1d = await getMarketData(ticker, '1D', 100) || [];
+                    _mtfCache1d = { data: candles1d, ts: now4h };
+                  } catch (err) { candles1d = []; }
+                }
+
+                if (candles4h && candles4h.length >= 20 && candles1d && candles1d.length >= 20) {
+                  try {
+                    const swing4h = candles4h.slice(-20);
+                    const swing1d = candles1d.slice(-20);
+
+                    // Simple EMA crossover on 4h
+                    const closes4h = swing4h.map(c => c.c || c.close);
+                    const ema20 = closes4h.slice(-20).reduce((s, v) => s + v, 0) / 20;
+                    const ema10 = closes4h.slice(-10).reduce((s, v) => s + v, 0) / 10;
+
+                    // Daily trend
+                    const dailyCloses = swing1d.map(c => c.c || c.close);
+                    const dailyTrend = dailyCloses[dailyCloses.length - 1] > dailyCloses[dailyCloses.length - 5] ? 'UP' : 'DOWN';
+
+                    // Volume breakout on 4h
+                    const vols4h = swing4h.map(c => c.v || c.volume || 0);
+                    const avgVol = vols4h.slice(-10).reduce((s, v) => s + v, 0) / 10;
+                    const latestVol = vols4h[vols4h.length - 1];
+                    const volumeBreakout = avgVol > 0 && latestVol > avgVol * 1.5;
+
+                    let swingScore = 0;
+                    if (ema10 > ema20) swingScore += 30;
+                    if (dailyTrend === 'UP') swingScore += 30;
+                    if (volumeBreakout) swingScore += 20;
+
+                    // Basic RSI check on 4h (simple calculation)
+                    const gains = [], losses = [];
+                    for (let i = 1; i < closes4h.length; i++) {
+                      const diff = closes4h[i] - closes4h[i - 1];
+                      gains.push(diff > 0 ? diff : 0);
+                      losses.push(diff < 0 ? -diff : 0);
+                    }
+                    const avgGain = gains.slice(-14).reduce((s, v) => s + v, 0) / 14;
+                    const avgLoss = losses.slice(-14).reduce((s, v) => s + v, 0) / 14;
+                    const rsi4h = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+                    if (rsi4h > 30 && rsi4h < 70) swingScore += 20;
+
+                    if (swingScore >= 65) {
+                      candidates.push({
+                        ticker,
+                        strategy: 'SWING',
+                        score: { compositeScore: swingScore / 100, confidence: swingScore },
+                        candles: candles4h,
+                        tradeType: 'SWING',
+                        swingParams: {
+                          stopLoss: -0.06,
+                          takeProfit: 0.20,
+                          maxHoldHours: 14 * 24,
+                          trailingStart: 0.12,
+                          trailingGiveBack: 0.15,
+                        },
+                      });
+                    }
+                  } catch (swingErr) {
+                    // Non-critical — swing evaluation error
+                  }
+                }
             }
 
             candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
