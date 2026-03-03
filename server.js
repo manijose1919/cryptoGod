@@ -1340,7 +1340,7 @@ async function tradingBotLoop() {
         }
 
         // --- CIRCUIT BREAKER CHECK ---
-        const pauseCheck = shouldPauseTrading();
+        const pauseCheck = shouldPauseTrading(botState.tradingMode);
         if (pauseCheck.paused) {
             if (Math.random() < 0.1) addLog(`[CIRCUIT BREAKER] Paused: ${pauseCheck.reason} (${pauseCheck.remainingMinutes}min left)`, 'WARN');
         }
@@ -1531,7 +1531,7 @@ async function tradingBotLoop() {
         beastUpdateBalance(totalValue);
         setCurrentBalance(totalValue);  // Upgrade #3: Drawdown-adaptive Kelly tracking
 
-        if (sessionProfitGoal && totalValue >= sessionProfitGoal) {
+        if (sessionProfitGoal && totalValue >= sessionProfitGoal && botState.tradingMode !== 'SIMULATION') {
             addLog(`SESSION PROFIT GOAL REACHED! Total: $${totalValue.toFixed(2)}`, 'SPECIAL');
             botState.isActive = false;
             clearInterval(botInterval);
@@ -1597,7 +1597,7 @@ async function tradingBotLoop() {
         const profilePosSize = activeProfile?.positionSizePercent ?? null;
 
         const openSlots = maxConcurrentTrades - Object.keys(portfolio.positions).length;
-        if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && drawdown <= tier.maxDrawdownLimit) {
+        if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
 
             // Calculate Opportunity Scores for current batch (with liquidity filter)
             const candidates = [];
@@ -1842,13 +1842,16 @@ async function tradingBotLoop() {
                         if (trend1h === 'BEARISH') {
                             htfAdj = -8; // Reduce composite score by 8 for bearish 1h
                             // Fix #18 (Tier 3): Hard gate — block non-reversal LONG entries when 1h is bearish
-                            const reversalStrategies = ['REVERSAL', 'DIVERGENCE', 'MEAN_REVERSION'];
-                            if (entryStrategy && !reversalStrategies.includes(entryStrategy)) {
-                                logThought({ type: 'SKIP', ticker, action: 'HTF_1H_BEARISH_GATE',
-                                    confidence: score.compositeScore,
-                                    reason: `1h trend is BEARISH — blocking ${entryStrategy} LONG entry (only reversal strats allowed)`,
-                                    regime: currentRegime });
-                                entryStrategy = null;
+                            // In simulation mode, skip gate — we want entries in all conditions for ML training
+                            if (botState.tradingMode !== 'SIMULATION') {
+                                const reversalStrategies = ['REVERSAL', 'DIVERGENCE', 'MEAN_REVERSION'];
+                                if (entryStrategy && !reversalStrategies.includes(entryStrategy)) {
+                                    logThought({ type: 'SKIP', ticker, action: 'HTF_1H_BEARISH_GATE',
+                                        confidence: score.compositeScore,
+                                        reason: `1h trend is BEARISH — blocking ${entryStrategy} LONG entry (only reversal strats allowed)`,
+                                        regime: currentRegime });
+                                    entryStrategy = null;
+                                }
                             }
                         }
 
@@ -1857,8 +1860,8 @@ async function tradingBotLoop() {
                             htfAdj -= 5; // Further penalty when 15m is bearish and 1h isn't bullish
                         }
 
-                        // If both 1h AND 15m are bearish, skip entry entirely
-                        if (trend1h === 'BEARISH' && trend15m === 'BEARISH') {
+                        // If both 1h AND 15m are bearish, skip entry entirely (REAL mode only)
+                        if (botState.tradingMode !== 'SIMULATION' && trend1h === 'BEARISH' && trend15m === 'BEARISH') {
                             logThought({ type: 'SKIP', ticker, action: 'HTF_BEARISH',
                                 confidence: score.compositeScore,
                                 reason: `Both 1h and 15m trends are bearish — skipping entry`,
@@ -2075,7 +2078,8 @@ async function tradingBotLoop() {
                     // Fix #15 (Tier 2): Drawdown-graduated position sizing
                     // Instead of binary halt at max drawdown, gradually reduce sizes as drawdown grows.
                     // 0-3% drawdown: 100% size, 3-5%: 85%, 5-8%: 65%, 8-12%: 45%, 12%+: 25%
-                    if (drawdown > 0) {
+                    // In simulation mode, skip reduction — we want full-size trades for ML training data
+                    if (drawdown > 0 && botState.tradingMode !== 'SIMULATION') {
                         let drawdownMultiplier = 1.0;
                         if (drawdown >= 12) drawdownMultiplier = 0.25;
                         else if (drawdown >= 8) drawdownMultiplier = 0.45;
@@ -2182,7 +2186,7 @@ async function tradingBotLoop() {
         }
 
         // --- PROFIT METHOD ENTRIES ---
-        if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && drawdown <= tier.maxDrawdownLimit) {
+        if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
             const qualityForPM = availableTickers.filter(t => QUALITY_TICKERS.includes(t));
             const pmTickers = qualityForPM.length > 0 ? qualityForPM : availableTickers.slice(0, 50);
             const pmEntries = runProfitMethods(marketDataMap, portfolio, pmTickers, CONFIG.MIN_TRADE_SIZE);

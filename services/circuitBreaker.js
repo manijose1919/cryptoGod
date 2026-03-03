@@ -122,7 +122,11 @@ function triggerPause(reason) {
 /**
  * Check if trading should be paused
  */
-export function shouldPauseTrading() {
+export function shouldPauseTrading(tradingMode = 'REAL') {
+  // In simulation mode, never pause — we need all data (wins AND losses) for ML training
+  if (tradingMode === 'SIMULATION') {
+    return { paused: false, reason: '', remainingMinutes: 0, simBypassed: true };
+  }
   if (Date.now() < pausedUntil) {
     const remaining = Math.ceil((pausedUntil - Date.now()) / 60000);
     return {
