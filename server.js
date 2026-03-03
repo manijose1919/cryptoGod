@@ -285,6 +285,23 @@ try {
     console.warn('[Server] Kraken minimums service not available:', e.message);
 }
 
+// New Coin Detector (auto-detect new Kraken listings, rug-pull protection)
+let initNewCoinDetector, detectNewListings, updateNewCoinSignals, isNewListing, getActiveNewListings, getNewCoinRules, markRugPullExit, getNewCoinStats;
+try {
+    const ncModule = await import('./services/newCoinDetector.js');
+    initNewCoinDetector = ncModule.initialize;
+    detectNewListings = ncModule.detectNewListings;
+    updateNewCoinSignals = ncModule.updateNewCoinSignals;
+    isNewListing = ncModule.isNewListing;
+    getActiveNewListings = ncModule.getActiveNewListings;
+    getNewCoinRules = ncModule.getNewCoinRules;
+    markRugPullExit = ncModule.markRugPullExit;
+    getNewCoinStats = ncModule.getStats;
+    console.log('[Server] New coin detector loaded');
+} catch (err) {
+    console.warn('[Server] New coin detector not available:', err.message);
+}
+
 // Load environment variables from .env file
 import 'dotenv/config';
 
@@ -1314,7 +1331,9 @@ async function tradingBotLoop() {
 
         // Always scan QUALITY_TICKERS (the curated list), regardless of session ticker selection
         // This ensures the bot scans all supported pairs even if session was started with just 1 ticker
-        const tickerPool = QUALITY_TICKERS.length > 0 ? QUALITY_TICKERS : availableTickers.slice(0, 50);
+        // Merge QUALITY_TICKERS with any newly detected listings
+        const newCoinTickers = getActiveNewListings ? getActiveNewListings().map(n => n.ticker).filter(t => !QUALITY_TICKERS.includes(t)) : [];
+        const tickerPool = [...QUALITY_TICKERS, ...newCoinTickers].slice(0, 75);
         const BATCH_SIZE = 20;
         const cycleIndex = Math.floor(Date.now() / 1000) % Math.max(1, Math.ceil(tickerPool.length / BATCH_SIZE));
         const scanBatch = tickerPool.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
@@ -1441,6 +1460,28 @@ async function tradingBotLoop() {
 
             const currentPrice = candles[candles.length - 1].c;
             prices[ticker] = currentPrice;
+
+            // Rug-pull protection for new coin positions
+            if (isNewListing && isNewListing(position.ticker)) {
+                const rules = getNewCoinRules();
+                const holdDays = (Date.now() - position.entryTime) / (1000 * 60 * 60 * 24);
+
+                // Force exit after max hold days
+                if (holdDays >= rules.maxHoldDays) {
+                    await handleSell(position, currentPrice, `NEW_COIN_MAX_HOLD (${rules.maxHoldDays} days)`);
+                    continue;
+                }
+
+                // Check rug-pull signals
+                if (updateNewCoinSignals) {
+                    const signalData = updateNewCoinSignals(position.ticker, currentPrice, 0);
+                    if (signalData?.shouldExitRugPull) {
+                        await handleSell(position, currentPrice, `RUG_PULL_DETECTED (score: ${signalData.rugPullScore})`);
+                        if (markRugPullExit) markRugPullExit(position.ticker);
+                        continue;
+                    }
+                }
+            }
 
             const profitGoal = profitGoals?.[position.entryStrategy] || 0;
             const currentProfit = (currentPrice - position.openPrice) * position.quantity;
@@ -2269,6 +2310,13 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         }
     }
 
+    // Reduce position size for new coin trades
+    if (isNewListing && isNewListing(ticker)) {
+        const rules = getNewCoinRules();
+        notional *= rules.positionSizeMultiplier;
+        addLog(`[NewCoin] Reduced position to ${(rules.positionSizeMultiplier * 100)}% for ${ticker}`, 'INFO');
+    }
+
     // Kraken minimum order validation
     if (getActiveExchangeId() === 'kraken' && krakenMinimums) {
         const minOrder = krakenMinimums.getMinimumOrder(ticker);
@@ -2709,6 +2757,19 @@ const updateAvailableTickers = async () => {
             .filter(name => name.length > 0)
             .sort();
 
+        // Check for new listings
+        try {
+            if (detectNewListings) {
+                const newlyDetected = detectNewListings(availableTickers);
+                if (newlyDetected.length > 0) {
+                    console.log(`[Server] New listings detected: ${newlyDetected.join(', ')}`);
+                    addLog(`New Kraken listings: ${newlyDetected.join(', ')}`, 'SPECIAL');
+                }
+            }
+        } catch (err) {
+            console.warn('[Server] New listing detection error:', err.message);
+        }
+
         for (const inst of instruments) {
             const name = inst.instrument_name || inst.symbol || '';
             if (name && inst.quantity_decimals !== undefined) {
@@ -3034,6 +3095,14 @@ const startServer = async () => {
         } catch (e) {
             console.warn('[Server] ML init failed (will retry on data):', e.message);
         }
+    }
+
+    // Initialize new coin detector
+    try {
+        if (initNewCoinDetector) await initNewCoinDetector();
+        console.log('[Server] New coin detector initialized');
+    } catch (err) {
+        console.warn('[Server] New coin detector init failed:', err.message);
     }
 
     // Initialize adversarial brains
