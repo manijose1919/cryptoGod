@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 // ---------- Interfaces ----------
 
 interface MLTrainingPanelProps {
-  addLog?: (msg: string, type?: string) => void;
+  addLog?: (msg: string, type?: 'BUY' | 'SELL' | 'INFO' | 'WARN' | 'ERROR' | 'SPECIAL') => void;
 }
 
 interface PipelineStatus {
