@@ -38,6 +38,7 @@ import {
 } from './services/database.js';
 import persistenceRoutes from './routes/persistence.js';
 import tradingviewRoutes, { injectSignal } from './routes/tradingview.js';
+import mlTrainingRouter, { setContext as setMLTrainingContext } from './routes/mlTraining.js';
 import { SignalScanner } from './services/signalScanner.js';
 import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, exportState as pmExportState, importState as pmImportState, setSessionStart as pmSetSessionStart, cleanupProfitMethodState, persistPositionsToDB, restorePositionsFromDatabase } from './services/profitMethods.js';
 
@@ -584,6 +585,10 @@ try {
 } catch (e) {
     console.warn('[Server] Training routes not available:', e.message);
 }
+
+// Mount ML Training routes (synthetic labeling + new coin detection)
+setMLTrainingContext({ getExchangeAdapter });
+app.use('/api/ml-training', mlTrainingRouter);
 
 // ML Pipeline System Config API
 app.get('/api/system-config', (req, res) => {

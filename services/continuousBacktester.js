@@ -9,6 +9,23 @@
 import { getDb } from './database.js';
 import { getFlag } from './systemConfig.js';
 
+let buildFeatureVector, FEATURE_COUNT;
+try {
+  const feModule = await import('./featureEngineering.js');
+  buildFeatureVector = feModule.buildFeatureVector;
+  FEATURE_COUNT = feModule.FEATURE_COUNT;
+} catch (err) {
+  console.warn('[ContinuousBacktester] Feature engineering not available for ML sample emission');
+}
+
+let insertMLFeaturesBatch;
+try {
+  const dbModule = await import('./database.js');
+  insertMLFeaturesBatch = dbModule.insertMLFeaturesBatch;
+} catch (err) {
+  console.warn('[ContinuousBacktester] DB not available for ML sample emission');
+}
+
 const LOG = '[ContinuousBacktest]';
 const BACKTEST_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const LOOKBACK_DAYS = 7;
@@ -78,7 +95,7 @@ function backtestStrategy(candles, strategy) {
 
       if (shouldExit(rsi, pnlPct, bars, thresholds)) {
         const netPnl = pnlPct - (TRADING_FEE * 100); // subtract fees
-        trades.push({ pnl: netPnl, entryPrice, exitPrice: price, bars });
+        trades.push({ pnl: netPnl, entryPrice, exitPrice: price, bars, entryIndex: entryIdx });
         inPosition = false;
       }
     }
@@ -170,6 +187,29 @@ async function runContinuousBacktest() {
             if (runningPnl > peak) peak = runningPnl;
             const dd = peak - runningPnl;
             if (dd > maxDrawdown) maxDrawdown = dd;
+
+            // Emit ML training sample from backtest trade
+            try {
+              if (buildFeatureVector && insertMLFeaturesBatch) {
+                // Build feature vector from candles up to trade entry point
+                const entryCandles = candles.slice(0, (trade.entryIndex || Math.floor(candles.length / 2)) + 1);
+                if (entryCandles.length >= 30) {
+                  const fv = buildFeatureVector(ticker, entryCandles, {});
+                  if (fv && fv.length === FEATURE_COUNT) {
+                    insertMLFeaturesBatch([{
+                      ticker,
+                      timestamp: trade.entryTime || Date.now(),
+                      featuresJson: JSON.stringify(fv),
+                      label: trade.pnl > 0 ? 'UP' : 'DOWN',
+                      labelValue: trade.pnl || 0,
+                      labeledAt: Date.now(),
+                    }]);
+                  }
+                }
+              }
+            } catch (mlErr) {
+              // Non-critical — continue backtest without ML sample
+            }
           }
         } catch (e) {
           // Skip ticker
