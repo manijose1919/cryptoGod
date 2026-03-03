@@ -280,6 +280,45 @@ export function initializeDatabase() {
       ON ml_predictions(ticker, timestamp);
   `);
 
+  // New coin detection and tracking tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS known_tickers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT NOT NULL UNIQUE,
+      first_seen INTEGER NOT NULL,
+      last_seen INTEGER NOT NULL,
+      is_active INTEGER DEFAULT 1,
+      listing_metadata TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_known_tickers_ticker
+      ON known_tickers(ticker);
+
+    CREATE TABLE IF NOT EXISTS new_coin_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticker TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      signal_type TEXT NOT NULL,
+      signal_value REAL,
+      metadata TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_new_coin_signals_ticker
+      ON new_coin_signals(ticker, timestamp);
+
+    CREATE TABLE IF NOT EXISTS synthetic_labeling_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      total_pairs INTEGER DEFAULT 0,
+      completed_pairs INTEGER DEFAULT 0,
+      total_samples INTEGER DEFAULT 0,
+      started_at INTEGER,
+      completed_at INTEGER,
+      error TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+  `);
+
   // Phase 1: Backend Bot Engine tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -1957,4 +1996,85 @@ export function runMaintenance() {
     console.warn('[Database] Maintenance error:', e.message);
     return null;
   }
+}
+
+// ============================================
+// KNOWN TICKERS (New Coin Detection)
+// ============================================
+
+export function upsertKnownTicker(ticker, metadata = null) {
+  const now = Date.now();
+  return getDb().prepare(`
+    INSERT INTO known_tickers (ticker, first_seen, last_seen, listing_metadata)
+    VALUES (@ticker, @now, @now, @metadata)
+    ON CONFLICT(ticker) DO UPDATE SET last_seen = @now, is_active = 1
+  `).run({ ticker, now, metadata: metadata ? JSON.stringify(metadata) : null });
+}
+
+export function getKnownTickers() {
+  return getDb().prepare('SELECT * FROM known_tickers WHERE is_active = 1').all();
+}
+
+export function getNewTickersSince(timestamp) {
+  return getDb().prepare('SELECT * FROM known_tickers WHERE first_seen > ?').all(timestamp);
+}
+
+// ============================================
+// NEW COIN SIGNALS
+// ============================================
+
+export function insertNewCoinSignal(ticker, signalType, signalValue, metadata = null) {
+  return getDb().prepare(`
+    INSERT INTO new_coin_signals (ticker, timestamp, signal_type, signal_value, metadata)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(ticker, Date.now(), signalType, signalValue, metadata ? JSON.stringify(metadata) : null);
+}
+
+export function getNewCoinSignals(ticker, limit = 50) {
+  return getDb().prepare('SELECT * FROM new_coin_signals WHERE ticker = ? ORDER BY timestamp DESC LIMIT ?').all(ticker, limit);
+}
+
+// ============================================
+// SYNTHETIC LABELING JOBS
+// ============================================
+
+export function createLabelingJob() {
+  const result = getDb().prepare(`INSERT INTO synthetic_labeling_jobs (status, started_at) VALUES ('running', ?)`).run(Date.now());
+  return result.lastInsertRowid;
+}
+
+export function updateLabelingJob(id, updates) {
+  const sets = [];
+  const values = {};
+  for (const [key, val] of Object.entries(updates)) {
+    const snakeKey = key.replace(/[A-Z]/g, m => '_' + m.toLowerCase());
+    sets.push(`${snakeKey} = @${key}`);
+    values[key] = val;
+  }
+  values.id = id;
+  getDb().prepare(`UPDATE synthetic_labeling_jobs SET ${sets.join(', ')} WHERE id = @id`).run(values);
+}
+
+export function getLabelingJobStatus(id) {
+  return getDb().prepare('SELECT * FROM synthetic_labeling_jobs WHERE id = ?').get(id);
+}
+
+export function getLatestLabelingJob() {
+  return getDb().prepare('SELECT * FROM synthetic_labeling_jobs ORDER BY id DESC LIMIT 1').get();
+}
+
+// ============================================
+// BULK ML FEATURE INSERTION
+// ============================================
+
+export function insertMLFeaturesBatch(samples) {
+  const d = getDb();
+  const insert = d.prepare(`
+    INSERT INTO ml_features (ticker, timestamp, features_json, label, label_value, labeled_at)
+    VALUES (@ticker, @timestamp, @featuresJson, @label, @labelValue, @labeledAt)
+  `);
+  const batchInsert = d.transaction((rows) => {
+    for (const row of rows) insert.run(row);
+  });
+  batchInsert(samples);
 }
