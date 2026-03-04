@@ -69,55 +69,9 @@ export type TradingStrategy = 'TREND' | 'BREAKOUT' | 'WHALE' | 'CONFLUENCE' | 'M
 
 export type TradingMode = 'SIMULATION' | 'REAL';
 
-export type BrokerType = 'CRYPTO_COM' | 'QUESTRADE';
+export type ExchangeId = 'kraken' | 'crypto.com';
 
-export type QuestradeExchange = 'TSX' | 'TSXV' | 'CSE' | 'NEO' | 'NYSE' | 'NASDAQ';
-
-export interface QuestradeSymbol {
-    symbol: string;
-    symbolId: number;
-    description: string;
-    exchange: string;
-    securityType: string;
-    isActive: boolean;
-}
-
-export interface QuestradeQuote {
-    symbol: string;
-    symbolId: number;
-    lastTradePrice: number;
-    bidPrice: number;
-    askPrice: number;
-    volume: number;
-    openPrice: number;
-    highPrice: number;
-    lowPrice: number;
-}
-
-export interface QuestradePosition {
-    symbol: string;
-    symbolId: number;
-    openQuantity: number;
-    currentMarketValue: number;
-    currentPrice: number;
-    averageEntryPrice: number;
-    openPnl: number;
-    dayPnl: number;
-}
-
-export interface QuestradeAccount {
-    type: string;
-    number: string;
-    status: string;
-    isPrimary: boolean;
-}
-
-export interface QuestradeBalance {
-    cash: number;
-    marketValue: number;
-    totalEquity: number;
-    buyingPower: number;
-}
+export type TradingEngineMode = 'SIMULATION' | 'REAL';
 
 export interface ApiCredentials {
     apiKey: string;

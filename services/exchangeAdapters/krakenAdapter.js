@@ -518,6 +518,83 @@ export class KrakenAdapter extends BaseExchangeAdapter {
         };
     }
 
+    /**
+     * Place a stop-loss order on the exchange (persists even if bot crashes).
+     * Uses Kraken's native stop-loss order type.
+     */
+    async placeStopLoss(ticker, volume, stopPrice, sessionId) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'sell',
+            ordertype: 'stop-loss',
+            price: stopPrice.toFixed(8),  // Trigger price
+            volume: volume.toFixed(8),
+        }, sessionId);
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'sell',
+            stopPrice,
+            volume: parseFloat(volume.toFixed(8)),
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a take-profit order on the exchange.
+     * Uses Kraken's native take-profit order type.
+     */
+    async placeTakeProfit(ticker, volume, limitPrice, sessionId) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'sell',
+            ordertype: 'take-profit',
+            price: limitPrice.toFixed(8),  // Trigger price
+            volume: volume.toFixed(8),
+        }, sessionId);
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'sell',
+            limitPrice,
+            volume: parseFloat(volume.toFixed(8)),
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a stop-loss-limit order (triggers at stop, fills at limit).
+     * More precise but may not fill in flash crashes.
+     */
+    async placeStopLossLimit(ticker, volume, stopPrice, limitPrice, sessionId) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'sell',
+            ordertype: 'stop-loss-limit',
+            price: stopPrice.toFixed(8),      // Trigger price
+            price2: limitPrice.toFixed(8),     // Limit price
+            volume: volume.toFixed(8),
+        }, sessionId);
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'sell',
+            stopPrice,
+            limitPrice,
+            volume: parseFloat(volume.toFixed(8)),
+            status: 'open',
+            raw: result,
+        };
+    }
+
     async getOrderBook(ticker, depth = 10) {
         const pair = toKrakenPair(ticker);
         const result = await krakenPublicRequest('Depth', { pair, count: depth });
@@ -528,6 +605,129 @@ export class KrakenAdapter extends BaseExchangeAdapter {
         const bids = (data.bids || []).map(l => [l[0], l[1], 1]);
         const asks = (data.asks || []).map(l => [l[0], l[1], 1]);
         return { bids, asks };
+    }
+
+    /**
+     * Dead Man's Switch — auto-cancel all orders after timeout.
+     * Kraken will cancel ALL open orders if the bot doesn't call this again
+     * within the timeout period. Set timeout=0 to disable.
+     * @param {number} timeout - Seconds until auto-cancel (0 to disable, max 86400)
+     */
+    async cancelAllOrdersAfter(timeout, sessionId) {
+        const result = await krakenPrivateRequest('CancelAllOrdersAfter', {
+            timeout: Math.min(timeout, 86400),
+        }, sessionId);
+        console.log(`[Kraken] Dead Man's Switch set: ${timeout}s`);
+        return {
+            currentTime: result.currentTime,
+            triggerTime: result.triggerTime,
+            timeout,
+        };
+    }
+
+    /**
+     * Place a post-only (maker) limit buy order.
+     * Post-only orders are rejected if they would immediately match (take liquidity).
+     * Saves 0.10% per side (maker 0.16% vs taker 0.26%).
+     */
+    async placePostOnlyBuy(ticker, price, volume, sessionId) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'buy',
+            ordertype: 'limit',
+            price: price.toFixed(8),
+            volume: volume.toFixed(8),
+            oflags: 'post',
+        }, sessionId);
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'buy',
+            price,
+            volume: parseFloat(volume.toFixed(8)),
+            status: 'open',
+            postOnly: true,
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a post-only (maker) limit sell order.
+     */
+    async placePostOnlySell(ticker, price, volume, sessionId) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'sell',
+            ordertype: 'limit',
+            price: price.toFixed(8),
+            volume: volume.toFixed(8),
+            oflags: 'post',
+        }, sessionId);
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'sell',
+            price,
+            volume: parseFloat(volume.toFixed(8)),
+            status: 'open',
+            postOnly: true,
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a bracket order — entry + automatic stop-loss in one API call.
+     * Uses Kraken's close[ordertype] and close[price] conditional parameters.
+     * The close order is placed automatically when the entry fills.
+     * @param {string} ticker - Trading pair (e.g., 'BTCUSD')
+     * @param {'buy'|'sell'} side - Entry side
+     * @param {number} volume - Order volume
+     * @param {number} entryPrice - Entry limit price
+     * @param {number} stopLossPrice - Automatic stop-loss trigger price
+     * @param {string} sessionId - Session identifier
+     * @param {Object} [opts] - Optional: { postOnly, takeProfitPrice }
+     */
+    async placeBracketOrder(ticker, side, volume, entryPrice, stopLossPrice, sessionId, opts = {}) {
+        const pair = toKrakenPair(ticker);
+        const params = {
+            pair,
+            type: side,
+            ordertype: 'limit',
+            price: entryPrice.toFixed(8),
+            volume: volume.toFixed(8),
+            'close[ordertype]': 'stop-loss',
+            'close[price]': stopLossPrice.toFixed(8),
+        };
+
+        // Post-only entry saves maker fees
+        if (opts.postOnly) {
+            params.oflags = 'post';
+        }
+
+        // Optional take-profit as the close order instead of stop-loss
+        if (opts.takeProfitPrice) {
+            params['close[ordertype]'] = 'take-profit';
+            params['close[price]'] = opts.takeProfitPrice.toFixed(8);
+        }
+
+        const result = await krakenPrivateRequest('AddOrder', params, sessionId);
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side,
+            entryPrice,
+            stopLossPrice,
+            volume: parseFloat(volume.toFixed(8)),
+            status: 'open',
+            hasBracket: true,
+            postOnly: !!opts.postOnly,
+            raw: result,
+        };
     }
 }
 

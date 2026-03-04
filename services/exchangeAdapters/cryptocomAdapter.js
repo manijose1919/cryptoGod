@@ -208,7 +208,160 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
     }
 
     getFeePercent() {
-        return 0.00075;
+        return 0.00075; // 0.075% taker per side
+    }
+
+    getMakerFeePercent() {
+        return 0.00050; // 0.050% maker per side (estimate)
+    }
+
+    /**
+     * Place a LIMIT buy order (saves ~33% on fees vs market order).
+     */
+    async placeLimitBuyOrder(ticker, price, quantity, sessionId) {
+        const instrument = this.formatTicker(ticker);
+        const result = await makeSignedRequest('private/create-order', {
+            instrument_name: instrument,
+            side: 'BUY',
+            type: 'LIMIT',
+            price: price.toString(),
+            quantity: quantity.toString(),
+            time_in_force: 'GOOD_TILL_CANCEL',
+        }, sessionId);
+
+        return {
+            orderId: result.order_id || result.order_info?.order_id || null,
+            ticker,
+            side: 'buy',
+            price,
+            quantity,
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a LIMIT sell order.
+     */
+    async placeLimitSellOrder(ticker, price, quantity, sessionId) {
+        const instrument = this.formatTicker(ticker);
+        const result = await makeSignedRequest('private/create-order', {
+            instrument_name: instrument,
+            side: 'SELL',
+            type: 'LIMIT',
+            price: price.toString(),
+            quantity: quantity.toString(),
+            time_in_force: 'GOOD_TILL_CANCEL',
+        }, sessionId);
+
+        return {
+            orderId: result.order_id || result.order_info?.order_id || null,
+            ticker,
+            side: 'sell',
+            price,
+            quantity,
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a stop-loss order on Crypto.com (native exchange-side protection).
+     */
+    async placeStopLoss(ticker, quantity, stopPrice, sessionId) {
+        const instrument = this.formatTicker(ticker);
+        const result = await makeSignedRequest('private/create-order', {
+            instrument_name: instrument,
+            side: 'SELL',
+            type: 'STOP_LOSS',
+            quantity: quantity.toString(),
+            trigger_price: stopPrice.toString(),
+        }, sessionId);
+
+        return {
+            orderId: result.order_id || result.order_info?.order_id || null,
+            ticker,
+            stopPrice,
+            quantity,
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Place a take-profit order on Crypto.com.
+     */
+    async placeTakeProfit(ticker, quantity, limitPrice, sessionId) {
+        const instrument = this.formatTicker(ticker);
+        const result = await makeSignedRequest('private/create-order', {
+            instrument_name: instrument,
+            side: 'SELL',
+            type: 'TAKE_PROFIT',
+            quantity: quantity.toString(),
+            trigger_price: limitPrice.toString(),
+        }, sessionId);
+
+        return {
+            orderId: result.order_id || result.order_info?.order_id || null,
+            ticker,
+            limitPrice,
+            quantity,
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
+     * Cancel an open order.
+     */
+    async cancelOrder(orderId, ticker, sessionId) {
+        const instrument = this.formatTicker(ticker);
+        const result = await makeSignedRequest('private/cancel-order', {
+            instrument_name: instrument,
+            order_id: orderId,
+        }, sessionId);
+
+        return { success: true, orderId, raw: result };
+    }
+
+    /**
+     * Get open orders.
+     */
+    async getOpenOrders(ticker, sessionId) {
+        const params = {};
+        if (ticker) params.instrument_name = this.formatTicker(ticker);
+
+        const result = await makeSignedRequest('private/get-open-orders', params, sessionId);
+        const orders = result?.data || [];
+
+        return orders.map(o => ({
+            orderId: o.order_id,
+            ticker: this.parseTicker(o.instrument_name),
+            side: o.side?.toLowerCase(),
+            type: o.type,
+            price: parseFloat(o.price || '0'),
+            quantity: parseFloat(o.quantity || '0'),
+            filledQuantity: parseFloat(o.cumulative_quantity || '0'),
+            status: o.status,
+        }));
+    }
+
+    /**
+     * Get order status by ID.
+     */
+    async getOrderStatus(orderId, sessionId) {
+        const result = await makeSignedRequest('private/get-order-detail', {
+            order_id: orderId,
+        }, sessionId);
+
+        const info = result?.order_info || {};
+        return {
+            orderId,
+            status: info.status || 'unknown',
+            filledQty: parseFloat(info.cumulative_quantity || '0'),
+            avgPrice: parseFloat(info.avg_price || '0'),
+            fee: parseFloat(info.fee_currency_amount || '0'),
+        };
     }
 
     async getOrderBook(ticker, depth = 10) {

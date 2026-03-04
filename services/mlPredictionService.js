@@ -78,6 +78,15 @@ try {
   console.warn('[ML Prediction] hyperparamTuner not available:', err.message);
 }
 
+// ML Profit Labeler V2 (5-tier profitability labels)
+let profitLabeler = null;
+try {
+  profitLabeler = await import('../core/mlProfitLabeler.js');
+  console.log('[ML Prediction] Profit labeler V2 loaded (5-tier labels)');
+} catch (err) {
+  console.warn('[ML Prediction] Profit labeler not available, using binary labels:', err.message);
+}
+
 try {
   const sysConfig = await import('./systemConfig.js');
   getFlag = sysConfig.getFlag;
@@ -304,12 +313,27 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       };
     }
 
+    // Step 1B: Compute advanced features (+43) and append for storage
+    let advancedFeatureArray = null;
+    try {
+      if (advancedFeatures && candles?.length >= 30) {
+        const prices = candles.map(c => c.c || c.close || c[4]);
+        advancedFeatureArray = advancedFeatures.buildAdvancedFeatures(featureArray, prices, {});
+      }
+    } catch (err) {
+      // Non-critical — advanced features computation failure
+    }
+
     // Step 2: Store features in DB for future labeling (include regime)
+    // Store full 146-feature vector (base + advanced) for future model training
     try {
       if (db && db.insertMLFeatures) {
+        const storageFeatures = advancedFeatureArray
+          ? [...featureArray, ...advancedFeatureArray]
+          : featureArray;
         db.insertMLFeatures({
           ticker,
-          featuresJson: JSON.stringify(featureArray),
+          featuresJson: JSON.stringify(storageFeatures),
           timestamp: Date.now(),
           label: null,
           labelValue: null,
@@ -621,9 +645,17 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
       return;
     }
 
-    // Convert outcome to label
+    // Convert outcome to label (V2: use profit labeler if available)
     const label = outcome === 'WIN' ? 'UP' : 'DOWN';
     const labelValue = pnlPercent || 0;
+
+    // Log profit tier for tracking (doesn't change DB label format yet)
+    if (profitLabeler) {
+      const profitTier = profitLabeler.labelTrade(pnlPercent || 0);
+      const tierName = profitLabeler.LABEL_NAMES[profitTier] || 'UNKNOWN';
+      const weight = profitLabeler.getLabelWeight(profitTier);
+      console.log(`[ML Prediction] Profit label: ${tierName} (weight: ${weight}) for ${ticker} ${outcome} ${pnlPercent?.toFixed(2)}%`);
+    }
 
     // Find and label the feature vector closest to entry time
     const unlabeledFeatures = db.getUnlabeledFeatures();
@@ -821,9 +853,10 @@ export async function trainModel() {
       return false;
     }
 
-    // Parse features and labels
+    // Parse features and labels (V2: with profit-tier sample weights)
     const features2D = [];
     const labels = [];
+    const sampleWeights = [];
 
     for (const sample of labeledSamples) {
       try {
@@ -831,6 +864,14 @@ export async function trainModel() {
         if (features.length === FEATURE_COUNT) {
           features2D.push(features);
           labels.push(sample.label === 'UP' || sample.label === 'WIN' ? 1 : 0);
+
+          // V2: Weight samples by profit magnitude (BIG_WIN/BIG_LOSS weighted 3x)
+          if (profitLabeler && sample.label_value !== null && sample.label_value !== undefined) {
+            const profitTier = profitLabeler.labelTrade(sample.label_value);
+            sampleWeights.push(profitLabeler.getLabelWeight(profitTier));
+          } else {
+            sampleWeights.push(1.0);
+          }
         }
       } catch (err) {
         console.warn(`[ML Prediction] Failed to parse sample #${sample.id}:`, err.message);

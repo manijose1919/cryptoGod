@@ -1,5 +1,6 @@
 
 import React, { useEffect, useCallback } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RealTradingModal } from './components/RealTradingModal';
 import SessionReconnect from './components/SessionReconnect';
 import SessionHistory from './components/SessionHistory';
@@ -17,6 +18,17 @@ import { NavBar } from './containers/NavBar';
 import { LeftPanel } from './containers/LeftPanel';
 import { CenterPanel } from './containers/CenterPanel';
 import { RightPanel } from './containers/RightPanel';
+import { TabLayout } from './containers/TabLayout';
+
+// TanStack Query client — shared across the app
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 2,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 function AppContent() {
     const {
@@ -146,30 +158,34 @@ function AppContent() {
 
             <NavBar onOpenHistory={() => setIsSessionHistoryOpen(true)} />
 
-            <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 p-4">
-                <LeftPanel
-                    onStart={handleStart}
-                    toggleBot={toggleBot}
-                    onCloseAll={handleCloseAllPositions}
-                    onStopSession={handleStopSession}
-                />
-                <CenterPanel handleRunMonteCarlo={handleRunMonteCarlo} />
-                <RightPanel />
-            </main>
+            <TabLayout renderDashboard={() => (
+                <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 p-4">
+                    <LeftPanel
+                        onStart={handleStart}
+                        toggleBot={toggleBot}
+                        onCloseAll={handleCloseAllPositions}
+                        onStopSession={handleStopSession}
+                    />
+                    <CenterPanel handleRunMonteCarlo={handleRunMonteCarlo} />
+                    <RightPanel />
+                </main>
+            )} />
         </div>
     );
 }
 
 const App: React.FC = () => (
-    <SettingsProvider>
-        <TradingProvider>
-            <MarketDataProvider>
-                <ToastProvider>
-                    <AppContent />
-                </ToastProvider>
-            </MarketDataProvider>
-        </TradingProvider>
-    </SettingsProvider>
+    <QueryClientProvider client={queryClient}>
+        <SettingsProvider>
+            <TradingProvider>
+                <MarketDataProvider>
+                    <ToastProvider>
+                        <AppContent />
+                    </ToastProvider>
+                </MarketDataProvider>
+            </TradingProvider>
+        </SettingsProvider>
+    </QueryClientProvider>
 );
 
 export default App;

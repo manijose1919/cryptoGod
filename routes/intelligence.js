@@ -12,7 +12,7 @@ export default function createIntelligenceRouter(ctx) {
             const { prompt, context, ticker, signals, sentiment, marketData } = req.body;
 
             // If ticker/signals/marketData provided, use brain for specialized analysis
-            if (ticker && signals && marketData) {
+            if (ticker && signals && marketData && ctx.brain) {
                 const analysis = await ctx.brain.analyzeTradeOpportunity(ticker, signals, sentiment || {}, marketData);
                 return res.status(200).json({ analysis: typeof analysis === 'string' ? analysis : JSON.stringify(analysis) });
             }
@@ -55,11 +55,14 @@ export default function createIntelligenceRouter(ctx) {
 
     // GET /brain/thoughts
     router.get('/brain/thoughts', (req, res) => {
-        res.status(200).json(ctx.brainThoughts);
+        res.status(200).json(ctx.brainThoughts || []);
     });
 
     // GET /feeds/live
     router.get('/feeds/live', async (req, res) => {
+        if (!ctx.dataIngestion) {
+            return res.status(200).json({ feeds: [], message: 'Data ingestion service not available' });
+        }
         try {
             const feeds = await ctx.dataIngestion.fetchAllFeeds();
             res.status(200).json(feeds);
