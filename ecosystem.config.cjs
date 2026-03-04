@@ -5,6 +5,7 @@ module.exports = {
       script: 'server.js',
       node_args: '--experimental-strip-types',
       cwd: '/opt/trading-bot',
+      exec_mode: 'fork',
       instances: 1,
       autorestart: true,
       watch: false,
