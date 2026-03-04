@@ -409,9 +409,9 @@ const CONFIG = {
     RATE_LIMIT_WINDOW_MS: 60000,
     RATE_LIMIT_MAX_REQUESTS: 600,
 
-    // Signal thresholds (BEAST MODE - further relaxed ~10-15%)
+    // Signal thresholds — Best seed (mod_1772200892500_11a80bd5): TC<25 entry
     THRESHOLDS: {
-        TREND_BULLISH_ENTRY: 40,       // Tightened: was 50 (lower = more bullish required)
+        TREND_BULLISH_ENTRY: 25,       // Best seed: strict TC<25 (was 40, proven +16.68% OOS)
         TREND_BEARISH_EXIT: 75,        // Beast Mode: was 70 (hold longer)
         BREAKOUT_SQUEEZE_ENTRY: 40,    // Beast Mode: was 35
         BREAKOUT_EXPANSION_EXIT: 60,   // Beast Mode: was 55
@@ -2402,11 +2402,17 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         addLog(`[NewCoin] Reduced position to ${(rules.positionSizeMultiplier * 100)}% for ${ticker}`, 'INFO');
     }
 
-    // Kraken minimum order validation
+    // Exchange minimum order validation
     if (getActiveExchangeId() === 'kraken' && krakenMinimums) {
         const minOrder = krakenMinimums.getMinimumOrder(ticker);
         if (notional < minOrder.minNotional) {
             addLog(`[KRAKEN] Order $${notional.toFixed(2)} below minimum $${minOrder.minNotional} for ${ticker} — skipping`, 'WARN');
+            return;
+        }
+    } else if (getActiveExchangeId() === 'crypto.com') {
+        // Crypto.com Exchange minimum notional: $1 for most USD pairs
+        if (notional < 1.0) {
+            addLog(`[CRYPTO.COM] Order $${notional.toFixed(2)} below $1.00 minimum for ${ticker} — skipping`, 'WARN');
             return;
         }
     }
@@ -3062,6 +3068,12 @@ const startServer = async () => {
         } else {
             console.log('[Server] Kraken mode: env credentials available');
         }
+    } else if (getActiveExchangeId() === 'crypto.com') {
+        if (!process.env.SESSION_API_KEY || !process.env.SESSION_SECRET_KEY) {
+            console.log('[Server] Crypto.com mode: no env vars set — user must authenticate via UI');
+        } else {
+            console.log('[Server] Crypto.com mode: env credentials available');
+        }
     }
 
     // Restore previous session state before anything else
@@ -3107,10 +3119,21 @@ const startServer = async () => {
     // Sync exchange fee to beast mode + optimizer at startup
     try {
         const startupFees = getActiveFees();
-        beastSetRoundTripFee(startupFees.roundTrip * 100);   // Was missing! Beast mode defaulted to 0.15% (Crypto.com)
+        beastSetRoundTripFee(startupFees.roundTrip * 100);
         setFeeForSimulation(startupFees.roundTrip * 100);
         console.log(`[Server] Fee synced: ${(startupFees.roundTrip * 100).toFixed(2)}% round-trip (${getActiveExchangeId()})`);
     } catch(e) {}
+
+    // Load best seed exit targets (mod_1772200892500_11a80bd5: +16.68% OOS, 50.5% WR)
+    // Only apply if optimizer hasn't already loaded saved overrides
+    if (!restoredState?.optimizer) {
+        setTargetOverrides({
+            HIGH_VOL: { tp: 12.0, sl: 3.5 },  // Best seed: TP=12%, SL=3.5% (2-week max hold)
+            NORMAL:   { tp: 8.0,  sl: 3.5 },   // Conservative in normal vol
+            LOW_VOL:  { tp: 5.0,  sl: 3.0 },   // Tighter in low vol, still well above fees
+        });
+        console.log('[Server] Best seed exit targets loaded (TREND strategy, proven +16.68% OOS)');
+    }
 
     await logPublicIp();
     await updateAvailableTickers();

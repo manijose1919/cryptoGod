@@ -360,15 +360,16 @@ export function checkDynamicExit(position, currentPrice, candles) {
   }
 
   // --- TRAILING STOP ---
-  // Activates once position reached +2% profit after fees from peak (was 0.5% — too tight)
-  const trailActivation = 1.0; // Activate trailing stop earlier to protect gains
+  // Best seed uses activation at ~8% with 20% giveback from peak
+  // Scale activation based on TP target: activate at 60% of TP (e.g., TP=8% → activate at 4.8%)
+  const trailActivation = Math.max(1.5, targets.takeProfitPct * 0.6);
   const highestPrice = position.highestPrice || position.openPrice;
   const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
   const highFeeAdj = highPnl - roundTripFeePercent;
 
   if (highFeeAdj >= trailActivation) {
-    // Trail distance = 40% of TP target, minimum 0.5%
-    const trailPct = Math.max(0.5, targets.takeProfitPct * 0.4);
+    // Trail giveback = 20% of peak gain (best seed), minimum 0.8%
+    const trailPct = Math.max(0.8, highPnl * 0.20);
     const trailLevel = highestPrice * (1 - trailPct / 100);
     if (currentPrice <= trailLevel) {
       return {
@@ -390,8 +391,9 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
-  // Time-based exit: stale positions - exit if losing after 4h OR breakeven after 8h
-  if ((holdMinutes > 240 && pnlPercent < -0.5) || (holdMinutes > 480 && feeAdjustedPnl < 0.1)) {
+  // Time-based exit: stale positions - exit if losing after 24h OR breakeven after 48h
+  // Best seed uses 168h (7d) max hold — allow trades time to develop
+  if ((holdMinutes > 1440 && pnlPercent < -0.5) || (holdMinutes > 2880 && feeAdjustedPnl < 0.1)) {
     return {
       shouldExit: true,
       reason: `[BEAST-TIME] Stale position: ${pnlPercent.toFixed(2)}% raw (${feeAdjustedPnl.toFixed(2)}% after fees), ${holdMinutes.toFixed(0)}min`,

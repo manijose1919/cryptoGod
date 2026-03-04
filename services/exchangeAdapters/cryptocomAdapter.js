@@ -127,7 +127,16 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
         const result = await makePublicRequest('public/get-candlestick', {
             instrument_name, timeframe, count: String(limit)
         });
-        return result.data;
+        // Normalize to { t, o, h, l, c, v } with numeric values (Crypto.com may return strings)
+        const raw = result.data || [];
+        return raw.map(c => ({
+            t: typeof c.t === 'number' ? c.t : parseInt(c.t),
+            o: typeof c.o === 'number' ? c.o : parseFloat(c.o),
+            h: typeof c.h === 'number' ? c.h : parseFloat(c.h),
+            l: typeof c.l === 'number' ? c.l : parseFloat(c.l),
+            c: typeof c.c === 'number' ? c.c : parseFloat(c.c),
+            v: typeof c.v === 'number' ? c.v : parseFloat(c.v),
+        }));
     }
 
     async getInstruments() {
@@ -156,6 +165,11 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
     }
 
     async placeBuyOrder(ticker, notional, sessionId) {
+        // Crypto.com Exchange minimum notional is $1 for most pairs
+        if (notional < 1.0) {
+            throw new Error(`[Crypto.com] Order $${notional.toFixed(2)} below $1 minimum for ${ticker}`);
+        }
+
         const result = await makeSignedRequest('private/create-order', {
             instrument_name: this.formatTicker(ticker),
             side: 'BUY',
@@ -164,8 +178,9 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
         }, sessionId);
 
         return {
-            quantity: result.order_info?.filled_quantity || 0,
-            avgPrice: result.order_info?.avg_price || 0,
+            orderId: result.order_id || result.order_info?.order_id || null,
+            quantity: parseFloat(result.order_info?.cumulative_quantity || result.order_info?.filled_quantity || 0),
+            avgPrice: parseFloat(result.order_info?.avg_price || 0),
             raw: result
         };
     }
@@ -173,7 +188,7 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
     async placeSellOrder(ticker, quantity, sessionId, instrumentSpecs) {
         const instrument = this.formatTicker(ticker);
         const specs = instrumentSpecs?.get(instrument);
-        let decimals = specs ? specs.quantity_decimals : 2;
+        let decimals = specs ? specs.quantity_decimals : 8;
         const factor = Math.pow(10, decimals);
         const sellQty = (Math.floor(quantity * factor) / factor).toString();
 
@@ -185,8 +200,9 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
         }, sessionId);
 
         return {
-            avgPrice: result.order_info?.avg_price || 0,
-            filledQuantity: result.order_info?.filled_quantity || quantity,
+            orderId: result.order_id || result.order_info?.order_id || null,
+            avgPrice: parseFloat(result.order_info?.avg_price || 0),
+            filledQuantity: parseFloat(result.order_info?.cumulative_quantity || result.order_info?.filled_quantity || quantity),
             raw: result
         };
     }
