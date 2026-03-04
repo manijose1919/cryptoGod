@@ -6,7 +6,7 @@
  * Sends Telegram alerts when thresholds are exceeded.
  */
 
-import tradingBus from './eventBus.js';
+import tradingBus from './eventBus.ts';
 
 interface HealthSnapshot {
   timestamp: number;

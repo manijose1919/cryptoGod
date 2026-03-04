@@ -8,8 +8,8 @@
  * Crypto.com: Derivatives/perpetuals (synthetic short exposure)
  */
 
-import tradingBus from './eventBus.js';
-import type { ExitEvent } from './eventBus.js';
+import tradingBus from './eventBus.ts';
+import type { ExitEvent } from './eventBus.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 

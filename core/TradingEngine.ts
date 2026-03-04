@@ -9,8 +9,8 @@
  * - Shared EventBus (events routed by exchange tag)
  */
 
-import tradingBus from './eventBus.js';
-import type { EntryEvent, ExitEvent, SignalEvent, RiskEvent } from './eventBus.js';
+import tradingBus from './eventBus.ts';
+import type { EntryEvent, ExitEvent, SignalEvent, RiskEvent } from './eventBus.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 

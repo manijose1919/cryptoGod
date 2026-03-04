@@ -5,9 +5,9 @@
  * Provides global risk metrics, heat score, and position correlation.
  */
 
-import tradingBus from './eventBus.js';
-import type { EntryEvent, ExitEvent } from './eventBus.js';
-import type { TradingEngine } from './TradingEngine.js';
+import tradingBus from './eventBus.ts';
+import type { EntryEvent, ExitEvent } from './eventBus.ts';
+import type { TradingEngine } from './TradingEngine.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 

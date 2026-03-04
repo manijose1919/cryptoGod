@@ -11,8 +11,8 @@
  *   ⚪ White = Info/Status
  */
 
-import tradingBus from './eventBus.js';
-import type { EntryEvent, ExitEvent, RiskEvent, SessionEvent } from './eventBus.js';
+import tradingBus from './eventBus.ts';
+import type { EntryEvent, ExitEvent, RiskEvent, SessionEvent } from './eventBus.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 
