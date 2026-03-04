@@ -46,15 +46,16 @@ import { buildFeatureVector as sharedBuildFeatureVector, FEATURE_COUNT as SHARED
 // All timeframes for multi-TF training
 const ALL_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w'];
 
-// Fee constants — MUST match Kraken (primary exchange) for realistic training
-// Using Crypto.com fees here caused training to approve trades that lose money on Kraken!
-const TRADING_FEE_PER_SIDE = 0.0026; // 0.26% Kraken taker fee per side
-const TRADING_FEE_ROUND_TRIP = 0.0052; // 0.52% Kraken round-trip
-// Maker fees for limit order simulation
-const TRADING_FEE_MAKER_PER_SIDE = 0.0016; // 0.16% Kraken maker fee per side
+// Fee constants — MUST match the exchange you'll actually trade on!
+// Crypto.com: 0.075% per side (3.5x cheaper than Kraken — critical for small accounts)
+// Kraken:     0.26% taker / 0.16% maker per side
+const TRADING_FEE_PER_SIDE = 0.00075; // 0.075% Crypto.com taker fee per side
+const TRADING_FEE_ROUND_TRIP = 0.0015; // 0.15% Crypto.com round-trip
+// Maker fees (Crypto.com maker is same as taker at base tier)
+const TRADING_FEE_MAKER_PER_SIDE = 0.00075; // 0.075% Crypto.com maker fee per side
 
-// Slippage model: realistic spread cost per side
-const SLIPPAGE_PER_SIDE = 0.001;  // 0.10% realistic spread cost per side (was 0.05%)
+// Slippage model: Crypto.com has tighter spreads than Kraken
+const SLIPPAGE_PER_SIDE = 0.0005;  // 0.05% realistic spread cost per side
 
 // Config thresholds (same as server.js CONFIG.THRESHOLDS)
 const THRESHOLDS = {
@@ -641,14 +642,15 @@ function checkExitConditions(position, candles, exitParams = null) {
   const pnlPct = (currentPrice - position.entryPrice) / position.entryPrice;
   const holdHours = (candles[candles.length - 1].time - position.entryTime) / 3600000;
 
-  // Use learned exit params if available, else Kraken-optimized defaults
-  // Defaults account for 0.52% round-trip fees + 0.20% slippage = 0.72% total cost
+  // Use learned exit params if available, else Crypto.com-optimized defaults
+  // Defaults account for 0.15% round-trip fees + 0.10% slippage = 0.25% total cost
+  // Lower fees = can take smaller moves profitably!
   const ep = exitParams || {
-    stopLoss: -0.035,       // -3.5% stop (was -5%, tighter = less damage per loss)
-    takeProfit: 0.025,      // +2.5% TP (was 4%, but with Kraken fees this nets ~1.78%)
-    maxHold: 36,            // 36h max hold (was 48h, faster rotation)
-    trailingStart: 0.015,   // Start trailing at +1.5% (was 3%, capture gains earlier)
-    trailingGiveBack: 0.30, // Give back 30% of peak gains (was 40%, tighter trailing)
+    stopLoss: -0.025,       // -2.5% stop (tighter — small account can't afford big losses)
+    takeProfit: 0.015,      // +1.5% TP (low fees mean this nets ~1.25% profit!)
+    maxHold: 24,            // 24h max hold (faster rotation = more opportunities)
+    trailingStart: 0.008,   // Start trailing at +0.8% (capture smaller moves)
+    trailingGiveBack: 0.25, // Give back 25% of peak gains (tight trailing)
   };
 
   // Stop loss (learned) — hard floor at fees so we don't take tiny losses

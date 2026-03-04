@@ -18,7 +18,7 @@ const wsServices = {
     'kraken': krakenWs,
 };
 
-let activeExchangeId = process.env.TRADING_EXCHANGE || 'kraken';
+let activeExchangeId = process.env.TRADING_EXCHANGE || 'crypto.com';
 
 /** Get adapter by exchange ID (or active adapter if no ID given) */
 export function getExchangeAdapter(exchangeId) {

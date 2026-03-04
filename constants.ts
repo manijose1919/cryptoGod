@@ -119,14 +119,15 @@ export const SIGNAL_THRESHOLDS = {
 // Note: Crypto.com was previously primary but Kraken is now the standard.
 // The backend dynamically reads fees from the active exchange adapter,
 // so these constants are used as fallback defaults for frontend/ML.
+// Using Crypto.com as primary — 3.5x cheaper fees than Kraken!
 // ============================================
 export const TRADING_FEES = {
-    TAKER_FEE_PERCENT: 0.26,        // Kraken taker fee per side (base tier)
-    ROUND_TRIP_FEE_PERCENT: 0.52,   // Total buy + sell taker fees
-    FEE_BUFFER_PERCENT: 0.10,       // Slippage buffer
-    ESTIMATED_SLIPPAGE_PERCENT: 0.15, // Kraken typically has wider spreads
-    BID_ASK_SPREAD_PERCENT: 0.08,    // Typical bid-ask spread cost
-    TOTAL_COST_PER_TRADE: 0.75,      // Total: fees + slippage + spread (round trip)
+    TAKER_FEE_PERCENT: 0.075,       // Crypto.com taker fee per side
+    ROUND_TRIP_FEE_PERCENT: 0.15,   // Total buy + sell taker fees
+    FEE_BUFFER_PERCENT: 0.05,       // Slippage buffer (tighter spreads on Crypto.com)
+    ESTIMATED_SLIPPAGE_PERCENT: 0.05, // Crypto.com has tighter spreads
+    BID_ASK_SPREAD_PERCENT: 0.04,    // Typical bid-ask spread cost
+    TOTAL_COST_PER_TRADE: 0.25,      // Total: fees + slippage + spread (round trip)
 } as const;
 
 // ============================================
@@ -144,33 +145,36 @@ export const KRAKEN_FEES = {
 } as const;
 
 // ============================================
-// KRAKEN-OPTIMIZED TRADING CONFIG
+// CRYPTO.COM-OPTIMIZED TRADING CONFIG (PRIMARY)
 // ============================================
-export const KRAKEN_OPTIMIZED = {
-    // Minimum profit targets (must exceed round-trip fees + slippage + min margin)
-    MIN_PROFIT_TARGET_TAKER: 1.20,   // 0.52% fees + 0.20% slippage + 0.48% min profit
-    MIN_PROFIT_TARGET_MAKER: 0.90,   // 0.32% fees + 0.18% slippage + 0.40% min profit
+export const EXCHANGE_OPTIMIZED = {
+    // Minimum profit targets — much lower with Crypto.com's 0.075% fees!
+    MIN_PROFIT_TARGET_TAKER: 0.40,   // 0.15% fees + 0.10% slippage + 0.15% min profit
+    MIN_PROFIT_TARGET_MAKER: 0.35,   // Same (Crypto.com maker = taker at base tier)
 
     // Smart order routing
-    LIMIT_ORDER_SPREAD_THRESHOLD: 0.10, // Use limit orders when spread > 0.1%
+    LIMIT_ORDER_SPREAD_THRESHOLD: 0.05, // Use limit orders when spread > 0.05%
     LIMIT_ORDER_WAIT_MS: 10000,         // Wait 10s for limit fill
     LIMIT_ORDER_PRICE_OFFSET: 0.01,     // Place at best bid/ask + 0.01%
 
-    // Small account optimizations ($20-$200)
-    MICRO_ACCOUNT_THRESHOLD: 200,       // Below this = micro account mode
-    MICRO_MAX_CONCURRENT: 3,            // Max 3 positions for micro accounts
-    MICRO_POSITION_PERCENT: 40,         // Up to 40% per trade (need concentration)
-    MICRO_MIN_TRADE_USD: 1.00,          // Kraken practical minimum
+    // Small account optimizations ($10-$100)
+    MICRO_ACCOUNT_THRESHOLD: 100,       // Below this = micro account mode
+    MICRO_MAX_CONCURRENT: 2,            // Max 2 positions for micro accounts (concentrate!)
+    MICRO_POSITION_PERCENT: 50,         // Up to 50% per trade (small accounts need concentration)
+    MICRO_MIN_TRADE_USD: 1.00,          // Crypto.com practical minimum
 
-    // Partial exit adjustments for higher fees
-    PARTIAL_EXIT_STAGE_1_TARGET: 0.92,  // First partial at fee floor
-    PARTIAL_EXIT_STAGE_2_TARGET: 2.00,  // Second partial at 2%
-    PARTIAL_EXIT_STAGE_3_TRAIL: 1.0,    // Start trailing at 1%
+    // Partial exit adjustments for low fees — can take profits earlier
+    PARTIAL_EXIT_STAGE_1_TARGET: 0.35,  // First partial at 0.35% (profitable after 0.15% fees!)
+    PARTIAL_EXIT_STAGE_2_TARGET: 1.00,  // Second partial at 1%
+    PARTIAL_EXIT_STAGE_3_TRAIL: 0.50,   // Start trailing at 0.5%
 
-    // Timeframe preferences for Kraken
+    // Timeframe preferences
     PREFERRED_TIMEFRAMES: ['5m', '15m', '1h', '4h'],
-    SCALPING_TIMEFRAME: '5m',           // 5m for scalping (1m too noisy with higher fees)
+    SCALPING_TIMEFRAME: '5m',           // 5m for scalping
 } as const;
+
+// Backward compatibility alias
+export const KRAKEN_OPTIMIZED = EXCHANGE_OPTIMIZED;
 
 // ============================================
 // PARTIAL EXIT (3-STAGE EXIT SYSTEM)
@@ -178,10 +182,10 @@ export const KRAKEN_OPTIMIZED = {
 export const PARTIAL_EXIT = {
     ENABLED: true,
     STAGE_1_PERCENT: 30,           // Sell 30% of position
-    STAGE_1_TARGET: 0.50,          // At +0.50% profit after fees
+    STAGE_1_TARGET: 0.30,          // At +0.30% profit after fees (Crypto.com low fees!)
     STAGE_2_PERCENT: 40,           // Sell 40% of position
-    STAGE_2_TARGET: 1.50,          // At +1.50% profit after fees
-    STAGE_3_TRAILING_START: 1.5,   // Start trailing at 1.5% profit
+    STAGE_2_TARGET: 0.80,          // At +0.80% profit after fees
+    STAGE_3_TRAILING_START: 0.8,   // Start trailing at 0.8% profit
     STAGE_3_TRAILING_TIGHT: 0.75,  // Tighten to 0.75% as profit grows
 } as const;
 
