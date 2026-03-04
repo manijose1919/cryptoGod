@@ -10,13 +10,14 @@
 
 // ─── Label Tiers ─────────────────────────────────────────────
 
-export enum ProfitLabel {
-  BIG_WIN = 2,       // PnL > +3% after fees
-  SMALL_WIN = 1,     // PnL 0% to +3%
-  BREAK_EVEN = 0,    // PnL -0.5% to 0%
-  LOSS = -1,         // PnL < -0.5%
-  BIG_LOSS = -2,     // PnL < -3%
-}
+export const ProfitLabel = {
+  BIG_WIN: 2,       // PnL > +3% after fees
+  SMALL_WIN: 1,     // PnL 0% to +3%
+  BREAK_EVEN: 0,    // PnL -0.5% to 0%
+  LOSS: -1,         // PnL < -0.5%
+  BIG_LOSS: -2,     // PnL < -3%
+} as const;
+export type ProfitLabel = (typeof ProfitLabel)[keyof typeof ProfitLabel];
 
 export const LABEL_NAMES: Record<number, string> = {
   [ProfitLabel.BIG_WIN]: 'BIG_WIN',
