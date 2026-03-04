@@ -1,3 +1,6 @@
+// Load .env FIRST — before any module reads process.env (exchange adapter needs TRADING_EXCHANGE)
+import 'dotenv/config';
+
 // Use 'import' syntax for ES Modules
 import express from 'express';
 import cors from 'cors';
@@ -303,8 +306,7 @@ try {
     console.warn('[Server] New coin detector not available:', err.message);
 }
 
-// Load environment variables from .env file
-import 'dotenv/config';
+// dotenv/config loaded at top of file (must run before exchangeAdapters/index.js)
 
 // ============================================
 // DYNAMIC WEBSOCKET + FEE HELPERS
