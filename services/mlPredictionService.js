@@ -81,7 +81,7 @@ try {
 // ML Profit Labeler V2 (5-tier profitability labels)
 let profitLabeler = null;
 try {
-  profitLabeler = await import('../core/mlProfitLabeler.js');
+  profitLabeler = await import('../core/mlProfitLabeler.ts');
   console.log('[ML Prediction] Profit labeler V2 loaded (5-tier labels)');
 } catch (err) {
   console.warn('[ML Prediction] Profit labeler not available, using binary labels:', err.message);

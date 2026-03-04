@@ -3,6 +3,7 @@ module.exports = {
     {
       name: 'canuck-node',
       script: 'server.js',
+      node_args: '--experimental-strip-types',
       cwd: '/opt/trading-bot',
       instances: 1,
       autorestart: true,
