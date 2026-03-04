@@ -3,12 +3,14 @@
  * Maps market regimes to enabled strategies for smarter entry filtering.
  */
 
+// LOCKED: Only TREND is profitable — validated via walk-forward backtesting
+// All other strategies lose money. Do NOT re-enable without OOS proof.
 const REGIME_STRATEGY_MAP = {
-  UPTREND:  ['TREND', 'MOMENTUM', 'BREAKOUT', 'MA_CROSSOVER', 'ADAPTIVE', 'CONFLUENCE'],
-  SIDEWAYS: ['RANGE', 'MEAN_REVERSION', 'BREAKOUT', 'ADAPTIVE', 'CONFLUENCE', 'TREND', 'MOMENTUM'],
-  DOWNTREND: ['REVERSAL', 'MEAN_REVERSION', 'DIVERGENCE', 'ADAPTIVE', 'TREND', 'MOMENTUM', 'BREAKOUT'],
-  VOLATILE: ['BREAKOUT', 'MOMENTUM', 'ADAPTIVE', 'DIVERGENCE', 'TREND'],
-  UNKNOWN:  ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'],
+  UPTREND:    ['TREND'],
+  SIDEWAYS:   [],  // Sit out — no profitable strategy
+  DOWNTREND:  [],  // Sit out — short selling TBD
+  VOLATILE:   [],  // Sit out
+  UNKNOWN:    ['TREND'],  // Default to TREND only
 };
 
 /**

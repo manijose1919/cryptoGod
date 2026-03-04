@@ -30,14 +30,15 @@ import {
 // Feature names for SHAP explainer (Batch 2B fix)
 import { getFeatureNames } from './services/featureEngineering.js';
 
-import { 
-    initializeDatabase, 
-    closeDatabase, 
-    insertCandlesBatch, 
-    setSetting, 
+import {
+    initializeDatabase,
+    closeDatabase,
+    insertCandlesBatch,
+    setSetting,
     getSetting,
     insertSystemLog,
-    getSystemLogs
+    getSystemLogs,
+    getDb
 } from './services/database.js';
 import persistenceRoutes from './routes/persistence.js';
 import tradingviewRoutes, { injectSignal } from './routes/tradingview.js';
@@ -93,12 +94,7 @@ import {
 // ML Thought Logger
 import { logThought, getThoughts, getCurrentFocus, getThoughtStats, clearThoughts, setSessionId as setThoughtSessionId, restoreThoughts } from './services/mlThoughtLogger.js';
 
-// New Questrade & AI Services
-import { QuestradeService } from './services/questradeService.js';
-import { PaperTrader } from './services/PaperTrader.js';
-import { StrategyEngine } from './services/StrategyEngine.js';
-import { GeminiBrain } from './services/GeminiBrain.js';
-import { dataIngestion } from './services/DataIngestionService.js';
+// Legacy services removed: Questrade, GeminiBrain, DataIngestion
 
 // Exchange Adapter System
 import { getExchangeAdapter, setActiveExchange, getActiveExchangeId, listExchanges, setSessionManager as setAdapterSessionManager, getWebSocketService } from './services/exchangeAdapters/index.js';
@@ -107,7 +103,7 @@ import { getExchangeAdapter, setActiveExchange, getActiveExchangeId, listExchang
 import createMarketRouter from './routes/market.js';
 import createExchangeRouter from './routes/exchange.js';
 import createAuthRouter from './routes/auth.js';
-import createQuestradeRouter from './routes/questrade.js';
+// Questrade router removed
 import createSessionsRouter from './routes/sessions.js';
 import createIntelligenceRouter from './routes/intelligence.js';
 import createSentimentRouter from './routes/sentiment.js';
@@ -116,6 +112,111 @@ import createNotificationsRouter from './routes/notifications.js';
 import createConfigRouter from './routes/config.js';
 import createBacktestRouter from './routes/backtest.js';
 import createMultiExchangeRouter from './routes/multiExchange.js';
+import createEngineRouter from './routes/engines.js';
+
+// ─── Core V2 Modules (Overhaul) ─────────────────────────────
+import tradingBus from './core/eventBus.js';
+import { portfolioManager } from './core/portfolioManager.js';
+import { shortSellingEngine } from './core/shortSellingEngine.js';
+import { stakingEngine } from './core/stakingEngine.js';
+import { arbitrageEngine } from './core/arbitrageEngine.js';
+import { incrementalIndicators } from './core/incrementalIndicators.js';
+import { healthMonitor } from './core/healthMonitor.js';
+import { dbBatcher } from './core/dbBatcher.js';
+import { logger } from './core/structuredLogger.js';
+
+// Tier 1: Derivatives Intelligence + Fear & Greed Gate
+let derivativesIntel = null;
+try {
+    derivativesIntel = await import('./services/derivativesIntelligence.js');
+    console.log('[Server] DerivativesIntelligence loaded');
+} catch (e) {
+    console.warn('[Server] DerivativesIntelligence not available:', e.message);
+}
+
+let fearGreedGate = null;
+try {
+    fearGreedGate = await import('./services/fearGreedGate.js');
+    console.log('[Server] FearGreedGate loaded');
+} catch (e) {
+    console.warn('[Server] FearGreedGate not available:', e.message);
+}
+
+// Tier 2: Order Book Microstructure + CVaR Kelly
+let orderBookMicro = null;
+try {
+    orderBookMicro = await import('./services/orderBookMicrostructure.js');
+    console.log('[Server] OrderBookMicrostructure loaded');
+} catch (e) {
+    console.warn('[Server] OrderBookMicrostructure not available:', e.message);
+}
+
+let cvarKelly = null;
+try {
+    cvarKelly = await import('./services/cvarKelly.js');
+    console.log('[Server] CVaR Kelly loaded');
+} catch (e) {
+    console.warn('[Server] CVaR Kelly not available:', e.message);
+}
+
+// Tier 3B: Liquidation Sweep + ML A/B Testing + Meta-RL
+let liquidationSweep = null;
+try {
+    liquidationSweep = await import('./services/liquidationSweepDetector.js');
+    console.log('[Server] LiquidationSweepDetector loaded');
+} catch (e) {
+    console.warn('[Server] LiquidationSweepDetector not available:', e.message);
+}
+
+let mlABTest = null;
+try {
+    mlABTest = await import('./services/mlModelABTest.js');
+    console.log('[Server] ML Model A/B Test loaded');
+} catch (e) {
+    console.warn('[Server] ML A/B Test not available:', e.message);
+}
+
+let metaRL = null;
+try {
+    metaRL = await import('./services/metaRLAgent.js');
+    console.log('[Server] MetaRL Agent loaded');
+} catch (e) {
+    console.warn('[Server] MetaRL Agent not available:', e.message);
+}
+
+// Tier 3A: Basis Trading Engine
+let basisEngine = null;
+try {
+    basisEngine = await import('./services/basisTradingEngine.js');
+    console.log('[Server] BasisTradingEngine loaded');
+} catch (e) {
+    console.warn('[Server] BasisTradingEngine not available:', e.message);
+}
+
+// Tier 2B: Whale Flow Tracker + Position Reconciler
+let whaleFlowTracker = null;
+try {
+    whaleFlowTracker = await import('./services/whaleFlowTracker.js');
+    console.log('[Server] WhaleFlowTracker loaded');
+} catch (e) {
+    console.warn('[Server] WhaleFlowTracker not available:', e.message);
+}
+
+let positionReconciler = null;
+try {
+    positionReconciler = await import('./services/positionReconciler.js');
+    console.log('[Server] PositionReconciler loaded');
+} catch (e) {
+    console.warn('[Server] PositionReconciler not available:', e.message);
+}
+
+let telegramV2 = null;
+try {
+    telegramV2 = await import('./core/telegramV2.js');
+    console.log('[Server] TelegramV2 loaded');
+} catch (e) {
+    console.warn('[Server] TelegramV2 not available:', e.message);
+}
 
 // Phase 7: Multi-Exchange Data + ML Services
 import {
@@ -463,42 +564,7 @@ let publicIp = 'not detected';
 // Initialize Exchange Adapter with SessionManager
 setAdapterSessionManager(SessionManager);
 
-// Initialize New Services
-const questrade = new QuestradeService();
-const paperTrader = new PaperTrader(questrade, 100000);
-const strategyEngine = new StrategyEngine();
-const brain = new GeminiBrain();
-const brainThoughts = []; // Store thinking logs
-
-// Questrade Bot State
-let questradeBotState = {
-    isActive: false,
-    isPaper: true,
-    accountId: null,
-    watchlist: ['SHOP', 'TD', 'RY', 'BNS', 'ENB', 'CNR', 'CP', 'BMO', 'BCE', 'T'],
-    interval: null,
-    loopMs: 5000,
-};
-
-// Setup Brain Listeners
-brain.on('thought', (thought) => {
-    brainThoughts.unshift({ time: Date.now(), ...thought });
-    if (brainThoughts.length > 50) brainThoughts.pop();
-    // Also push to main logs
-    addLog(`[BRAIN] ${thought.type}: ${thought.decision || 'Thinking'} on ${thought.asset}`, 'AI');
-});
-
-brain.on('learning', (data) => {
-    addLog(`[BRAIN] Learning insights: ${data.insights.slice(0, 100)}...`, 'AI');
-});
-
-// Setup Data Ingestion Listeners
-dataIngestion.on('data', (items) => {
-    // Optionally trigger immediate analysis on breaking news
-    if (items.length > 0) {
-        // console.log(`[DataIngestion] Received ${items.length} new items`);
-    }
-});
+// Legacy services removed (Questrade, GeminiBrain, DataIngestion)
 
 // ============================================
 // Rate Limiting (Simple in-memory implementation)
@@ -563,8 +629,8 @@ app.use(cors({
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' })); // Increased for candle batch inserts
-// Rate limiting disabled for local development — re-enable for production/VPS
-// app.use(rateLimit);
+// Rate limiting — skips localhost, protects VPS from abuse
+app.use(rateLimit);
 
 // Serve built frontend (production)
 const __filename = fileURLToPath(import.meta.url);
@@ -1137,6 +1203,10 @@ function get1hTrend(candles1h) {
 const exitLevelCache = new Map();
 // Map<ticker, { tpPrice, slPrice, trailActivationPrice, trailPct, profitGoal, regime }>
 
+// Native exchange stop-loss order tracking — survives bot crashes
+// Map<ticker, { orderId, stopPrice, volume, placedAt }>
+const nativeStopOrders = new Map();
+
 function refreshExitLevels(marketDataMap) {
     const fees = getActiveFees();
     const { profitGoals } = botState.settings;
@@ -1186,10 +1256,48 @@ function refreshExitLevels(marketDataMap) {
             tpPrice, slPrice, trailActivationPrice, trailPct, profitGoal, regime: targets.regime,
             stage1Price, stage2Price, atrPct: adjustedATR, regimeMultiplier
         });
+
+        // Update native exchange SL if price moved significantly (>1% difference)
+        // Fire-and-forget to avoid blocking the synchronous refresh loop
+        const nativeSL = nativeStopOrders.get(ticker);
+        if (nativeSL && botState.tradingMode !== 'SIMULATION' && getActiveExchangeId() === 'kraken') {
+            const priceDiff = Math.abs(nativeSL.stopPrice - slPrice) / slPrice;
+            if (priceDiff > 0.01) {
+                const _ticker = ticker;
+                const _qty = position.quantity;
+                const _slPrice = slPrice;
+                const _oldPrice = nativeSL.stopPrice;
+                const _oldOrderId = nativeSL.orderId;
+                (async () => {
+                    try {
+                        const adapter = getExchangeAdapter();
+                        await adapter.cancelOrder(_oldOrderId, botState.sessionId);
+                        const newSL = await adapter.placeStopLoss(_ticker, _qty, _slPrice, botState.sessionId);
+                        if (newSL.orderId) {
+                            nativeStopOrders.set(_ticker, {
+                                orderId: newSL.orderId,
+                                stopPrice: _slPrice,
+                                volume: _qty,
+                                placedAt: Date.now(),
+                            });
+                            addLog(`[NATIVE-SL] Updated ${_ticker} SL: $${_oldPrice.toFixed(2)} → $${_slPrice.toFixed(2)}`, 'INFO');
+                        }
+                    } catch (e) {
+                        addLog(`[NATIVE-SL] Failed to update SL for ${_ticker}: ${e.message}`, 'WARN');
+                    }
+                })();
+            }
+        }
     }
     // Clean stale entries for closed positions
     for (const ticker of exitLevelCache.keys()) {
         if (!portfolio.positions[ticker]) exitLevelCache.delete(ticker);
+    }
+    // Clean stale native SL orders for closed positions
+    for (const ticker of nativeStopOrders.keys()) {
+        if (!portfolio.positions[ticker]) {
+            nativeStopOrders.delete(ticker);
+        }
     }
 }
 
@@ -1949,6 +2057,63 @@ async function tradingBotLoop() {
                     }
                 } catch (e) {}
 
+                // Tier 1A: Derivatives Intelligence entry gate
+                let derivativesAdj = 0;
+                if (entryStrategy && derivativesIntel) {
+                    try {
+                        const derivBlock = derivativesIntel.shouldBlockLongEntry(ticker);
+                        if (derivBlock.block) {
+                            logThought({ type: 'SKIP', ticker, action: 'DERIVATIVES_BLOCKED',
+                                confidence: score.compositeScore,
+                                reason: derivBlock.reason,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                        // Add derivatives ML features to confidence scoring
+                        const derivFeatures = derivativesIntel.getDerivativesMLFeatures(ticker);
+                        // Negative funding (shorts paying longs) is bullish → boost
+                        if (derivFeatures[0] < -0.2) derivativesAdj += 5;
+                        // Heavy short liquidations → bullish squeeze
+                        if (derivFeatures[4] < -0.5) derivativesAdj += 3;
+                    } catch (e) {}
+                }
+
+                // Tier 1B: Fear & Greed entry gate
+                let fearGreedAdj = 0;
+                let fearGreedSizeMultiplier = 1.0;
+                if (fearGreedGate) {
+                    try {
+                        const fgBlock = fearGreedGate.shouldBlockEntry();
+                        if (fgBlock.block && entryStrategy) {
+                            logThought({ type: 'SKIP', ticker, action: 'FEAR_GREED_BLOCKED',
+                                confidence: score.compositeScore,
+                                reason: fgBlock.reason,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                        // Scale position size by fear/greed multiplier
+                        fearGreedSizeMultiplier = fearGreedGate.getPositionMultiplier();
+                        // Extreme fear is bullish for entries
+                        const fgIndex = fearGreedGate.getFearGreedIndex();
+                        if (fgIndex <= 20) fearGreedAdj += 8;
+                        else if (fgIndex <= 35) fearGreedAdj += 3;
+                        else if (fgIndex >= 80) fearGreedAdj -= 8;
+                        else if (fgIndex >= 65) fearGreedAdj -= 3;
+                    } catch (e) {}
+                }
+
+                // Tier 3B: Liquidation Sweep entry boost
+                let sweepAdj = 0;
+                if (liquidationSweep && candles) {
+                    try {
+                        const sweep = liquidationSweep.detectLiquidationSweep(ticker, candles);
+                        if (sweep.sweep && sweep.direction === 'LONG') {
+                            sweepAdj += Math.round(sweep.confidence * 0.15); // Up to +14 pts
+                            if (!entryStrategy) entryStrategy = 'TREND'; // Re-enable entry on sweep
+                        }
+                    } catch (e) {}
+                }
+
                 // Cross-timeframe momentum check (1h trend)
                 let htfAdj = 0;
                 if (entryStrategy) {
@@ -2185,11 +2350,31 @@ async function tradingBotLoop() {
                         ? Math.min(0.25, kellySize.fraction)
                         : 0.10; // Fall back to 10% if < 20 trades
 
+                    // Tier 2: CVaR-adjusted Kelly — accounts for tail risk
+                    let adjustedKelly = kellyFraction;
+                    if (cvarKelly) {
+                        try {
+                            const cvarResult = cvarKelly.getCVaRAdjustedSize(kellyFraction, currentRegime);
+                            adjustedKelly = cvarResult.fraction;
+                        } catch (e) {}
+                    }
+
                     // Position size: prefer timeframe profile's positionSizePercent if available
-                    let positionPercent = profilePosSize ? (profilePosSize / 100) : kellyFraction;
-                    positionPercent = Math.min(positionPercent, kellyFraction * 2); // Don't exceed 2x Kelly
+                    let positionPercent = profilePosSize ? (profilePosSize / 100) : adjustedKelly;
+                    positionPercent = Math.min(positionPercent, adjustedKelly * 2); // Don't exceed 2x adjusted Kelly
 
                     let investmentAmount = Math.min(portfolio.cash * 0.95, totalValue * positionPercent * riskAmount);
+
+                    // Tier 3B: Meta-RL position sizing adjustment
+                    let metaRLParams = null;
+                    if (metaRL) {
+                        try {
+                            metaRLParams = metaRL.getRecommendedParams(currentRegime);
+                            if (metaRLParams.confidence > 20) {
+                                investmentAmount *= metaRLParams.positionSizeMult;
+                            }
+                        } catch (e) {}
+                    }
 
                     // Fix #7 (Tier 2): Confidence-based position sizing
                     // Scale position size by signal compositeScore: weak signals (30-50) → 0.7x, avg (50-70) → 1.0x, strong (70+) → 1.2x
@@ -2242,6 +2427,12 @@ async function tradingBotLoop() {
                         investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
                     }
 
+                    // Tier 1B: Fear & Greed position size scaling
+                    if (fearGreedSizeMultiplier !== 1.0) {
+                        investmentAmount *= fearGreedSizeMultiplier;
+                        investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
+                    }
+
                     // Layer 4: Portfolio Correlation Engine — size based on portfolio-level risk
                     try {
                         if (getFlag('CORRELATION_ENGINE_ENABLED')) {
@@ -2286,16 +2477,26 @@ async function tradingBotLoop() {
                         } catch (e) { /* fail open */ }
                     }
 
+                    // Order book confidence adjustment
+                    let obAdj = 0;
+                    if (entryStrategy) {
+                        try {
+                            const obSignal = getOrderBookSignal(ticker);
+                            const obResult = getOrderBookConfidenceAdjustment(obSignal, 'BUY');
+                            obAdj = obResult.adjustment;
+                        } catch (e) { /* fail open */ }
+                    }
+
                     if (entryStrategy && investmentAmount > CONFIG.MIN_TRADE_SIZE) {
                         const pipelineTier = pipelineResult?.tier || 'N/A';
                         const pipelineMult = pipelineResult?.sizeMultiplier?.toFixed(2) || '1.00';
                         logThought({
                             type: 'ENTRY_EVAL', ticker, action: 'ENTERING',
-                            confidence: score.compositeScore + mtfConfidenceAdj + fundingAdj + htfAdj + sentimentAdj,
-                            reason: `${entryStrategy} entry [${marketSpeed}/${activeProfile?.timeframeId || 'default'}]: score=${score.compositeScore}, kelly=${(kellyFraction*100).toFixed(1)}%, mtf=${mtfConfidenceAdj}, funding=${fundingAdj}, htf=${htfAdj}, sentiment=${sentimentAdj}, pipeline=${pipelineTier}×${pipelineMult}${mlAdvice.available ? `, ml=${mlAdvice.direction}@${mlAdvice.confidence}%` : ''}`,
+                            confidence: score.compositeScore + mtfConfidenceAdj + fundingAdj + htfAdj + sentimentAdj + derivativesAdj + fearGreedAdj + obAdj,
+                            reason: `${entryStrategy} entry [${marketSpeed}/${activeProfile?.timeframeId || 'default'}]: score=${score.compositeScore}, kelly=${(kellyFraction*100).toFixed(1)}%, mtf=${mtfConfidenceAdj}, funding=${fundingAdj}, htf=${htfAdj}, sentiment=${sentimentAdj}, deriv=${derivativesAdj}, fg=${fearGreedAdj}/${fearGreedSizeMultiplier.toFixed(1)}x, ob=${obAdj}, pipeline=${pipelineTier}×${pipelineMult}${mlAdvice.available ? `, ml=${mlAdvice.direction}@${mlAdvice.confidence}%` : ''}`,
                             regime: currentRegime,
                             market_speed: marketSpeed,
-                            indicators: { tcValue, compositeScore: score.compositeScore, kellyFraction, mtfConfidenceAdj, fundingAdj, htfAdj, sentimentAdj, investmentAmount, timeframeId: activeProfile?.timeframeId, mlDirection: mlAdvice.direction, mlConfidence: mlAdvice.confidence, pipelineTier, pipelineMult },
+                            indicators: { tcValue, compositeScore: score.compositeScore, kellyFraction, mtfConfidenceAdj, fundingAdj, htfAdj, sentimentAdj, derivativesAdj, fearGreedAdj, fearGreedSizeMultiplier, investmentAmount, timeframeId: activeProfile?.timeframeId, mlDirection: mlAdvice.direction, mlConfidence: mlAdvice.confidence, pipelineTier, pipelineMult },
                         });
                         const volTargets = getDynamicTargets(candles);
                         await handleBuy(ticker, currentPrice, entryStrategy, `Batch scan [${marketSpeed}/${activeProfile?.timeframeId || 'default'}] (score=${score.compositeScore}, pipeline=${pipelineTier})`, investmentAmount, {
@@ -2338,6 +2539,48 @@ async function tradingBotLoop() {
                 }
             }
         }
+        // --- SHORT SELLING EVALUATION (Core V2) ---
+        // Only evaluate shorts in bearish regimes for sim mode learning
+        try {
+            const overallRegime = getMarketRegime();
+            if (shortSellingEngine && (overallRegime === 'DOWN' || overallRegime === 'STRONG_DOWN')) {
+                const exchangeId = getActiveExchangeId();
+                for (const [ticker, candles] of marketDataMap) {
+                    if (!candles || candles.length < 21) continue;
+                    const latestPrice = candles[candles.length - 1]?.c || 0;
+                    if (latestPrice <= 0) continue;
+
+                    // Get TC score and ML confidence for short evaluation
+                    const closes = candles.map(c => c.c);
+                    const tcSeries = calculateTCSeries(closes, 14);
+                    const tcValue = tcSeries?.[tcSeries.length - 1] || 50;
+
+                    // Evaluate via derivatives intelligence for short signal
+                    let derivShortFavor = false;
+                    if (derivativesIntel) {
+                        const shortCheck = derivativesIntel.shouldFavorShortEntry(ticker.replace('USD', ''));
+                        derivShortFavor = shortCheck.favorable;
+                    }
+
+                    const shortEval = shortSellingEngine.evaluateShortEntry(
+                        ticker, exchangeId, latestPrice, overallRegime,
+                        derivShortFavor ? 0.75 : 0.5, // Use derivatives as confidence proxy
+                        tcValue
+                    );
+
+                    if (shortEval.shouldShort && shortEval.size) {
+                        shortSellingEngine.openShort(ticker, exchangeId, latestPrice, shortEval.size);
+                        addLog(`[SHORT-SIM] Opened short ${ticker} @ $${latestPrice.toFixed(2)}: ${shortEval.reason}`, 'TRADE');
+                    }
+                }
+
+                // Check exits on existing short positions
+                shortSellingEngine.checkExits(getLatestPrice);
+            }
+        } catch (e) {
+            // Fail silently — short engine is supplementary
+        }
+
         // Update position current prices for accurate holdings value
         for (const [ticker, pos] of Object.entries(portfolio.positions)) {
             const latestPrice = getLatestPrice(ticker);
@@ -2614,6 +2857,44 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         }
         portfolio.cash -= (actualCost + buyFee);
 
+        // Emit EventBus entry event for Core V2 modules
+        try {
+            tradingBus.emit('trade:entry', {
+                exchange: getActiveExchangeId(),
+                ticker,
+                side: 'LONG',
+                price: parseFloat(avgPrice),
+                quantity: parseFloat(quantity),
+                usdAmount: actualCost,
+                strategy,
+                timestamp: Date.now(),
+            });
+        } catch (e) {}
+
+        // Place native exchange stop-loss (survives bot crashes)
+        if (botState.tradingMode !== 'SIMULATION' && getActiveExchangeId() === 'kraken') {
+            try {
+                const adapter = getExchangeAdapter();
+                // Emergency SL: 5% below entry (wide enough to avoid noise, tight enough to protect)
+                // Will be tightened by refreshExitLevels() once ATR data is available
+                const emergencySlPct = 0.05;
+                const slPrice = parseFloat(avgPrice) * (1 - emergencySlPct);
+                const slResult = await adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId);
+                if (slResult.orderId) {
+                    nativeStopOrders.set(ticker, {
+                        orderId: slResult.orderId,
+                        stopPrice: slPrice,
+                        volume: parseFloat(quantity),
+                        placedAt: Date.now(),
+                    });
+                    addLog(`[NATIVE-SL] Placed exchange stop-loss for ${ticker}: ${slResult.orderId} @ $${slPrice.toFixed(2)} (-${(emergencySlPct * 100).toFixed(1)}%)`, 'INFO');
+                }
+            } catch (slErr) {
+                addLog(`[NATIVE-SL] Failed to place stop-loss for ${ticker}: ${slErr.message}`, 'WARN');
+                // Non-fatal — software SL still active as fallback
+            }
+        }
+
         // Log the thought
         logThought({
             type: 'BUY',
@@ -2649,6 +2930,19 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
 
 const handleSell = async (position, price, reason) => {
     addLog(`Triggering SELL for ${position.ticker} @ ${price}. Reason: ${reason}`, 'SELL');
+
+    // Cancel native exchange stop-loss before selling (prevent double-sell)
+    const nativeSL = nativeStopOrders.get(position.ticker);
+    if (nativeSL && botState.tradingMode !== 'SIMULATION') {
+        try {
+            const adapter = getExchangeAdapter();
+            await withTimeout(adapter.cancelOrder(nativeSL.orderId, botState.sessionId), 10000, 'cancelNativeSL');
+            addLog(`[NATIVE-SL] Cancelled stop-loss ${nativeSL.orderId} for ${position.ticker}`, 'INFO');
+        } catch (cancelErr) {
+            addLog(`[NATIVE-SL] Failed to cancel SL ${nativeSL.orderId}: ${cancelErr.message}`, 'WARN');
+        }
+        nativeStopOrders.delete(position.ticker);
+    }
 
     try {
         let avgPrice;
@@ -2760,6 +3054,24 @@ const handleSell = async (position, price, reason) => {
 
         if (telegramEnabled()) alertTradeExecution({ type: 'SELL', ticker: position.ticker, price: avgPrice, strategy: position.entryStrategy, pnl });
 
+        // Emit EventBus exit event for Core V2 modules
+        try {
+            tradingBus.emit('trade:exit', {
+                exchange: getActiveExchangeId(),
+                ticker: position.ticker,
+                side: 'LONG',
+                entryPrice: position.openPrice,
+                exitPrice: avgPrice,
+                quantity: position.quantity,
+                netPnlUsd: pnl,
+                netPnlPct: ((avgPrice - position.openPrice) / position.openPrice) * 100,
+                strategy: position.entryStrategy,
+                holdTimeMs: Date.now() - (position.entryTime || Date.now()),
+                reason,
+                timestamp: Date.now(),
+            });
+        } catch (e) {}
+
         // Track trade for optimizer
         const pnlPercent = ((avgPrice - position.openPrice) / position.openPrice) * 100;
         if (!portfolio.tradeLog) portfolio.tradeLog = [];
@@ -2782,6 +3094,28 @@ const handleSell = async (position, price, reason) => {
             mlDirection: position.mlDirection || null,
         });
         if (portfolio.tradeLog.length > 500) portfolio.tradeLog.splice(0, portfolio.tradeLog.length - 500);
+
+        // Tier 2: Record return for CVaR-adjusted Kelly sizing
+        if (cvarKelly) {
+            try { cvarKelly.recordReturn(pnlPercent, position.regime || 'NORMAL'); } catch (e) {}
+        }
+
+        // Tier 3B: Update Meta-RL beliefs
+        if (metaRL) {
+            try {
+                const regime = position.regime || 'SIDEWAYS';
+                const actions = metaRL.selectActions(regime); // Get current actions for this regime
+                metaRL.updateBeliefs(regime, actions, pnlPercent);
+            } catch (e) {}
+        }
+
+        // Tier 3B: Record outcome for ML A/B Testing
+        if (mlABTest) {
+            try {
+                const direction = pnlPercent > 0 ? 'UP' : 'DOWN';
+                mlABTest.recordOutcome(position.ticker, direction, pnlPercent, position.entryTime || Date.now());
+            } catch (e) {}
+        }
 
         // Trigger optimizer (internal gating: first at 30 trades, then every 50)
         let optimizerJustRan = false;
@@ -3013,15 +3347,6 @@ const ctx = {
     getJournalEntries,
     forceGenerateJournal,
 
-    // Questrade & brain
-    questrade,
-    paperTrader,
-    strategyEngine,
-    brain,
-    brainThoughts,
-    questradeBotState,
-    dataIngestion,
-
     // Dynamic services
     multiExchangeService,
     smartMoneyService,
@@ -3032,13 +3357,38 @@ const ctx = {
     redditSentimentService,
     timeframeStrategyService,
     krakenMinimums,
+
+    // Core V2 modules (Overhaul)
+    tradingBus,
+    portfolioManager,
+    shortSellingEngine,
+    stakingEngine,
+    arbitrageEngine,
+    incrementalIndicators,
+    telegramV2,
+    healthMonitor,
+    dbBatcher,
+    logger,
+    // Tier 1
+    derivativesIntel,
+    fearGreedGate,
+    // Tier 2
+    orderBookMicro,
+    cvarKelly,
+    whaleFlowTracker,
+    positionReconciler,
+    // Tier 3
+    basisEngine,
+    liquidationSweep,
+    mlABTest,
+    metaRL,
 };
 
 // Mount extracted route modules
 app.use('/api', createMarketRouter(ctx));
 app.use('/api', createExchangeRouter(ctx));
 app.use('/api', createAuthRouter(ctx));
-app.use('/api', createQuestradeRouter(ctx));
+// Questrade router removed
 app.use('/api', createSessionsRouter(ctx));
 app.use('/api', createIntelligenceRouter(ctx));
 app.use('/api', createSentimentRouter(ctx));
@@ -3047,6 +3397,163 @@ app.use('/api', createNotificationsRouter(ctx));
 app.use('/api', createConfigRouter(ctx));
 app.use('/api', createBacktestRouter(ctx));
 app.use('/api', createMultiExchangeRouter(ctx));
+app.use('/api', createEngineRouter(ctx));
+
+// ─── Health & Monitoring Endpoints ──────────────────────────
+app.get('/api/health', (req, res) => {
+    res.json(healthMonitor.getStatus());
+});
+
+app.get('/api/health/detailed', (req, res) => {
+    res.json({
+        health: healthMonitor.getSnapshot(),
+        dbBatcher: dbBatcher.getStats(),
+        logs: logger.getStats(),
+    });
+});
+
+app.get('/api/logs/recent', (req, res) => {
+    const limit = parseInt(req.query.limit) || 100;
+    const level = req.query.level || undefined;
+    res.json(logger.getRecentLogs(limit, level));
+});
+
+// Tier 1: Derivatives Intelligence API
+app.get('/api/derivatives/status', (req, res) => {
+    if (!derivativesIntel) return res.json({ enabled: false });
+    res.json(derivativesIntel.getDerivativesStatus());
+});
+app.get('/api/derivatives/signal/:ticker', (req, res) => {
+    if (!derivativesIntel) return res.json(null);
+    const signal = derivativesIntel.getDerivativesSignal(req.params.ticker);
+    res.json(signal);
+});
+app.get('/api/derivatives/all', (req, res) => {
+    if (!derivativesIntel) return res.json({});
+    res.json(derivativesIntel.getAllDerivativesData());
+});
+app.get('/api/derivatives/block-check/:ticker', (req, res) => {
+    if (!derivativesIntel) return res.json({ block: false, reason: 'Service unavailable' });
+    const longBlock = derivativesIntel.shouldBlockLongEntry(req.params.ticker);
+    const shortFavor = derivativesIntel.shouldFavorShortEntry(req.params.ticker);
+    res.json({ long: longBlock, short: shortFavor });
+});
+
+// Tier 1: Fear & Greed Gate API
+app.get('/api/fear-greed/status', (req, res) => {
+    if (!fearGreedGate) return res.json({ enabled: false });
+    res.json(fearGreedGate.getFearGreedStatus());
+});
+
+// Tier 2: Order Book Microstructure API
+app.get('/api/microstructure/status', (req, res) => {
+    if (!orderBookMicro) return res.json({ enabled: false });
+    res.json(orderBookMicro.getMicrostructureStatus());
+});
+app.get('/api/microstructure/analyze/:ticker', async (req, res) => {
+    if (!orderBookMicro) return res.json({ error: 'Service unavailable' });
+    try {
+        const adapter = getExchangeAdapter();
+        const orderBook = await adapter.getOrderBook(req.params.ticker, 20);
+        const analysis = orderBookMicro.analyzeMicrostructure(orderBook, req.params.ticker);
+        res.json(analysis);
+    } catch (e) {
+        res.json({ error: e.message });
+    }
+});
+
+// Tier 2: CVaR Kelly API
+app.get('/api/cvar-kelly/status', (req, res) => {
+    if (!cvarKelly) return res.json({ enabled: false });
+    res.json(cvarKelly.getCVaRStatus());
+});
+
+// Tier 2B: Whale Flow API
+app.get('/api/whale-flow/status', (req, res) => {
+    if (!whaleFlowTracker) return res.json({ enabled: false });
+    res.json(whaleFlowTracker.getWhaleFlowStatus());
+});
+app.get('/api/whale-flow/signal/:ticker', (req, res) => {
+    if (!whaleFlowTracker) return res.json({ direction: 'NEUTRAL', strength: 0 });
+    res.json(whaleFlowTracker.getWhaleFlowSignal(req.params.ticker));
+});
+
+// Tier 3A: Basis Trading Engine API
+app.get('/api/basis/status', (req, res) => {
+    if (!basisEngine) return res.json({ enabled: false });
+    res.json(basisEngine.getBasisStatus());
+});
+app.get('/api/basis/opportunities', (req, res) => {
+    if (!basisEngine) return res.json([]);
+    res.json(basisEngine.scanOpportunities());
+});
+app.post('/api/basis/open', (req, res) => {
+    if (!basisEngine) return res.json({ success: false, reason: 'Service unavailable' });
+    const { ticker, amount } = req.body || {};
+    if (!ticker) return res.json({ success: false, reason: 'Missing ticker' });
+    res.json(basisEngine.openBasisPosition(ticker, amount || 100));
+});
+app.post('/api/basis/close/:symbol', (req, res) => {
+    if (!basisEngine) return res.json({ success: false, reason: 'Service unavailable' });
+    res.json(basisEngine.closeBasisPosition(req.params.symbol));
+});
+
+// Tier 3B: Liquidation Sweep API
+app.get('/api/liquidation-sweep/status', (req, res) => {
+    if (!liquidationSweep) return res.json({ enabled: false });
+    res.json(liquidationSweep.getSweepStatus());
+});
+app.get('/api/liquidation-sweep/detect/:ticker', (req, res) => {
+    if (!liquidationSweep) return res.json({ sweep: false });
+    const candles = marketDataMap?.get(req.params.ticker) || [];
+    res.json(liquidationSweep.detectLiquidationSweep(req.params.ticker, candles));
+});
+
+// Tier 3B: ML A/B Test API
+app.get('/api/ml-ab-test/status', (req, res) => {
+    if (!mlABTest) return res.json({ enabled: false });
+    res.json(mlABTest.getABTestStatus());
+});
+
+// Tier 3B: Meta-RL Agent API
+app.get('/api/meta-rl/status', (req, res) => {
+    if (!metaRL) return res.json({ enabled: false });
+    res.json(metaRL.getMetaRLStatus());
+});
+app.get('/api/meta-rl/recommend/:regime', (req, res) => {
+    if (!metaRL) return res.json({ error: 'Service unavailable' });
+    res.json(metaRL.getRecommendedParams(req.params.regime));
+});
+
+// Native exchange stop-loss status
+app.get('/api/native-sl/status', (req, res) => {
+    const orders = [];
+    for (const [ticker, sl] of nativeStopOrders) {
+        orders.push({ ticker, ...sl });
+    }
+    res.json({ count: orders.length, orders });
+});
+
+// Tier 2B: Position Reconciliation API
+app.post('/api/reconcile', async (req, res) => {
+    if (!positionReconciler) return res.json({ error: 'Service unavailable' });
+    try {
+        const recon = await positionReconciler.reconcilePositions(portfolio, botState.sessionId);
+        res.json(recon);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.post('/api/reconcile/auto-fix', async (req, res) => {
+    if (!positionReconciler) return res.json({ error: 'Service unavailable' });
+    try {
+        const recon = await positionReconciler.reconcilePositions(portfolio, botState.sessionId);
+        const fixes = positionReconciler.autoFixReconciliation(portfolio, recon, addLog);
+        res.json({ reconciliation: recon, fixes });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
 
 // SPA catch-all (must be AFTER all API routes)
 app.get('*', (req, res) => {
@@ -3059,6 +3566,15 @@ app.use((err, req, res, next) => {
 
 const startServer = async () => {
     initializeDatabase();
+    // Initialize DB batcher now that database is ready
+    try {
+        const db = getDb();
+        dbBatcher.init((sql, params) => {
+            try { db.prepare(sql).run(...params); } catch (e) { /* logged in batcher */ }
+        });
+    } catch (e) {
+        console.warn('[Server] dbBatcher init failed:', e.message);
+    }
     markAbandonedSessions();
     initJournalTable();
     initTelegram();
@@ -3116,6 +3632,50 @@ const startServer = async () => {
         if (activeSessionId) {
             restorePositionsFromDatabase(activeSessionId);
         }
+    }
+
+    // Register a bridge with PortfolioManager so Core V2 dashboard shows real data
+    try {
+        const exchangeId = getActiveExchangeId();
+        const engineBridge = {
+            getStatus: () => {
+                const posEntries = Object.values(portfolio.positions);
+                const holdingsValue = posEntries.reduce((s, p) => s + p.quantity * (p.currentPrice || p.openPrice), 0);
+                const equity = portfolio.cash + holdingsValue;
+                const initialBudget = portfolio.initialBudget || equity;
+                return {
+                    exchange: exchangeId,
+                    state: botState.isRunning ? 'RUNNING' : 'IDLE',
+                    mode: botState.tradingMode,
+                    sessionId: botState.sessionId,
+                    equity,
+                    cash: portfolio.cash,
+                    initialBudget,
+                    pnlUsd: equity - initialBudget,
+                    pnlPct: initialBudget > 0 ? ((equity - initialBudget) / initialBudget) * 100 : 0,
+                    positions: posEntries.length,
+                    positionDetails: portfolio.positions,
+                };
+            },
+            getPortfolio: () => ({
+                cash: portfolio.cash,
+                initialBudget: portfolio.initialBudget || portfolio.cash,
+                positions: portfolio.positions,
+            }),
+            // Stubs for engine control routes (actual control is via /api/session/* routes)
+            start: async () => { addLog('[Engine Bridge] Use /api/session/start', 'INFO'); },
+            pause: async () => { addLog('[Engine Bridge] Use /api/session/pause', 'INFO'); },
+            resume: async () => { addLog('[Engine Bridge] Use /api/session/resume', 'INFO'); },
+            stop: async () => { addLog('[Engine Bridge] Use /api/session/stop', 'INFO'); },
+            setMode: (mode) => { botState.tradingMode = mode; },
+        };
+        portfolioManager.registerEngine(exchangeId, engineBridge);
+        // Expose bridge via ctx so engine routes work
+        if (exchangeId === 'kraken') ctx.krakenEngine = engineBridge;
+        else if (exchangeId === 'crypto.com') ctx.cryptoComEngine = engineBridge;
+        console.log(`[Server] PortfolioManager bridge registered for ${exchangeId}`);
+    } catch (e) {
+        console.warn('[Server] PortfolioManager bridge failed:', e.message);
     }
 
     // Sync exchange fee to beast mode + optimizer at startup
@@ -3260,6 +3820,173 @@ const startServer = async () => {
         }
     }
 
+    // ─── Core V2 Module Initialization ─────────────────────────
+    try {
+        // Initialize TelegramV2 (subscribes to EventBus events)
+        if (telegramV2?.initTelegramV2) {
+            telegramV2.initTelegramV2();
+            console.log('[Server] TelegramV2 event-driven notifications initialized');
+        }
+    } catch (e) {
+        console.warn('[Server] TelegramV2 init failed:', e.message);
+    }
+
+    // Wire EventBus to existing systems (bridge old → new architecture)
+    try {
+        // Forward trade exits to short selling engine for price tracking
+        tradingBus.on('engine:tick', (data) => {
+            if (data.priceMap) {
+                shortSellingEngine.checkExits(data.priceMap);
+            }
+        });
+        console.log('[Server] EventBus wired to core V2 modules');
+    } catch (e) {
+        console.warn('[Server] EventBus wiring failed:', e.message);
+    }
+
+    // Start staking evaluation on interval (every hour)
+    try {
+        setInterval(() => {
+            try { stakingEngine.evaluate(); } catch (e) {}
+        }, 60 * 60 * 1000);
+        console.log('[Server] Staking engine evaluation scheduled (hourly)');
+    } catch (e) {
+        console.warn('[Server] Staking engine init failed:', e.message);
+    }
+
+    // Start health monitor (checks every 30 seconds)
+    try {
+        healthMonitor.start(30000);
+        healthMonitor.setSystemStatus('signalScanner', true);
+        healthMonitor.setSystemStatus('webSocket', true);
+        console.log('[Server] Health monitor started');
+    } catch (e) {
+        console.warn('[Server] Health monitor init failed:', e.message);
+    }
+
+    // Start Derivatives Intelligence polling (Tier 1A)
+    if (derivativesIntel) {
+        try {
+            derivativesIntel.startDerivativesPolling();
+            console.log('[Server] Derivatives Intelligence started (5min polling)');
+        } catch (e) {
+            console.warn('[Server] Derivatives Intelligence init failed:', e.message);
+        }
+    }
+
+    // Start Fear & Greed Gate (Tier 1B)
+    if (fearGreedGate) {
+        try {
+            fearGreedGate.initFearGreedGate();
+            console.log('[Server] Fear & Greed Gate initialized');
+        } catch (e) {
+            console.warn('[Server] Fear & Greed Gate init failed:', e.message);
+        }
+    }
+
+    // Start Dead Man's Switch heartbeat for Kraken (Tier 1B)
+    if (getActiveExchangeId() === 'kraken') {
+        try {
+            const adapter = getExchangeAdapter();
+            if (adapter.cancelAllOrdersAfter) {
+                // Set 90-second timeout, refresh every 60 seconds
+                await adapter.cancelAllOrdersAfter(90, botState.sessionId);
+                setInterval(async () => {
+                    try {
+                        await adapter.cancelAllOrdersAfter(90, botState.sessionId);
+                    } catch (e) {
+                        console.warn('[DeadManSwitch] Heartbeat failed:', e.message);
+                    }
+                }, 60 * 1000);
+                console.log('[Server] Kraken Dead Man\'s Switch active (90s timeout, 60s heartbeat)');
+            }
+        } catch (e) {
+            console.warn('[Server] Dead Man\'s Switch init failed:', e.message);
+        }
+    }
+
+    // Start Basis Trading Engine (Tier 3A)
+    if (basisEngine && derivativesIntel) {
+        try {
+            basisEngine.startBasisEngine();
+            console.log('[Server] Basis Trading Engine started (sim mode, 30min checks)');
+        } catch (e) {
+            console.warn('[Server] Basis Trading Engine init failed:', e.message);
+        }
+    }
+
+    // Register active exchange adapter with arbitrage engine
+    try {
+        const adapter = getExchangeAdapter();
+        arbitrageEngine.registerAdapter(getActiveExchangeId(), adapter);
+        // Arb engine needs 2+ exchanges to find opportunities — will activate when second exchange configured
+        console.log(`[Server] ArbitrageEngine: ${getActiveExchangeId()} adapter registered (needs 2nd exchange for cross-exchange arb)`);
+    } catch (e) {}
+
+    // External health ping (healthchecks.io or similar)
+    const HEALTH_PING_URL = process.env.HEALTH_PING_URL;
+    if (HEALTH_PING_URL) {
+        setInterval(async () => {
+            try {
+                await fetch(HEALTH_PING_URL, { method: 'GET', signal: AbortSignal.timeout(10000) });
+            } catch (e) {
+                console.warn('[Health] Ping failed:', e.message);
+            }
+        }, 5 * 60 * 1000); // Every 5 minutes
+        console.log('[Server] External health ping configured');
+    }
+
+    // Scheduled SQLite backup — every 6 hours
+    setInterval(async () => {
+        try {
+            const { mkdirSync, readdirSync, unlinkSync } = await import('node:fs');
+            const backupDir = path.join(__dirname, 'data', 'backups');
+            mkdirSync(backupDir, { recursive: true });
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const backupPath = path.join(backupDir, `trading-${timestamp}.db`);
+            const db = getDb();
+            await db.backup(backupPath);
+            console.log(`[Backup] SQLite backed up to ${backupPath}`);
+            // Clean up old backups (keep last 7)
+            const backups = readdirSync(backupDir)
+                .filter(f => f.startsWith('trading-') && f.endsWith('.db'))
+                .sort();
+            while (backups.length > 7) {
+                const oldest = backups.shift();
+                unlinkSync(path.join(backupDir, oldest));
+                console.log(`[Backup] Removed old backup: ${oldest}`);
+            }
+        } catch (e) {
+            console.warn(`[Backup] Scheduled backup error: ${e.message}`);
+        }
+    }, 6 * 60 * 60 * 1000); // Every 6 hours
+
+    // Start Whale Flow Tracker (Tier 2B)
+    if (whaleFlowTracker) {
+        try {
+            whaleFlowTracker.startWhaleFlowPolling();
+            console.log('[Server] Whale Flow Tracker started (15min polling)');
+        } catch (e) {
+            console.warn('[Server] Whale Flow Tracker init failed:', e.message);
+        }
+    }
+
+    // Position Reconciliation on startup (Tier 2B)
+    if (positionReconciler && botState.sessionId) {
+        try {
+            const recon = await positionReconciler.reconcilePositions(portfolio, botState.sessionId);
+            if (recon.reconciled && recon.actionsRequired.length > 0) {
+                console.log(`[Reconciler] Found ${recon.actionsRequired.length} issues — auto-fixing...`);
+                const fixes = positionReconciler.autoFixReconciliation(portfolio, recon, addLog);
+                console.log(`[Reconciler] Applied ${fixes.actionsCount} fixes`);
+            } else if (recon.reconciled) {
+                console.log('[Reconciler] Positions match exchange — all clear');
+            }
+        } catch (e) {
+            console.warn('[Reconciler] Startup reconciliation failed:', e.message);
+        }
+    }
+
     // Schedule DB cleanup weekly (Batch 5A: 90-day retention)
     setInterval(() => {
         try { cleanupOldData(90); } catch (e) { console.warn('[DB Cleanup] Error:', e.message); }
@@ -3338,6 +4065,24 @@ function gracefulShutdown(signal) {
     }, 30000);
     forceTimer.unref();
 
+    // Alert Telegram
+    try {
+        if (telegramEnabled()) {
+            const posCount = Object.keys(portfolio.positions).length;
+            alertTradeExecution({
+                type: 'SYSTEM',
+                ticker: 'SHUTDOWN',
+                price: 0,
+                strategy: signal,
+                pnl: null,
+                reason: `Bot shutting down (${signal}). ${posCount} open positions. Native exchange SLs remain active.`,
+            });
+        }
+    } catch (e) {}
+
+    // Cancel Dead Man's Switch (let native SLs persist on exchange)
+    // Do NOT cancel native stop orders — they protect positions while bot is down
+
     // Log final portfolio state
     try {
         const posCount = Object.keys(portfolio.positions).length;
@@ -3359,6 +4104,19 @@ function gracefulShutdown(signal) {
     } catch (e) {
         console.error('[Server] State save failed:', e.message);
     }
+
+    // Flush DB batcher before closing connections
+    try {
+        dbBatcher.shutdown();
+        console.log('[Server] DB batcher flushed');
+    } catch (e) {
+        console.warn('[Server] DB batcher flush error:', e.message);
+    }
+
+    // Stop health monitor
+    try {
+        healthMonitor.stop();
+    } catch (e) {}
 
     // Close connections
     try {

@@ -29,46 +29,36 @@ export const FALLBACK_TICKERS = [
 export const CANADIAN_ALLOWED_BASES = ['BTC', 'ETH', 'XRP', 'BNB', 'SOL', 'ADA', 'DOGE', 'LINK', 'DOT', 'AVAX'];
 
 // ============================================
-// QUESTRADE / STOCK TRADING CONFIG
+// EXCHANGE-SPECIFIC CONFIGURATIONS
 // ============================================
-export const QUESTRADE_EXCHANGES = {
-    TSX: { name: 'Toronto Stock Exchange', suffix: '.TO' },
-    TSXV: { name: 'TSX Venture Exchange', suffix: '.V' },
-    CSE: { name: 'Canadian Securities Exchange', suffix: '' },
-    NEO: { name: 'NEO Exchange', suffix: '' },
-    NYSE: { name: 'New York Stock Exchange', suffix: '' },
-    NASDAQ: { name: 'NASDAQ', suffix: '' },
+export const EXCHANGE_CONFIGS = {
+    kraken: {
+        name: 'Kraken',
+        takerFee: 0.0026,      // 0.26% per side
+        makerFee: 0.0016,      // 0.16% per side
+        roundTripTaker: 0.0052, // 0.52%
+        roundTripMaker: 0.0032, // 0.32%
+        minProfitTarget: 0.0092, // 0.92% min for taker
+        minProfitMaker: 0.0072,  // 0.72% min for maker
+        preferLimitOrders: true, // Save 60% on fees
+        minOrderUsd: 10,
+        wsUrl: 'wss://ws.kraken.com/v2',
+        strategyFocus: ['TREND_DAY', 'TREND_SWING'], // Bigger moves for higher fees
+    },
+    'crypto.com': {
+        name: 'Crypto.com',
+        takerFee: 0.00075,     // 0.075% per side
+        makerFee: 0.00050,     // 0.050% per side (estimate)
+        roundTripTaker: 0.0015, // 0.15%
+        roundTripMaker: 0.0010, // 0.10%
+        minProfitTarget: 0.0045, // 0.45% min
+        minProfitMaker: 0.0035,  // 0.35% min
+        preferLimitOrders: false, // Fees cheap enough for market
+        minOrderUsd: 1,
+        wsUrl: 'wss://stream.crypto.com/exchange/v1/market',
+        strategyFocus: ['TREND_SCALP', 'TREND_DAY'], // Scalping viable with low fees
+    },
 } as const;
-
-export const QUESTRADE_CONFIG = {
-    MARKET_OPEN_HOUR: 9,
-    MARKET_OPEN_MIN: 30,
-    MARKET_CLOSE_HOUR: 16,
-    MARKET_CLOSE_MIN: 0,
-    PRE_MARKET_OPEN: 7,
-    AFTER_HOURS_CLOSE: 20,
-    POLL_INTERVAL_MS: 5000,
-    BOT_LOOP_MS: 5000,
-    MIN_CANDLES_REQUIRED: 50,
-    PAPER_INITIAL_BALANCE: 100000,
-} as const;
-
-export const QUESTRADE_INTERVALS: Record<string, string> = {
-    '1m': 'OneMinute',
-    '2m': 'TwoMinutes',
-    '3m': 'ThreeMinutes',
-    '5m': 'FiveMinutes',
-    '10m': 'TenMinutes',
-    '15m': 'FifteenMinutes',
-    '20m': 'TwentyMinutes',
-    '30m': 'HalfHour',
-    '1h': 'OneHour',
-    '2h': 'TwoHours',
-    '4h': 'FourHours',
-    '1d': 'OneDay',
-    '1w': 'OneWeek',
-    '1M': 'OneMonth',
-};
 
 // ============================================
 // TRADING THRESHOLDS & SIGNALS
@@ -233,13 +223,15 @@ export const SLOW_MARKET = {
 // ============================================
 // REGIME → STRATEGY MAP
 // ============================================
+// LOCKED: Only TREND is profitable (validated +16.68% OOS, 50.5% WR, 7/9 folds)
+// All other strategies lose money consistently — do NOT re-enable without walk-forward proof
 export const REGIME_STRATEGY_MAP: Record<string, readonly string[]> = {
-    STRONG_UP:    ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE', 'ADAPTIVE'],
-    UP:           ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE', 'ADAPTIVE'],
-    SIDEWAYS:     ['RANGE', 'MEAN_REVERSION', 'ADAPTIVE', 'DIVERGENCE'],
-    DOWN:         ['REVERSAL', 'DIVERGENCE', 'ADAPTIVE'],
-    STRONG_DOWN:  ['REVERSAL', 'DIVERGENCE', 'ADAPTIVE'],
-    VOLATILE:     ['ADAPTIVE'],
+    STRONG_UP:    ['TREND'],
+    UP:           ['TREND'],
+    SIDEWAYS:     [],  // No profitable strategy for sideways — sit out
+    DOWN:         [],  // No profitable strategy for downtrend — sit out (short selling TBD)
+    STRONG_DOWN:  [],  // No profitable strategy — sit out
+    VOLATILE:     [],  // No profitable strategy — sit out
 } as const;
 
 // ============================================

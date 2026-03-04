@@ -4,7 +4,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import App from './App';
-import { QuestradeDashboard } from './components/QuestradeDashboard';
+// QuestradeDashboard removed
 import { PerformanceDashboard } from './components/PerformanceDashboard';
 import { BacktestDashboard } from './components/BacktestDashboard';
 import { ReplayDashboard } from './components/ReplayDashboard';
@@ -59,7 +59,7 @@ root.render(
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<ComponentErrorBoundary componentName="App"><App /></ComponentErrorBoundary>} />
-          <Route path="/stocks" element={<ComponentErrorBoundary componentName="QuestradeDashboard"><QuestradeDashboard /></ComponentErrorBoundary>} />
+{/* Questrade /stocks route removed */}
           <Route path="/performance" element={<ComponentErrorBoundary componentName="PerformanceDashboard"><PerformanceDashboard /></ComponentErrorBoundary>} />
           <Route path="/backtest" element={<ComponentErrorBoundary componentName="BacktestDashboard"><BacktestDashboard /></ComponentErrorBoundary>} />
           <Route path="/replay" element={<ComponentErrorBoundary componentName="ReplayDashboard"><ReplayDashboard /></ComponentErrorBoundary>} />
