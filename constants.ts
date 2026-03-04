@@ -147,9 +147,9 @@ export const KRAKEN_FEES = {
 // KRAKEN-OPTIMIZED TRADING CONFIG
 // ============================================
 export const KRAKEN_OPTIMIZED = {
-    // Minimum profit targets (must exceed round-trip fees)
-    MIN_PROFIT_TARGET_TAKER: 0.92,   // 0.52% fees + 0.10% slippage + 0.30% min profit
-    MIN_PROFIT_TARGET_MAKER: 0.72,   // 0.32% fees + 0.10% slippage + 0.30% min profit
+    // Minimum profit targets (must exceed round-trip fees + slippage + min margin)
+    MIN_PROFIT_TARGET_TAKER: 1.20,   // 0.52% fees + 0.20% slippage + 0.48% min profit
+    MIN_PROFIT_TARGET_MAKER: 0.90,   // 0.32% fees + 0.18% slippage + 0.40% min profit
 
     // Smart order routing
     LIMIT_ORDER_SPREAD_THRESHOLD: 0.10, // Use limit orders when spread > 0.1%
@@ -269,7 +269,7 @@ export const RISK_DEFAULTS = {
     MAX_CORRELATED_EXPOSURE: 35,        // Max 35% of portfolio in correlated assets
     DEFAULT_RISK_AMOUNT: 1.0,           // Risk multiplier (1.0 = 100%)
     MAX_CONCURRENT_TRADES: 5,           // Default max positions (0 = unlimited)
-    MIN_SIGNAL_CONFIDENCE: 30,          // Minimum confidence to trade
+    MIN_SIGNAL_CONFIDENCE: 42,          // Minimum confidence to trade (raised from 30 to filter weak signals)
     MIN_CANDLE_VOLUME_USD: 5000,        // Skip tickers with < $5K average candle volume
     MAX_DRAWDOWN_FROM_PEAK: 15,         // Kill switch: stop trading at 15% drawdown from peak
 } as const;
@@ -504,7 +504,7 @@ export const INTERVALS = {
     UI_REFRESH_MS: 1000,           // 1 second UI update
     SCANNER_INTERVAL_MS: 5000,     // 5 seconds scanner cycle (was 10s)
     BOT_LOOP_SIMULATION_MS: 1500,  // 1.5 seconds bot loop for fast trading
-    BOT_LOOP_REAL_MS: 5000,        // 5 seconds bot loop (real trading - was 30s)
+    BOT_LOOP_REAL_MS: 2000,        // 2 seconds bot loop (faster response to price moves)
     BACKEND_POLL_MS: 3000,         // 3 seconds backend status poll
     MTF_REFRESH_MS: 60000,         // 1 minute MTF data refresh
     TICKER_CACHE_REFRESH_MS: 3600000, // 1 hour ticker list refresh

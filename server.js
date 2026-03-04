@@ -2671,8 +2671,9 @@ const handleSell = async (position, price, reason) => {
                 }
             }
 
-            // Fallback: original order routing
+            // Fallback: limit-first sell (saves 0.10% vs market on Kraken)
             if (!avgPrice) {
+            let adaptiveSellPrice = null;
             try {
                 const orderBook = await withTimeout(adapter.getOrderBook(position.ticker, 20), 3000, 'getOrderBook-sell');
                 if (orderBook?.bids?.length > 0) {
@@ -2680,12 +2681,50 @@ const handleSell = async (position, price, reason) => {
                     if (slippageEst) {
                         addLog(`[ORDER-BOOK] SELL ${position.ticker}: est. slippage ${slippageEst.slippagePercent.toFixed(3)}%${slippageEst.isLiquiditySufficient ? '' : ' (INSUFFICIENT DEPTH)'}`, 'INFO');
                     }
+                    // Calculate adaptive limit sell price: best bid - 30% of spread
+                    const bestBid = parseFloat(orderBook.bids[0]?.[0] || 0);
+                    const bestAsk = parseFloat(orderBook.asks[0]?.[0] || 0);
+                    if (bestBid > 0 && bestAsk > 0) {
+                        const spread = bestAsk - bestBid;
+                        adaptiveSellPrice = bestBid - spread * 0.3;
+                    }
                 }
             } catch (e) {
                 // Non-blocking — proceed with sell regardless
             }
-            const orderResult = await withTimeout(adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs), 20000, 'placeSellOrder');
-            avgPrice = parseFloat(orderResult.avgPrice) || price;
+
+            // Try limit sell first for maker fee savings (0.16% vs 0.26%)
+            let usedLimitSell = false;
+            if (adapter.getMakerFeePercent && adapter.placeLimitSellOrder && adaptiveSellPrice > 0 && !reason.startsWith('Stop loss')) {
+                try {
+                    const limitSellOrder = await withTimeout(
+                        adapter.placeLimitSellOrder(position.ticker, adaptiveSellPrice, position.quantity, botState.sessionId),
+                        20000, 'placeLimitSellOrder'
+                    );
+                    // Wait up to 8s for fill (shorter than buy since we want to exit)
+                    for (let i = 0; i < 4; i++) {
+                        await new Promise(r => setTimeout(r, 2000));
+                        const status = await withTimeout(adapter.getOrderStatus(limitSellOrder.orderId, botState.sessionId), 10000, 'getOrderStatus-sell');
+                        if (status.status === 'closed' || status.filledQty >= position.quantity * 0.95) {
+                            avgPrice = status.avgPrice || adaptiveSellPrice;
+                            usedLimitSell = true;
+                            addLog(`[SMART-SELL] Limit fill @ ${avgPrice.toFixed(2)} (saved ~${((fees.perSide - (adapter.getMakerFeePercent() || fees.perSide)) * avgPrice * position.quantity).toFixed(2)} in fees)`, 'INFO');
+                            break;
+                        }
+                    }
+                    if (!usedLimitSell) {
+                        await withTimeout(adapter.cancelOrder(limitSellOrder.orderId, botState.sessionId), 15000, 'cancelOrder-sell');
+                        addLog(`[SMART-SELL] Limit not filled for ${position.ticker}, falling back to market`, 'INFO');
+                    }
+                } catch (e) {
+                    addLog(`[SMART-SELL] Limit failed: ${e.message}, using market`, 'WARN');
+                }
+            }
+
+            if (!usedLimitSell) {
+                const orderResult = await withTimeout(adapter.placeSellOrder(position.ticker, position.quantity, botState.sessionId, instrumentSpecs), 20000, 'placeSellOrder');
+                avgPrice = parseFloat(orderResult.avgPrice) || price;
+            }
             }
         }
 

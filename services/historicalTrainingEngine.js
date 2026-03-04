@@ -46,12 +46,15 @@ import { buildFeatureVector as sharedBuildFeatureVector, FEATURE_COUNT as SHARED
 // All timeframes for multi-TF training
 const ALL_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w'];
 
-// Fee constants (same as live system)
-const TRADING_FEE_PER_SIDE = 0.00075; // 0.075%
-const TRADING_FEE_ROUND_TRIP = 0.0015; // 0.15%
+// Fee constants — MUST match Kraken (primary exchange) for realistic training
+// Using Crypto.com fees here caused training to approve trades that lose money on Kraken!
+const TRADING_FEE_PER_SIDE = 0.0026; // 0.26% Kraken taker fee per side
+const TRADING_FEE_ROUND_TRIP = 0.0052; // 0.52% Kraken round-trip
+// Maker fees for limit order simulation
+const TRADING_FEE_MAKER_PER_SIDE = 0.0016; // 0.16% Kraken maker fee per side
 
 // Slippage model: realistic spread cost per side
-const SLIPPAGE_PER_SIDE = 0.0005;  // 0.05% spread cost per side
+const SLIPPAGE_PER_SIDE = 0.001;  // 0.10% realistic spread cost per side (was 0.05%)
 
 // Config thresholds (same as server.js CONFIG.THRESHOLDS)
 const THRESHOLDS = {
@@ -93,6 +96,18 @@ const SELECTIVITY_PRESETS = {
     qualityConfidenceFloor: 0,            // all pass
     minMemoryTradesForGate: 100,
     entryCooldownSteps: 1,                // every candle
+    minMTFAgreement: 0,                   // no MTF filter
+  },
+  medium: {
+    minOppScore: 35,                      // moderate opportunity score
+    minRegimeStrategyWR: 0.48,            // higher regime filter
+    minBinWR: 0.42,                       // moderate bin filter
+    regimeGate: null,                     // allow all regimes (quality filter handles it)
+    minStrategiesAgreeing: 1,
+    qualityConfidenceFloor: 0.45,         // moderate confidence floor
+    minMemoryTradesForGate: 40,           // filter kicks in earlier
+    entryCooldownSteps: 2,               // every 2nd candle
+    minMTFAgreement: 2,                   // require 2/5 timeframes bullish
   },
   high: {
     minOppScore: 55,
@@ -103,6 +118,7 @@ const SELECTIVITY_PRESETS = {
     qualityConfidenceFloor: 0.55,
     minMemoryTradesForGate: 50,
     entryCooldownSteps: 4,                // every 4th candle
+    minMTFAgreement: 3,                   // require 3/5 timeframes bullish
   },
 };
 
@@ -625,21 +641,38 @@ function checkExitConditions(position, candles, exitParams = null) {
   const pnlPct = (currentPrice - position.entryPrice) / position.entryPrice;
   const holdHours = (candles[candles.length - 1].time - position.entryTime) / 3600000;
 
-  // Use learned exit params if available, else defaults
-  const ep = exitParams || { stopLoss: -0.05, takeProfit: 0.04, maxHold: 48, trailingStart: 0.03, trailingGiveBack: 0.4 };
+  // Use learned exit params if available, else Kraken-optimized defaults
+  // Defaults account for 0.52% round-trip fees + 0.20% slippage = 0.72% total cost
+  const ep = exitParams || {
+    stopLoss: -0.035,       // -3.5% stop (was -5%, tighter = less damage per loss)
+    takeProfit: 0.025,      // +2.5% TP (was 4%, but with Kraken fees this nets ~1.78%)
+    maxHold: 36,            // 36h max hold (was 48h, faster rotation)
+    trailingStart: 0.015,   // Start trailing at +1.5% (was 3%, capture gains earlier)
+    trailingGiveBack: 0.30, // Give back 30% of peak gains (was 40%, tighter trailing)
+  };
 
-  // Stop loss (learned)
+  // Stop loss (learned) — hard floor at fees so we don't take tiny losses
   if (pnlPct <= ep.stopLoss) return `Stop loss: ${(ep.stopLoss * 100).toFixed(1)}%`;
 
-  // Take profit (learned)
+  // Take profit (learned) — must exceed round-trip cost
   if (pnlPct >= ep.takeProfit) return `Take profit: +${(ep.takeProfit * 100).toFixed(1)}%`;
+
+  // Time-based decay exit: if position isn't moving after half max-hold, cut it
+  if (holdHours >= ep.maxHold * 0.5 && pnlPct < 0.005 && pnlPct > ep.stopLoss) {
+    return `Stale position exit: ${holdHours.toFixed(0)}h, only ${(pnlPct * 100).toFixed(2)}% gain`;
+  }
 
   // Time exit (learned max hold hours)
   if (holdHours >= ep.maxHold) return `Time exit: ${ep.maxHold}h max hold`;
 
-  // Trailing stop (learned)
-  if (position.highestPnlPct >= ep.trailingStart && pnlPct < position.highestPnlPct * ep.trailingGiveBack) {
+  // Trailing stop (learned) — tighter to lock in profits
+  if (position.highestPnlPct >= ep.trailingStart && pnlPct < position.highestPnlPct * (1 - ep.trailingGiveBack)) {
     return `Trailing stop: gave back ${((position.highestPnlPct - pnlPct) * 100).toFixed(1)}%`;
+  }
+
+  // Break-even stop: once we've been up 1%, don't let it go negative
+  if (position.highestPnlPct >= 0.01 && pnlPct <= 0) {
+    return `Break-even stop: was up ${(position.highestPnlPct * 100).toFixed(1)}%, now at ${(pnlPct * 100).toFixed(1)}%`;
   }
 
   // Strategy-specific exits — only fire when trade is below the profit floor.
@@ -1093,10 +1126,14 @@ export async function startTraining(config = {}) {
   // When targeting high win rate, raise the REGIME+STRATEGY filter only.
   // Don't raise indicator bin threshold — that over-filters UP_TREND trades.
   // The regime filter is the big lever: blocks DOWN_TREND (53% WR) while allowing UP_TREND (64%+).
-  if (targetWinRate > 0.5) {
-    const minWR = Math.max(selectivity.minRegimeStrategyWR, targetWinRate * 0.75);
+  // FIX: Handle both percentage (e.g. 70) and fraction (e.g. 0.70) formats
+  const targetWR = targetWinRate > 1 ? targetWinRate / 100 : targetWinRate; // Normalize to fraction
+  if (targetWR > 0.5) {
+    const minWR = Math.max(selectivity.minRegimeStrategyWR, targetWR * 0.75);
     selectivity.minRegimeStrategyWR = minWR;
-    console.log(`[Training] Target WR ${(targetWinRate*100).toFixed(0)}%: regime+strategy threshold raised to rsWR=${(minWR*100).toFixed(0)}% (binWR stays at ${(selectivity.minBinWR*100).toFixed(0)}%)`);
+    // Also raise bin WR proportionally
+    selectivity.minBinWR = Math.max(selectivity.minBinWR, targetWR * 0.60);
+    console.log(`[Training] Target WR ${(targetWR*100).toFixed(0)}%: rsWR=${(minWR*100).toFixed(0)}%, binWR=${(selectivity.minBinWR*100).toFixed(0)}%`);
   }
   const runId = `train_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
 
@@ -1498,11 +1535,17 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
           continue;
         }
 
-        // MULTI-TIMEFRAME CONFIRMATION — block only when BOTH 4h AND daily are bearish.
-        // The regime+strategy quality filter handles regime selection more precisely.
+        // MULTI-TIMEFRAME CONFIRMATION — enhanced with configurable agreement threshold
         const mtfCtxEntry = candleIndex ? getMTFContext(candleIndex, ticker, currentTime) : null;
         if (mtfCtxEntry) {
+          // Block when BOTH 4h AND daily are bearish (strong downtrend filter)
           if (mtfCtxEntry.htf_trend_4h < 0 && mtfCtxEntry.daily_trend < 0) {
+            blockCounters.mtfBlock++;
+            continue;
+          }
+          // Require minimum timeframe agreement if configured
+          const minMTF = sel.minMTFAgreement || 0;
+          if (minMTF > 0 && mtfCtxEntry.tf_agreement < minMTF) {
             blockCounters.mtfBlock++;
             continue;
           }

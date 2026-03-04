@@ -359,16 +359,27 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
-  // --- TRAILING STOP ---
-  // Activates once position reached +2% profit after fees from peak (was 0.5% — too tight)
-  const trailActivation = 1.0; // Activate trailing stop earlier to protect gains
+  // --- BREAK-EVEN STOP ---
+  // Once up 1.5% after fees, never let the trade go negative
   const highestPrice = position.highestPrice || position.openPrice;
   const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
   const highFeeAdj = highPnl - roundTripFeePercent;
 
+  if (highFeeAdj >= 1.5 && feeAdjustedPnl <= 0) {
+    return {
+      shouldExit: true,
+      reason: `[BEAST-BE] Break-even stop: was up ${highFeeAdj.toFixed(2)}% after fees, now at ${feeAdjustedPnl.toFixed(2)}%`,
+      pnlPercent,
+    };
+  }
+
+  // --- TRAILING STOP ---
+  // Activates once position reached +0.8% profit after fees (earlier activation to protect gains)
+  const trailActivation = 0.8;
+
   if (highFeeAdj >= trailActivation) {
-    // Trail distance = 40% of TP target, minimum 0.5%
-    const trailPct = Math.max(0.5, targets.takeProfitPct * 0.4);
+    // Trail distance = 30% of TP target, minimum 0.4% (tighter trailing to lock profits)
+    const trailPct = Math.max(0.4, targets.takeProfitPct * 0.30);
     const trailLevel = highestPrice * (1 - trailPct / 100);
     if (currentPrice <= trailLevel) {
       return {
@@ -390,11 +401,28 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
-  // Time-based exit: stale positions - exit if losing after 4h OR breakeven after 8h
-  if ((holdMinutes > 240 && pnlPercent < -0.5) || (holdMinutes > 480 && feeAdjustedPnl < 0.1)) {
+  // Time-based exits — progressively aggressive about cutting dead weight
+  // 2h: exit if losing more than 0.3%
+  if (holdMinutes > 120 && feeAdjustedPnl < -0.3) {
     return {
       shouldExit: true,
-      reason: `[BEAST-TIME] Stale position: ${pnlPercent.toFixed(2)}% raw (${feeAdjustedPnl.toFixed(2)}% after fees), ${holdMinutes.toFixed(0)}min`,
+      reason: `[BEAST-TIME] Early cut: ${feeAdjustedPnl.toFixed(2)}% after fees at ${holdMinutes.toFixed(0)}min`,
+      pnlPercent,
+    };
+  }
+  // 4h: exit if not at least breaking even
+  if (holdMinutes > 240 && feeAdjustedPnl < 0) {
+    return {
+      shouldExit: true,
+      reason: `[BEAST-TIME] Stale position: ${feeAdjustedPnl.toFixed(2)}% after fees at ${holdMinutes.toFixed(0)}min`,
+      pnlPercent,
+    };
+  }
+  // 8h: exit if not meaningfully profitable
+  if (holdMinutes > 480 && feeAdjustedPnl < 0.5) {
+    return {
+      shouldExit: true,
+      reason: `[BEAST-TIME] Insufficient profit: ${feeAdjustedPnl.toFixed(2)}% after fees at ${(holdMinutes/60).toFixed(1)}h`,
       pnlPercent,
     };
   }
