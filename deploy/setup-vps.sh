@@ -412,7 +412,7 @@ mkdir -p "$APP_DIR/logs"
 
     # Checkout working tree
     echo "Checking out to $APP_DIR..."
-    GIT_WORK_TREE=$APP_DIR git checkout -f main
+    GIT_WORK_TREE=$APP_DIR git checkout -f master
 
     # Install Node.js dependencies (if package.json exists)
     if [ -f "$APP_DIR/package.json" ]; then
@@ -429,16 +429,21 @@ mkdir -p "$APP_DIR/logs"
         deactivate
     fi
 
-    # Restart the bot
-    if systemctl is-active --quiet trading-bot 2>/dev/null; then
+    # Restart the Node.js bot via PM2 (primary) or systemd (fallback)
+    if pm2 describe canuck-node > /dev/null 2>&1; then
+        cd $APP_DIR && pm2 restart canuck-node --update-env
+        echo "Bot restarted via PM2 (canuck-node)"
+    elif pm2 describe trading-bot > /dev/null 2>&1; then
+        cd $APP_DIR && pm2 restart trading-bot --update-env
+        echo "Bot restarted via PM2 (trading-bot)"
+    elif systemctl is-active --quiet trading-bot 2>/dev/null; then
         systemctl restart trading-bot
         echo "Bot restarted via systemd"
-    elif pm2 describe trading-bot > /dev/null 2>&1; then
-        pm2 restart trading-bot
-        echo "Bot restarted via PM2"
     else
-        echo "WARNING: No running bot process found to restart"
-        echo "Start manually: systemctl start trading-bot"
+        echo "Starting bot via PM2..."
+        cd $APP_DIR && pm2 start server.js --name canuck-node --update-env
+        pm2 save
+        echo "Bot started via PM2 (canuck-node)"
     fi
 
     echo "Deploy complete!"
