@@ -212,7 +212,7 @@ try {
 
 let telegramV2 = null;
 try {
-    telegramV2 = await import('./core/telegramV2.js');
+    telegramV2 = await import('./core/telegramV2.ts');
     console.log('[Server] TelegramV2 loaded');
 } catch (e) {
     console.warn('[Server] TelegramV2 not available:', e.message);
