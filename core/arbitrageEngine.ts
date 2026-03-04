@@ -6,7 +6,7 @@
  * Buy on cheaper exchange, sell on expensive exchange.
  */
 
-import tradingBus from './eventBus.js';
+import tradingBus from './eventBus.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 

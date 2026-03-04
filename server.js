@@ -115,15 +115,15 @@ import createMultiExchangeRouter from './routes/multiExchange.js';
 import createEngineRouter from './routes/engines.js';
 
 // ─── Core V2 Modules (Overhaul) ─────────────────────────────
-import tradingBus from './core/eventBus.js';
-import { portfolioManager } from './core/portfolioManager.js';
-import { shortSellingEngine } from './core/shortSellingEngine.js';
-import { stakingEngine } from './core/stakingEngine.js';
-import { arbitrageEngine } from './core/arbitrageEngine.js';
-import { incrementalIndicators } from './core/incrementalIndicators.js';
-import { healthMonitor } from './core/healthMonitor.js';
-import { dbBatcher } from './core/dbBatcher.js';
-import { logger } from './core/structuredLogger.js';
+import tradingBus from './core/eventBus.ts';
+import { portfolioManager } from './core/portfolioManager.ts';
+import { shortSellingEngine } from './core/shortSellingEngine.ts';
+import { stakingEngine } from './core/stakingEngine.ts';
+import { arbitrageEngine } from './core/arbitrageEngine.ts';
+import { incrementalIndicators } from './core/incrementalIndicators.ts';
+import { healthMonitor } from './core/healthMonitor.ts';
+import { dbBatcher } from './core/dbBatcher.ts';
+import { logger } from './core/structuredLogger.ts';
 
 // Tier 1: Derivatives Intelligence + Fear & Greed Gate
 let derivativesIntel = null;

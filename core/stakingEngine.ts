@@ -9,7 +9,7 @@
  * Crypto.com earn: BTC ~1.5%, ETH ~3%, CRO ~6%, stablecoins ~4-8%
  */
 
-import tradingBus from './eventBus.js';
+import tradingBus from './eventBus.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 
