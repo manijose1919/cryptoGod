@@ -3,6 +3,22 @@
    Frosted glass panels · Inter font · Blue-purple accents · Light base
    ============================================ */
 
+/* --- Tailwind Gray Scale (CSS variable channels for opacity support) --- */
+:root {
+  /* Light theme: inverted gray scale (900 = lightest) */
+  --color-gray-50:  2 6 23;
+  --color-gray-100: 15 23 42;
+  --color-gray-200: 30 41 59;
+  --color-gray-300: 51 65 85;
+  --color-gray-400: 100 116 139;
+  --color-gray-500: 148 163 184;
+  --color-gray-600: 203 213 225;
+  --color-gray-700: 226 232 240;
+  --color-gray-800: 241 245 249;
+  --color-gray-900: 255 255 255;
+  --color-gray-950: 255 255 255;
+}
+
 /* --- CSS Variables (Design Tokens) — Light Default --- */
 :root {
   --bg-primary: #f0f4ff;
@@ -1097,6 +1113,19 @@ body {
    ============================================ */
 
 .dark {
+  /* Dark theme: standard gray scale */
+  --color-gray-50:  249 250 251;
+  --color-gray-100: 243 244 246;
+  --color-gray-200: 229 231 235;
+  --color-gray-300: 209 213 219;
+  --color-gray-400: 156 163 175;
+  --color-gray-500: 107 114 128;
+  --color-gray-600: 75 85 99;
+  --color-gray-700: 55 65 81;
+  --color-gray-800: 31 41 55;
+  --color-gray-900: 17 24 39;
+  --color-gray-950: 3 7 18;
+
   --bg-primary: #0f172a;
   --bg-secondary: rgba(15, 23, 42, 0.9);
   --bg-panel: rgba(30, 41, 59, 0.7);
@@ -1142,138 +1171,47 @@ body {
 .dark .trade-table tr:nth-child(even) td { background: rgba(30, 41, 59, 0.4); }
 
 /* ============================================
-   Tailwind Dark-Class Overrides for Light Theme
-   Remaps hardcoded bg-gray-*/text-white in components
+   Light Theme: text-white Override
+   Gray scale handled by Tailwind config + CSS vars above.
+   Only text-white needs special handling since white = invisible on light bg.
    ============================================ */
 
-/* Background overrides — remap dark grays to glass panels */
-.bg-gray-900,
-.bg-gray-900\/50,
-.bg-gray-900\/40,
-.bg-gray-900\/30,
-.bg-gray-900\/60 {
-  background-color: var(--bg-panel) !important;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+:root:not(.dark) .text-white {
+  color: #1e293b;
 }
 
-.bg-gray-800,
-.bg-gray-800\/50,
-.bg-gray-800\/30,
-.bg-gray-800\/80 {
-  background-color: var(--bg-panel-alt) !important;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+/* Preserve actual white text on colored/dark backgrounds */
+:root:not(.dark) [class*="bg-black"] .text-white,
+:root:not(.dark) [class*="bg-black"].text-white,
+:root:not(.dark) [class*="bg-red-4"].text-white,
+:root:not(.dark) [class*="bg-red-5"].text-white,
+:root:not(.dark) [class*="bg-red-6"].text-white,
+:root:not(.dark) [class*="bg-red-7"].text-white,
+:root:not(.dark) [class*="bg-blue-4"].text-white,
+:root:not(.dark) [class*="bg-blue-5"].text-white,
+:root:not(.dark) [class*="bg-blue-6"].text-white,
+:root:not(.dark) [class*="bg-green-5"].text-white,
+:root:not(.dark) [class*="bg-green-6"].text-white,
+:root:not(.dark) [class*="bg-cyan-5"].text-white,
+:root:not(.dark) [class*="bg-cyan-6"].text-white,
+:root:not(.dark) [class*="bg-indigo-"].text-white,
+:root:not(.dark) [class*="bg-violet-"].text-white,
+:root:not(.dark) [class*="bg-purple-"].text-white {
+  color: #ffffff;
 }
 
-.bg-gray-900\/90 {
-  background-color: rgba(255, 255, 255, 0.92) !important;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-}
+/* Cyan accent → indigo in light mode */
+:root:not(.dark) .bg-cyan-800\/50,
+:root:not(.dark) .bg-cyan-600\/20 { background-color: rgba(99, 102, 241, 0.1); }
+:root:not(.dark) .text-cyan-300 { color: #6366f1; }
+:root:not(.dark) .border-cyan-500 { border-color: #6366f1; }
+:root:not(.dark) .border-cyan-800\/30 { border-color: rgba(99, 102, 241, 0.15); }
 
-.bg-gray-900\/80 {
-  background-color: var(--bg-secondary) !important;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-}
+/* Semantic dark tints → lighter versions */
+:root:not(.dark) .text-red-300,
+:root:not(.dark) .text-red-200 { color: #dc2626; }
+:root:not(.dark) .text-yellow-200,
+:root:not(.dark) .text-yellow-300 { color: #d97706; }
 
-.bg-gray-900\/95 {
-  background-color: rgba(255, 255, 255, 0.95) !important;
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-}
-
-.bg-black\/70,
-.bg-black\/60 {
-  background-color: rgba(0, 0, 0, 0.3) !important;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-.bg-black\/30,
-.bg-black\/20 {
-  background-color: rgba(99, 102, 241, 0.06) !important;
-}
-
-/* Text overrides — remap white/gray text to theme variables */
-.text-white { color: var(--text-primary) !important; }
-.text-gray-300 { color: var(--text-primary) !important; }
-.text-gray-400 { color: var(--text-secondary) !important; }
-.text-gray-500 { color: var(--text-muted) !important; }
-.text-gray-600 { color: var(--text-muted) !important; }
-.text-gray-200 { color: var(--text-primary) !important; }
-
-/* Cyan accent overrides → use indigo */
-.bg-cyan-800\/50,
-.bg-cyan-600\/20 { background-color: rgba(99, 102, 241, 0.12) !important; }
-.text-cyan-300 { color: var(--text-header) !important; }
-.text-cyan-500 { color: #6366f1 !important; }
-.focus\:border-cyan-500:focus { border-color: #6366f1 !important; }
-.focus\:ring-cyan-500:focus { --tw-ring-color: rgba(99, 102, 241, 0.3) !important; }
-
-/* Red accent overrides for modals */
-.bg-red-900\/50 { background-color: rgba(239, 68, 68, 0.08) !important; }
-.text-red-300,
-.text-red-200 { color: var(--red) !important; }
-.focus\:ring-red-500:focus { --tw-ring-color: rgba(239, 68, 68, 0.3) !important; }
-.focus\:border-red-500:focus { border-color: var(--red) !important; }
-
-/* Yellow accent for warning banners */
-.bg-yellow-900\/50 { background-color: rgba(245, 158, 11, 0.08) !important; }
-.text-yellow-200 { color: var(--amber) !important; }
-
-/* Border overrides — remap dark borders to theme */
-.border-gray-600,
-.border-gray-600\/50 { border-color: var(--border-secondary) !important; }
-.border-gray-700,
-.border-gray-700\/50,
-.border-gray-700\/30 { border-color: var(--border-primary) !important; }
-.border-gray-800,
-.border-gray-800\/50 { border-color: var(--border-primary) !important; }
-.border-red-500\/50 { border-color: rgba(239, 68, 68, 0.2) !important; }
-.border-yellow-500\/50 { border-color: rgba(245, 158, 11, 0.2) !important; }
-.border-cyan-500 { border-color: #6366f1 !important; }
-.border-cyan-800\/30 { border-color: rgba(99, 102, 241, 0.15) !important; }
-
-/* Hover state overrides */
-.hover\:bg-gray-800:hover,
-.hover\:bg-gray-700\/50:hover,
-.hover\:bg-gray-800\/50:hover { background-color: var(--bg-hover) !important; }
-.hover\:text-white:hover { color: var(--text-primary) !important; }
-
-/* Placeholder overrides */
-.placeholder-gray-500::placeholder { color: var(--text-muted) !important; }
-
-/* Focus overrides → indigo accent */
-.focus\:outline-none:focus { outline: none; }
-.focus\:border-violet-500:focus { border-color: #8b5cf6 !important; }
-.focus\:ring-violet-500:focus { --tw-ring-color: rgba(139, 92, 246, 0.3) !important; }
-
-/* Disabled state overrides */
-.disabled\:bg-gray-700:disabled { background-color: var(--bg-panel-alt) !important; opacity: 0.6; }
-
-/* Dark mode reversal — restore Tailwind dark colors when .dark is active */
-.dark .bg-gray-900,
-.dark .bg-gray-900\/50,
-.dark .bg-gray-900\/40,
-.dark .bg-gray-900\/30,
-.dark .bg-gray-900\/60 { background-color: rgba(15, 23, 42, 0.5) !important; }
-.dark .bg-gray-800,
-.dark .bg-gray-800\/50,
-.dark .bg-gray-800\/30,
-.dark .bg-gray-800\/80 { background-color: rgba(30, 41, 59, 0.5) !important; }
-.dark .bg-gray-900\/90 { background-color: rgba(15, 23, 42, 0.9) !important; }
-.dark .bg-black\/70,
-.dark .bg-black\/60 { background-color: rgba(0, 0, 0, 0.6) !important; }
-.dark .bg-black\/30,
-.dark .bg-black\/20 { background-color: rgba(0, 0, 0, 0.2) !important; }
-.dark .text-white { color: #e2e8f0 !important; }
-.dark .text-gray-300 { color: #d1d5db !important; }
-.dark .text-gray-400 { color: #9ca3af !important; }
-.dark .text-gray-500 { color: #6b7280 !important; }
-.dark .text-gray-600 { color: #4b5563 !important; }
-.dark .border-gray-600 { border-color: #4b5563 !important; }
-.dark .border-gray-700 { border-color: #374151 !important; }
-.dark .border-gray-800 { border-color: #1f2937 !important; }
-.dark .hover\:bg-gray-800:hover { background-color: rgba(30, 41, 59, 0.7) !important; }
+/* hover:text-white → dark text on hover in light mode */
+:root:not(.dark) .hover\:text-white:hover { color: #1e293b; }
