@@ -154,7 +154,7 @@ class TelegramV2Service {
   private async onRiskAlert(event: RiskEvent): Promise<void> {
     const icons: Record<string, string> = { info: 'ℹ️', warning: '⚠️', critical: '🚨' };
     const icon = icons[event.severity] || '⚠️';
-    const exchangeName = event.exchange === 'global' ? 'GLOBAL' : event.exchange.toUpperCase();
+    const exchangeName = !event.exchange ? 'SYSTEM' : event.exchange === 'global' ? 'GLOBAL' : event.exchange.toUpperCase();
 
     const msg = [
       `${icon} <b>RISK ALERT — ${exchangeName}</b>`,
