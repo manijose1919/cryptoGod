@@ -74,28 +74,30 @@ export function PortfolioOverview() {
       {equityCurve.length > 2 && (
         <div className="po-section">
           <h3>EQUITY CURVE</h3>
-          <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border-primary)', borderRadius: '4px', padding: '8px' }}>
+          <div style={{ background: 'var(--bg-panel)', backdropFilter: 'blur(12px)', border: '1px solid var(--border-primary)', borderRadius: '12px', padding: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.06)' }}>
             <ResponsiveContainer width="100%" height={180}>
               <AreaChart data={equityCurve} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                 <defs>
                   <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#ff8c00" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="#ff8c00" stopOpacity={0} />
+                    <stop offset="0%" stopColor="#6366f1" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.02} />
                   </linearGradient>
                 </defs>
-                <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#484f58', fontFamily: 'var(--font-mono)' }}
-                  axisLine={{ stroke: '#1e2d3d' }} tickLine={false} />
-                <YAxis tick={{ fontSize: 9, fill: '#484f58', fontFamily: 'var(--font-mono)' }}
+                <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#94a3b8', fontFamily: 'var(--font-mono)' }}
+                  axisLine={{ stroke: '#e2e8f0' }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8', fontFamily: 'var(--font-mono)' }}
                   axisLine={false} tickLine={false} width={60}
                   tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
                 <Tooltip
                   contentStyle={{
-                    background: '#0d1117', border: '1px solid #1e2d3d', borderRadius: '4px',
-                    fontSize: '11px', fontFamily: 'var(--font-mono)', color: '#e6edf3',
+                    background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(12px)',
+                    border: '1px solid rgba(0,0,0,0.06)', borderRadius: '10px',
+                    fontSize: '12px', fontFamily: 'var(--font-mono)', color: '#1e293b',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
                   }}
                   formatter={(v: number) => [`$${v.toFixed(2)}`, 'Equity']}
                 />
-                <Area type="monotone" dataKey="equity" stroke="#ff8c00" strokeWidth={1.5}
+                <Area type="monotone" dataKey="equity" stroke="#6366f1" strokeWidth={2}
                   fill="url(#eqGrad)" dot={false} />
               </AreaChart>
             </ResponsiveContainer>
@@ -107,10 +109,10 @@ export function PortfolioOverview() {
       <div className="po-section">
         <h3>EXCHANGE POSITIONS</h3>
         <div className="po-exchange-cards">
-          <ExchangeCard name="KRAKEN" color="#ff8c00"
+          <ExchangeCard name="KRAKEN" color="#3b82f6"
             equity={global?.krakenEquity || 0} pnl={global?.krakenPnl || 0}
             state={engines.kraken?.state || 'IDLE'} mode={engines.kraken?.mode || 'SIMULATION'} />
-          <ExchangeCard name="CRYPTO.COM" color="#58a6ff"
+          <ExchangeCard name="CRYPTO.COM" color="#8b5cf6"
             equity={global?.cryptoComEquity || 0} pnl={global?.cryptoComPnl || 0}
             state={engines['crypto.com']?.state || 'IDLE'} mode={engines['crypto.com']?.mode || 'SIMULATION'} />
         </div>
@@ -190,7 +192,7 @@ function RevenueCard({ title, icon, status, active, detail }: {
   return (
     <div className="po-revenue-card">
       <div className="po-revenue-header">
-        <span style={{ color: 'var(--text-header)', fontSize: '10px', fontWeight: 700, background: 'var(--amber-bg)', padding: '1px 4px', borderRadius: '2px' }}>{icon}</span>
+        <span style={{ color: '#6366f1', fontSize: '10px', fontWeight: 700, background: 'rgba(99,102,241,0.1)', padding: '2px 6px', borderRadius: '6px' }}>{icon}</span>
         <span>{title}</span>
       </div>
       <div className="po-revenue-body">

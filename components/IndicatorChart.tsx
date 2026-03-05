@@ -22,8 +22,8 @@ const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     const time = new Date(label).toLocaleTimeString();
     return (
-      <div className="bg-gray-700/80 backdrop-blur-sm p-3 border border-gray-600 rounded-lg shadow-lg">
-        <p className="text-sm text-gray-400">{`Time: ${time}`}</p>
+      <div className="bg-white/90 backdrop-blur-md p-3 border border-black/6 rounded-xl shadow-lg">
+        <p className="text-sm text-slate-500">{`Time: ${time}`}</p>
         {payload.map((p: any) => (
           <p key={p.dataKey} style={{ color: p.color }} className="font-semibold">
             {`${p.name}: ${typeof p.value === 'number' ? p.value.toFixed(2) : 'N/A'}`}
@@ -39,7 +39,7 @@ const IndicatorChartComponent: React.FC<IndicatorChartProps> = ({
     candles, tcSeries, breakoutSeries, whaleSeries, momentumSeries, srLevels, trades: _trades, bollingerBands, vwap, ma50, ma200
 }) => {
   if (!candles || candles.length === 0) {
-    return <div className="flex items-center justify-center h-full text-gray-500">Loading chart data...</div>;
+    return <div className="flex items-center justify-center h-full text-slate-400">Loading chart data...</div>;
   }
   
   const combinedData = candles.map((d, i) => ({
@@ -69,9 +69,9 @@ const IndicatorChartComponent: React.FC<IndicatorChartProps> = ({
             <linearGradient id="colorTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#38bdf8" stopOpacity={0.5}/><stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/></linearGradient>
             <linearGradient id="bb" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#a78bfa" stopOpacity={0.2}/><stop offset="95%" stopColor="#a78bfa" stopOpacity={0}/></linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="#4a5568" />
-        <XAxis dataKey="time" tickFormatter={(time) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
-        <YAxis yAxisId="right" orientation="right" domain={priceDomain} stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `$${Number(value).toFixed(2)}`}/>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis dataKey="time" tickFormatter={(time) => new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
+        <YAxis yAxisId="right" orientation="right" domain={priceDomain} stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `$${Number(value).toFixed(2)}`}/>
         
         <Tooltip content={<CustomTooltip />} />
         <Legend verticalAlign="top" height={36} iconType="plainline" />
