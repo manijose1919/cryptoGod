@@ -4339,15 +4339,16 @@ const startServer = async () => {
         try { cleanupOldData(90); } catch (e) { console.warn('[DB Cleanup] Error:', e.message); }
     }, 7 * 24 * 60 * 60 * 1000);
 
-    // Start continuous backtester (Batch 4C)
-    if (continuousBacktester) {
-        try {
-            continuousBacktester.start();
-            console.log('[Server] Continuous backtester started');
-        } catch (e) {
-            console.warn('[Server] Continuous backtester start failed:', e.message);
-        }
-    }
+    // Start continuous backtester (Batch 4C) — DISABLED: blocks event loop synchronously
+    // if (continuousBacktester) {
+    //     try {
+    //         continuousBacktester.start();
+    //         console.log('[Server] Continuous backtester started');
+    //     } catch (e) {
+    //         console.warn('[Server] Continuous backtester start failed:', e.message);
+    //     }
+    // }
+    console.log('[Server] Continuous backtester disabled (event loop blocking)');
 
     const scanner = new SignalScanner(
         async (ticker, timeframe) => await getMarketData(ticker, timeframe, 100),
