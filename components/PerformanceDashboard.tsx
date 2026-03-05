@@ -87,7 +87,7 @@ export const PerformanceDashboard: React.FC = () => {
   const equityRange = maxEquity - minEquity || 1;
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white font-sans">
+    <div className="min-h-screen bg-gray-900 font-sans" style={{ color: 'var(--text-primary)' }}>
       {/* Nav */}
       <nav className="flex items-center gap-4 p-4 border-b border-gray-700/50">
         {NAV_LINKS.map(link => (

@@ -14,6 +14,22 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Remap gray scale to CSS variables — inverted for light-first theme
+        // In :root (light): gray-900 = white, gray-800 = near-white, etc.
+        // In .dark: gray-900 = dark slate, gray-800 = dark, etc.
+        gray: {
+          50:  'rgb(var(--color-gray-50) / <alpha-value>)',
+          100: 'rgb(var(--color-gray-100) / <alpha-value>)',
+          200: 'rgb(var(--color-gray-200) / <alpha-value>)',
+          300: 'rgb(var(--color-gray-300) / <alpha-value>)',
+          400: 'rgb(var(--color-gray-400) / <alpha-value>)',
+          500: 'rgb(var(--color-gray-500) / <alpha-value>)',
+          600: 'rgb(var(--color-gray-600) / <alpha-value>)',
+          700: 'rgb(var(--color-gray-700) / <alpha-value>)',
+          800: 'rgb(var(--color-gray-800) / <alpha-value>)',
+          900: 'rgb(var(--color-gray-900) / <alpha-value>)',
+          950: 'rgb(var(--color-gray-950) / <alpha-value>)',
+        },
         brand: {
           cyan: '#06b6d4',
           blue: '#3b82f6',
@@ -90,8 +106,8 @@ export default {
         xs: '2px',
       },
       boxShadow: {
-        'glass': '0 8px 32px rgba(0, 0, 0, 0.3)',
-        'glass-sm': '0 4px 16px rgba(0, 0, 0, 0.2)',
+        'glass': '0 8px 32px rgba(0, 0, 0, 0.1)',
+        'glass-sm': '0 4px 16px rgba(0, 0, 0, 0.06)',
         'glow-cyan': '0 0 15px rgba(6, 182, 212, 0.4)',
         'glow-blue': '0 0 15px rgba(59, 130, 246, 0.4)',
         'glow-purple': '0 0 15px rgba(139, 92, 246, 0.4)',
@@ -101,9 +117,9 @@ export default {
       },
       backgroundImage: {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
-        'gradient-brand': 'linear-gradient(135deg, #06b6d4, #3b82f6, #8b5cf6)',
+        'gradient-brand': 'linear-gradient(135deg, #6366f1, #8b5cf6)',
         'gradient-dark': 'linear-gradient(180deg, #0f172a, #020617)',
-        'gradient-card': 'linear-gradient(135deg, rgba(15, 23, 42, 0.8), rgba(30, 41, 59, 0.4))',
+        'gradient-card': 'linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(248, 250, 252, 0.5))',
       },
       borderRadius: {
         'xl': '1rem',
