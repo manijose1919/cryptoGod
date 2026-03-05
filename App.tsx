@@ -90,10 +90,10 @@ function AppContent() {
 
     if (isLoading) {
         return (
-            <div className="flex items-center justify-center h-screen bg-gray-900 text-white">
+            <div className="flex items-center justify-center h-screen">
                 <div className="text-center">
-                    <div className="text-2xl">Initializing market data stream...</div>
-                    <div className="text-xs text-gray-400 mt-4 max-w-md">
+                    <div className="text-2xl text-[var(--text-primary)]">Initializing market data stream...</div>
+                    <div className="text-xs text-[var(--text-muted)] mt-4 max-w-md">
                         Disclaimer: This is a simulation. Real trading involves significant risk. Not financial advice.
                     </div>
                 </div>
@@ -103,11 +103,11 @@ function AppContent() {
 
     if (error) {
         return (
-            <div className="flex items-center justify-center h-screen bg-red-900/50 text-white p-8">
-                <div className="text-center">
-                    <h2 className="text-2xl font-bold mb-4 text-red-300">Application Error</h2>
-                    <p className="text-lg text-red-200">{error}</p>
-                    <button onClick={() => window.location.reload()} className="mt-6 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+            <div className="flex items-center justify-center h-screen p-8">
+                <div className="text-center glass-card p-8">
+                    <h2 className="text-2xl font-bold mb-4 text-[var(--red)]">Application Error</h2>
+                    <p className="text-lg text-[var(--text-secondary)]">{error}</p>
+                    <button onClick={() => window.location.reload()} className="mt-6 btn-danger font-bold py-2 px-6">
                         Reload Application
                     </button>
                 </div>
@@ -116,7 +116,7 @@ function AppContent() {
     }
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white font-sans dot-grid-bg">
+        <div className="min-h-screen font-sans dot-grid-bg" style={{ color: 'var(--text-primary)' }}>
             {isAuthModalOpen && (
                 <RealTradingModal
                     onClose={() => setIsAuthModalOpen(false)}
@@ -132,7 +132,7 @@ function AppContent() {
             />
 
             {showReconnect && !isBotActive && (
-                <div className="fixed inset-0 z-50 bg-gray-900/95 flex items-center justify-center">
+                <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)' }}>
                     <SessionReconnect
                         onReconnect={() => {
                             setShowReconnect(false);

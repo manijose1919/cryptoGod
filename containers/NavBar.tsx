@@ -44,7 +44,7 @@ export function NavBar({ onOpenHistory }: NavBarProps) {
     }, [ws]);
 
     return (
-        <nav className="flex items-center justify-between px-4 py-2 border-b border-gray-700/50 bg-gray-900/80">
+        <nav className="flex items-center justify-between px-4 py-2" style={{ background: 'var(--bg-secondary)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--border-primary)' }}>
             <div className="flex items-center gap-3">
                 {[
                     { href: '/', label: 'Crypto', active: true },
@@ -55,25 +55,29 @@ export function NavBar({ onOpenHistory }: NavBarProps) {
                     { href: '/training', label: 'Training' },
                 ].map(link => (
                     <a key={link.href} href={link.href}
-                        className={`text-xs px-2 py-1 rounded ${link.active ? 'bg-cyan-800/50 text-cyan-300' : 'text-gray-400 hover:text-white'}`}>
+                        className="text-xs px-3 py-1 rounded-lg transition-colors"
+                        style={link.active
+                            ? { background: 'rgba(99,102,241,0.1)', color: 'var(--text-header)', fontWeight: 600 }
+                            : { color: 'var(--text-secondary)' }}>
                         {link.label}
                     </a>
                 ))}
                 <button
                     onClick={onOpenHistory}
-                    className="text-xs px-2 py-1 rounded text-gray-400 hover:text-white hover:bg-gray-700/50 transition-colors"
+                    className="text-xs px-3 py-1 rounded-lg transition-colors"
+                    style={{ color: 'var(--text-secondary)' }}
                 >
                     History
                 </button>
             </div>
-            <div className="flex items-center gap-3 text-[10px] text-gray-500">
+            <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                 <span className="flex items-center gap-1" title={`WebSocket ${wsStatus}`}>
                     <span className={`w-2 h-2 rounded-full ${wsStatus === 'connected' ? 'bg-green-500' : 'bg-red-500'}`} />
                     WS
                 </span>
                 {isBotActive && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />Bot Active</span>}
                 <span>{Object.keys(portfolio.positions).length} positions</span>
-                {elapsed && <span className="text-gray-400">{elapsed}</span>}
+                {elapsed && <span style={{ color: 'var(--text-muted)' }}>{elapsed}</span>}
             </div>
         </nav>
     );
