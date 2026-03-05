@@ -49,6 +49,8 @@ export const HistoricalTrainingDashboard: React.FC = () => {
   const [equityCurve, setEquityCurve] = useState<TrainingEquityPoint[]>([]);
   const [applying, setApplying] = useState(false);
   const [applyResult, setApplyResult] = useState<string | null>(null);
+  const [distilling, setDistilling] = useState(false);
+  const [distillResult, setDistillResult] = useState<string | null>(null);
 
   // Walk-forward state
   const [wfStatus, setWfStatus] = useState<WalkForwardStatus | null>(null);
@@ -209,6 +211,23 @@ export const HistoricalTrainingDashboard: React.FC = () => {
       setApplyResult(`Error: ${e.message}`);
     } finally {
       setApplying(false);
+    }
+  };
+
+  const handleDistill = async (profitFocused = false) => {
+    if (!selectedRun) return;
+    setDistilling(true);
+    setDistillResult(null);
+    try {
+      const result = await api.distillSeed(selectedRun, { amplifyBigWins: true, profitFocused });
+      setDistillResult(`Distilled → ${result.runId.slice(0, 20)}...`);
+      // Refresh runs list
+      const r = await api.getTrainingRuns();
+      setRuns(r);
+    } catch (e: any) {
+      setDistillResult(`Error: ${e.message}`);
+    } finally {
+      setDistilling(false);
     }
   };
 
@@ -910,18 +929,34 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* Apply button */}
-              <div className="flex items-center gap-4 pt-2">
+              {/* Action buttons */}
+              <div className="flex flex-wrap items-center gap-3 pt-2">
                 <button
                   onClick={handleApply}
                   disabled={applying || results.run.status !== 'completed'}
-                  className="px-6 py-2 rounded text-sm font-medium bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 transition-colors"
+                  className="px-5 py-2 rounded text-sm font-medium bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 transition-colors"
                 >
-                  {applying ? 'Applying...' : 'Apply to Live System'}
+                  {applying ? 'Applying...' : 'Apply to Live'}
                 </button>
-                {applyResult && (
-                  <span className={`text-sm ${applyResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
-                    {applyResult}
+                <button
+                  onClick={() => handleDistill(false)}
+                  disabled={distilling || results.run.status !== 'completed'}
+                  className="px-5 py-2 rounded text-sm font-medium bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 disabled:text-gray-500 transition-colors"
+                  title="Create a winners-only distilled seed from this run"
+                >
+                  {distilling ? 'Distilling...' : 'Distill Seed'}
+                </button>
+                <button
+                  onClick={() => handleDistill(true)}
+                  disabled={distilling || results.run.status !== 'completed'}
+                  className="px-5 py-2 rounded text-sm font-medium bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-gray-500 transition-colors"
+                  title="Distill with profit-focused filtering (keeps only high-PnL combos)"
+                >
+                  {distilling ? 'Distilling...' : 'Distill (Profit)'}
+                </button>
+                {(applyResult || distillResult) && (
+                  <span className={`text-sm ${(applyResult || distillResult || '').startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                    {applyResult || distillResult}
                   </span>
                 )}
               </div>

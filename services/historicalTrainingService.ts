@@ -116,6 +116,16 @@ export async function applyTrainedState(runId: string, components?: string[]) {
   }>('/apply', { runId, components });
 }
 
+// --- Seed Operations ---
+
+export async function distillSeed(runId: string, options?: { minProfitPct?: number; amplifyBigWins?: boolean; profitFocused?: boolean }) {
+  return apiPost<{ success: boolean; runId: string; stats: Record<string, unknown> }>('/distill', { runId, ...options });
+}
+
+export async function breedSeeds(seedIds: string[], options?: { consensusThreshold?: number }) {
+  return apiPost<{ success: boolean; runId: string; stats: Record<string, unknown> }>('/breed', { seedIds, ...options });
+}
+
 // --- Walk-Forward Validation ---
 
 export async function startWalkForward(config?: WalkForwardConfig) {
