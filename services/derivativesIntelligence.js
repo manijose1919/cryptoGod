@@ -22,8 +22,10 @@ const CACHE_TTL_MS = 4 * 60 * 1000;     // Cache valid for 4 minutes
 
 // CoinGlass free API (no key required for basic endpoints)
 const COINGLASS_BASE = 'https://open-api-v3.coinglass.com/api';
-// Alternative free sources
+// Binance Futures (may be geo-blocked in Canada)
 const ALTERNATIVE_BASE = 'https://fapi.binance.com';
+// #14: OKX fallback (not geo-blocked)
+const OKX_BASE = 'https://www.okx.com';
 
 // Supported tickers for derivatives data
 const DERIVATIVES_TICKERS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'LINK', 'DOT', 'AVAX', 'BNB'];
@@ -52,27 +54,63 @@ let lastPollTime = 0;
 
 // ─── Fetch Functions ─────────────────────────────────────────
 
+// ─── OKX Fallback Functions (#14) ─────────────────────────────
+
+async function fetchFundingRateOKX(symbol) {
+  try {
+    const instId = `${symbol}-USDT-SWAP`;
+    const resp = await fetch(`${OKX_BASE}/api/v5/public/funding-rate?instId=${instId}`, { timeout: 5000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data?.data?.[0]) return null;
+    const rate = parseFloat(data.data[0].fundingRate);
+    return {
+      fundingRate: rate,
+      fundingRateAnnualized: rate * 3 * 365 * 100,
+      fundingTime: parseInt(data.data[0].fundingTime),
+      source: 'okx',
+    };
+  } catch { return null; }
+}
+
+async function fetchOpenInterestOKX(symbol) {
+  try {
+    const instId = `${symbol}-USDT-SWAP`;
+    const resp = await fetch(`${OKX_BASE}/api/v5/public/open-interest?instType=SWAP&instId=${instId}`, { timeout: 5000 });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (!data?.data?.[0]) return null;
+    return {
+      openInterest: parseFloat(data.data[0].oi || 0),
+      symbol: instId,
+      source: 'okx',
+    };
+  } catch { return null; }
+}
+
+// ─── Binance Functions (with OKX fallback) ───────────────────
+
 /**
- * Fetch funding rate from Binance Futures (free, no key).
- * Binance has the most liquid perp markets — funding rates are representative.
+ * Fetch funding rate — tries Binance first, falls back to OKX on 451/error.
  */
 async function fetchFundingRate(symbol) {
   try {
     const url = `${ALTERNATIVE_BASE}/fapi/v1/fundingRate?symbol=${symbol}USDT&limit=1`;
     const resp = await fetch(url, { timeout: 5000 });
-    if (!resp.ok) return null;
+    if (resp.status === 451 || !resp.ok) return fetchFundingRateOKX(symbol);
     const data = await resp.json();
-    if (!data || data.length === 0) return null;
+    if (!data || data.length === 0) return fetchFundingRateOKX(symbol);
 
     const rate = parseFloat(data[0].fundingRate);
     return {
       fundingRate: rate,
-      fundingRateAnnualized: rate * 3 * 365 * 100, // 8h periods × 365 days × 100 for %
+      fundingRateAnnualized: rate * 3 * 365 * 100,
       fundingTime: data[0].fundingTime,
+      source: 'binance',
     };
   } catch (err) {
-    console.warn(`[DerivativesIntel] Funding rate fetch failed for ${symbol}:`, err.message);
-    return null;
+    // Binance failed — try OKX
+    return fetchFundingRateOKX(symbol);
   }
 }
 
@@ -83,16 +121,16 @@ async function fetchOpenInterest(symbol) {
   try {
     const url = `${ALTERNATIVE_BASE}/fapi/v1/openInterest?symbol=${symbol}USDT`;
     const resp = await fetch(url, { timeout: 5000 });
-    if (!resp.ok) return null;
+    if (resp.status === 451 || !resp.ok) return fetchOpenInterestOKX(symbol);
     const data = await resp.json();
 
     return {
       openInterest: parseFloat(data.openInterest || 0),
       symbol: data.symbol,
+      source: 'binance',
     };
   } catch (err) {
-    console.warn(`[DerivativesIntel] OI fetch failed for ${symbol}:`, err.message);
-    return null;
+    return fetchOpenInterestOKX(symbol);
   }
 }
 
@@ -408,6 +446,42 @@ export function getDerivativesStatus() {
   };
 }
 
+/**
+ * #10 — Get estimated liquidation levels for a ticker.
+ * Uses funding rate extremes and OI concentration as proxies.
+ */
+export function getLiquidationLevels(ticker) {
+  const base = ticker.replace('USD', '').replace('USDT', '');
+  const entry = cache.get(base);
+  if (!entry) return { ticker, levels: [], available: false };
+
+  const data = entry.data;
+  const currentPrice = data.spotPrice || 0;
+  if (!currentPrice) return { ticker, levels: [], available: false };
+
+  // Estimate liquidation clusters from funding rate magnitude and OI
+  // High positive funding → longs crowded → liquidations below
+  // High negative funding → shorts crowded → liquidations above
+  const funding = data.fundingRateAnnualized || 0;
+  const levels = [];
+
+  // Long liquidation zones (below price)
+  for (const pct of [0.03, 0.05, 0.08, 0.12]) {
+    const price = currentPrice * (1 - pct);
+    const intensity = Math.max(0, funding / 50) * (1 / pct); // Higher funding = more longs = more liquidation risk
+    levels.push({ price, type: 'long_liquidation', percentFromPrice: -pct * 100, intensity: Math.min(intensity, 1) });
+  }
+
+  // Short liquidation zones (above price)
+  for (const pct of [0.03, 0.05, 0.08, 0.12]) {
+    const price = currentPrice * (1 + pct);
+    const intensity = Math.max(0, -funding / 50) * (1 / pct);
+    levels.push({ price, type: 'short_liquidation', percentFromPrice: pct * 100, intensity: Math.min(intensity, 1) });
+  }
+
+  return { ticker, currentPrice, levels, fundingRate: funding, available: true };
+}
+
 export default {
   startDerivativesPolling,
   stopDerivativesPolling,
@@ -417,4 +491,5 @@ export default {
   shouldFavorShortEntry,
   getAllDerivativesData,
   getDerivativesStatus,
+  getLiquidationLevels,
 };

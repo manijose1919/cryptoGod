@@ -11,16 +11,16 @@
  */
 
 import type { Trade, TradingStrategy, Candle } from '../types';
-import {
-  saveTradeMemory,
-  loadTradeMemory,
-  toTradeMemoryFormat,
-  saveLearnedPattern,
-  loadLearnedPatterns,
-  toLearnedPatternFormat,
-  saveParameterAdjustments,
-  loadLatestParameters,
-} from './persistenceService';
+// Persistence stubs — persistenceService was removed (backend SQLite handles real persistence).
+// These no-ops keep aiLearningService functional with in-memory-only storage.
+const saveTradeMemory = async (_data: Record<string, unknown>) => {};
+const loadTradeMemory = async (_limit: number) => ({ memories: [] as Record<string, unknown>[] });
+const toTradeMemoryFormat = (m: Record<string, unknown>) => m as unknown as TradeMemory;
+const saveLearnedPattern = async (_p: unknown) => {};
+const loadLearnedPatterns = async () => ({ patterns: [] as Record<string, unknown>[] });
+const toLearnedPatternFormat = (p: Record<string, unknown>) => p as unknown as LearnedPattern;
+const saveParameterAdjustments = async (_data: Record<string, unknown>) => {};
+const loadLatestParameters = async () => ({ latest: null as { params_json?: string } | null });
 
 // ============================================
 // TYPES

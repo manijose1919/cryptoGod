@@ -113,6 +113,13 @@ import createConfigRouter from './routes/config.js';
 import createBacktestRouter from './routes/backtest.js';
 import createMultiExchangeRouter from './routes/multiExchange.js';
 import createEngineRouter from './routes/engines.js';
+import createNewsRouter from './routes/news.js';
+
+// Discord Webhook
+import { initDiscord, sendDiscordAlert, alertTradeExecution as discordAlertTrade, alertDrawdown as discordAlertDrawdown, alertCircuitBreaker as discordAlertCB, alertSessionSummary as discordAlertSummary } from './services/discordWebhook.js';
+
+// API Key Health Monitor
+import { initApiKeyHealthMonitor, getApiKeyHealth } from './services/apiKeyHealthMonitor.js';
 
 // ─── Core V2 Modules (Overhaul) ─────────────────────────────
 import tradingBus from './core/eventBus.ts';
@@ -2737,12 +2744,36 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
             }
 
             // Try limit order if adapter supports it and spread is wide enough
-            if (adapter.getMakerFeePercent && adapter.placeLimitBuyOrder) {
+            // #16: Prefer post-only (maker) orders when flag is set — saves 0.10% per side
+            const preferMaker = getFlag('PREFER_MAKER_ORDERS') && adapter.placePostOnlyBuy;
+            if (adapter.getMakerFeePercent && (adapter.placeLimitBuyOrder || preferMaker)) {
                 try {
                     const limitPrice = adaptiveLimitPrice; // Use order-book-informed price
                     const vol = notional / limitPrice;
 
-                    const limitOrder = await withTimeout(adapter.placeLimitBuyOrder(ticker, limitPrice, vol, botState.sessionId), 20000, 'placeLimitBuyOrder');
+                    let limitOrder;
+                    if (preferMaker) {
+                        try {
+                            limitOrder = await withTimeout(adapter.placePostOnlyBuy(ticker, limitPrice, vol, botState.sessionId), 20000, 'placePostOnlyBuy');
+                            addLog(`[MAKER] Post-only buy placed for ${ticker} @ ${limitPrice.toFixed(2)} (saving 0.10%/side)`, 'INFO');
+                        } catch (postOnlyErr) {
+                            // Post-only rejected (would cross spread) — retry at best bid
+                            if (orderBook?.bids?.[0]) {
+                                const bestBid = parseFloat(orderBook.bids[0][0] || orderBook.bids[0].price || 0);
+                                if (bestBid > 0) {
+                                    try {
+                                        limitOrder = await withTimeout(adapter.placePostOnlyBuy(ticker, bestBid, vol, botState.sessionId), 20000, 'placePostOnlyBuy-retry');
+                                    } catch { /* fall through to regular limit */ }
+                                }
+                            }
+                            if (!limitOrder) {
+                                addLog(`[MAKER] Post-only rejected, using limit order`, 'INFO');
+                                limitOrder = await withTimeout(adapter.placeLimitBuyOrder(ticker, limitPrice, vol, botState.sessionId), 20000, 'placeLimitBuyOrder');
+                            }
+                        }
+                    } else {
+                        limitOrder = await withTimeout(adapter.placeLimitBuyOrder(ticker, limitPrice, vol, botState.sessionId), 20000, 'placeLimitBuyOrder');
+                    }
 
                     // Wait up to 10s for fill
                     let filled = false;
@@ -2875,19 +2906,38 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         if (botState.tradingMode !== 'SIMULATION' && getActiveExchangeId() === 'kraken') {
             try {
                 const adapter = getExchangeAdapter();
-                // Emergency SL: 5% below entry (wide enough to avoid noise, tight enough to protect)
-                // Will be tightened by refreshExitLevels() once ATR data is available
-                const emergencySlPct = 0.05;
-                const slPrice = parseFloat(avgPrice) * (1 - emergencySlPct);
-                const slResult = await adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId);
-                if (slResult.orderId) {
-                    nativeStopOrders.set(ticker, {
-                        orderId: slResult.orderId,
-                        stopPrice: slPrice,
-                        volume: parseFloat(quantity),
-                        placedAt: Date.now(),
-                    });
-                    addLog(`[NATIVE-SL] Placed exchange stop-loss for ${ticker}: ${slResult.orderId} @ $${slPrice.toFixed(2)} (-${(emergencySlPct * 100).toFixed(1)}%)`, 'INFO');
+
+                // #12: Use trailing stop if enabled, otherwise fixed stop-loss
+                if (getFlag('NATIVE_TRAILING_STOP') && adapter.placeTrailingStop) {
+                    const trailPct = 0.03; // 3% trail offset
+                    const trailOffset = parseFloat(avgPrice) * trailPct;
+                    const tsResult = await adapter.placeTrailingStop(ticker, parseFloat(quantity), trailOffset, botState.sessionId);
+                    if (tsResult.orderId) {
+                        nativeStopOrders.set(ticker, {
+                            orderId: tsResult.orderId,
+                            type: 'trailing-stop',
+                            trailOffset,
+                            volume: parseFloat(quantity),
+                            placedAt: Date.now(),
+                        });
+                        addLog(`[NATIVE-TS] Placed trailing stop for ${ticker}: ${tsResult.orderId} offset=$${trailOffset.toFixed(2)} (-${(trailPct * 100).toFixed(1)}%)`, 'INFO');
+                    }
+                } else {
+                    // Emergency SL: 5% below entry (wide enough to avoid noise, tight enough to protect)
+                    // Will be tightened by refreshExitLevels() once ATR data is available
+                    const emergencySlPct = 0.05;
+                    const slPrice = parseFloat(avgPrice) * (1 - emergencySlPct);
+                    const slResult = await adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId);
+                    if (slResult.orderId) {
+                        nativeStopOrders.set(ticker, {
+                            orderId: slResult.orderId,
+                            type: 'stop-loss',
+                            stopPrice: slPrice,
+                            volume: parseFloat(quantity),
+                            placedAt: Date.now(),
+                        });
+                        addLog(`[NATIVE-SL] Placed exchange stop-loss for ${ticker}: ${slResult.orderId} @ $${slPrice.toFixed(2)} (-${(emergencySlPct * 100).toFixed(1)}%)`, 'INFO');
+                    }
                 }
             } catch (slErr) {
                 addLog(`[NATIVE-SL] Failed to place stop-loss for ${ticker}: ${slErr.message}`, 'WARN');
@@ -2920,6 +2970,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         });
 
         if (telegramEnabled()) alertTradeExecution({ type: 'BUY', ticker, price: parseFloat(avgPrice), strategy, pnl: null });
+        discordAlertTrade({ type: 'BUY', ticker, price: parseFloat(avgPrice), strategy, pnl: null });
         saveSessionState();
         return { success: true };
     } catch (error) {
@@ -3053,6 +3104,7 @@ const handleSell = async (position, price, reason) => {
         });
 
         if (telegramEnabled()) alertTradeExecution({ type: 'SELL', ticker: position.ticker, price: avgPrice, strategy: position.entryStrategy, pnl });
+        discordAlertTrade({ type: 'SELL', ticker: position.ticker, price: avgPrice, strategy: position.entryStrategy, pnl });
 
         // Emit EventBus exit event for Core V2 modules
         try {
@@ -3398,10 +3450,21 @@ app.use('/api', createConfigRouter(ctx));
 app.use('/api', createBacktestRouter(ctx));
 app.use('/api', createMultiExchangeRouter(ctx));
 app.use('/api', createEngineRouter(ctx));
+app.use('/api', createNewsRouter(ctx));
 
 // ─── Health & Monitoring Endpoints ──────────────────────────
+const SERVER_STARTED_AT = new Date().toISOString();
+let serverRestartCount = parseInt(process.env.PM2_RESTART_COUNT || '0', 10);
+
 app.get('/api/health', (req, res) => {
-    res.json(healthMonitor.getStatus());
+    const base = healthMonitor.getStatus();
+    res.json({
+        ...base,
+        startedAt: SERVER_STARTED_AT,
+        restartCount: serverRestartCount,
+        lastRestartReason: process.env.PM2_RESTART_REASON || 'manual',
+        nodeVersion: process.version,
+    });
 });
 
 app.get('/api/health/detailed', (req, res) => {
@@ -3409,6 +3472,8 @@ app.get('/api/health/detailed', (req, res) => {
         health: healthMonitor.getSnapshot(),
         dbBatcher: dbBatcher.getStats(),
         logs: logger.getStats(),
+        startedAt: SERVER_STARTED_AT,
+        restartCount: serverRestartCount,
     });
 });
 
@@ -3416,6 +3481,40 @@ app.get('/api/logs/recent', (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
     const level = req.query.level || undefined;
     res.json(logger.getRecentLogs(limit, level));
+});
+
+// #28 — Log Level Toggle API
+app.get('/api/log-level', (req, res) => {
+    res.json({ level: logger.getStats().minLevel });
+});
+
+app.post('/api/log-level', (req, res) => {
+    const { level } = req.body;
+    const valid = ['DEBUG', 'INFO', 'WARN', 'ERROR'];
+    if (!valid.includes(level)) {
+        return res.status(400).json({ error: `Invalid level. Must be one of: ${valid.join(', ')}` });
+    }
+    logger.setLevel(level);
+    res.json({ level, message: `Log level set to ${level}` });
+});
+
+// #7 — Discord Webhook API
+app.post('/api/discord/test', async (req, res) => {
+    try {
+        const { sendTestMessage: discordTest } = await import('./services/discordWebhook.js');
+        await discordTest();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+app.get('/api/discord/status', (req, res) => {
+    import('./services/discordWebhook.js').then(m => res.json(m.getStatus())).catch(() => res.json({ enabled: false }));
+});
+
+// #13 — API Key Health Monitor
+app.get('/api/api-health', (req, res) => {
+    res.json(getApiKeyHealth());
 });
 
 // Tier 1: Derivatives Intelligence API
@@ -3437,6 +3536,12 @@ app.get('/api/derivatives/block-check/:ticker', (req, res) => {
     const longBlock = derivativesIntel.shouldBlockLongEntry(req.params.ticker);
     const shortFavor = derivativesIntel.shouldFavorShortEntry(req.params.ticker);
     res.json({ long: longBlock, short: shortFavor });
+});
+
+// #10 — Liquidation Levels
+app.get('/api/derivatives/liquidation-levels/:ticker', (req, res) => {
+    if (!derivativesIntel) return res.json({ available: false });
+    res.json(derivativesIntel.getLiquidationLevels(req.params.ticker));
 });
 
 // Tier 1: Fear & Greed Gate API
@@ -3534,6 +3639,211 @@ app.get('/api/native-sl/status', (req, res) => {
     res.json({ count: orders.length, orders });
 });
 
+// ─── Phase 3: Price Alerts, DCA, Reports, Staking, Funding, Regime ────────
+
+// #6 — Price Alert API
+app.post('/api/alerts', async (req, res) => {
+    try {
+        const { ticker, condition, targetPrice } = req.body;
+        const { createAlert } = await import('./services/priceAlertService.js');
+        const alert = createAlert(ticker, condition, targetPrice);
+        res.json(alert);
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+app.get('/api/alerts', async (req, res) => {
+    try {
+        const { listAlerts } = await import('./services/priceAlertService.js');
+        res.json(listAlerts());
+    } catch (e) {
+        res.json([]);
+    }
+});
+app.delete('/api/alerts/:id', async (req, res) => {
+    try {
+        const { deleteAlert } = await import('./services/priceAlertService.js');
+        deleteAlert(parseInt(req.params.id));
+        res.json({ success: true });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// #8 — Scheduled Reports
+app.post('/api/reports/generate', async (req, res) => {
+    try {
+        const { generateDailyReport } = await import('./services/scheduledReports.js');
+        const report = generateDailyReport();
+        res.json(report || { error: 'No data' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.get('/api/reports/latest', async (req, res) => {
+    try {
+        const { getLatestReport } = await import('./services/scheduledReports.js');
+        res.json(getLatestReport() || {});
+    } catch (e) {
+        res.json({});
+    }
+});
+
+// #9 — DCA Scheduler
+app.post('/api/dca/schedule', async (req, res) => {
+    try {
+        const { createSchedule } = await import('./services/dcaScheduler.js');
+        const { ticker, amountUsd, intervalHours } = req.body;
+        res.json(createSchedule(ticker, amountUsd, intervalHours));
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+app.get('/api/dca/schedules', async (req, res) => {
+    try {
+        const { listSchedules } = await import('./services/dcaScheduler.js');
+        res.json(listSchedules());
+    } catch (e) {
+        res.json([]);
+    }
+});
+app.delete('/api/dca/:id', async (req, res) => {
+    try {
+        const { deleteSchedule } = await import('./services/dcaScheduler.js');
+        deleteSchedule(parseInt(req.params.id));
+        res.json({ success: true });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+app.put('/api/dca/:id/pause', async (req, res) => {
+    try {
+        const { pauseSchedule } = await import('./services/dcaScheduler.js');
+        pauseSchedule(parseInt(req.params.id));
+        res.json({ success: true });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// #19 — Staking API
+app.get('/api/staking/status', (req, res) => {
+    try {
+        res.json(stakingEngine.getStatus());
+    } catch {
+        res.json({ enabled: false });
+    }
+});
+app.post('/api/staking/toggle', (req, res) => {
+    try {
+        const { enabled } = req.body;
+        stakingEngine.setEnabled(!!enabled);
+        res.json({ enabled: !!enabled });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// #20 — Funding Rate Comparison
+app.get('/api/funding-rates/compare', async (req, res) => {
+    try {
+        let rates = [];
+        if (derivativesIntel) {
+            const allData = derivativesIntel.getAllDerivativesData();
+            rates = Object.entries(allData).map(([ticker, data]) => ({
+                ticker,
+                rate: data?.fundingRate || 0,
+                annualized: (data?.fundingRate || 0) * 3 * 365 * 100,
+                exchange: 'OKX/Binance',
+                basis: data?.basis || null,
+            }));
+        }
+        res.json({ rates });
+    } catch (e) {
+        res.json({ rates: [] });
+    }
+});
+
+// #3 — Portfolio Rebalancer
+app.post('/api/rebalance/targets', async (req, res) => {
+    try {
+        const { setTargets } = await import('./services/portfolioRebalancer.js');
+        setTargets(req.body);
+        res.json({ success: true, targets: req.body });
+    } catch (e) {
+        res.status(400).json({ error: e.message });
+    }
+});
+app.get('/api/rebalance/status', async (req, res) => {
+    try {
+        const { getRebalanceStatus } = await import('./services/portfolioRebalancer.js');
+        res.json(getRebalanceStatus());
+    } catch (e) {
+        res.json({ enabled: false });
+    }
+});
+app.post('/api/rebalance/execute', async (req, res) => {
+    try {
+        const { executeRebalance, isEnabled } = await import('./services/portfolioRebalancer.js');
+        if (!isEnabled()) return res.status(400).json({ error: 'Rebalancer is disabled. Set PORTFOLIO_REBALANCER_ENABLED flag.' });
+        const result = await executeRebalance(botState.sessionId);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// #4 — Trade Export & Tax Reporting
+app.get('/api/export/trades', async (req, res) => {
+    try {
+        const { format, from, to } = req.query;
+        const { exportTradesCSV, exportTradesJSON } = await import('./services/tradeExporter.js');
+        if (format === 'json') {
+            res.json(exportTradesJSON(from, to));
+        } else {
+            const csv = exportTradesCSV(from, to);
+            res.set('Content-Type', 'text/csv');
+            res.set('Content-Disposition', `attachment; filename="trades-export.csv"`);
+            res.send(csv);
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+app.get('/api/export/tax-report', async (req, res) => {
+    try {
+        const { year, format } = req.query;
+        const y = parseInt(year) || new Date().getFullYear();
+        const { generateTaxReport, generateTaxReportCSV } = await import('./services/tradeExporter.js');
+        if (format === 'csv') {
+            const csv = generateTaxReportCSV(y);
+            res.set('Content-Type', 'text/csv');
+            res.set('Content-Disposition', `attachment; filename="tax-report-${y}.csv"`);
+            res.send(csv);
+        } else {
+            res.json(generateTaxReport(y));
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// #18 — Regime endpoint for signals router
+app.get('/api/signals/regime', (req, res) => {
+    try {
+        const beastStatus = ctx.beastMode?.getBeastModeStatus?.();
+        const regimes = [];
+        if (beastStatus?.regimeCache) {
+            for (const [ticker, regime] of Object.entries(beastStatus.regimeCache)) {
+                regimes.push({ ticker, regime });
+            }
+        }
+        res.json({ regimes, beastMode: beastStatus?.enabled || false });
+    } catch {
+        res.json({ regimes: [] });
+    }
+});
+
 // Tier 2B: Position Reconciliation API
 app.post('/api/reconcile', async (req, res) => {
     if (!positionReconciler) return res.json({ error: 'Service unavailable' });
@@ -3578,6 +3888,38 @@ const startServer = async () => {
     markAbandonedSessions();
     initJournalTable();
     initTelegram();
+    initDiscord();
+    initApiKeyHealthMonitor();
+
+    // Phase 3: Price Alerts + DCA Scheduler
+    try {
+        const { initPriceAlerts, setPriceProvider, startAlertChecker } = await import('./services/priceAlertService.js');
+        initPriceAlerts();
+        setPriceProvider((ticker) => {
+            const ws = getWebSocketService();
+            return ws?.getPrice?.(ticker) || null;
+        });
+        startAlertChecker();
+    } catch (e) {
+        console.warn('[Server] PriceAlerts init failed:', e.message);
+    }
+
+    try {
+        const { initDCAScheduler, setDCAAdapter, startDCAChecker } = await import('./services/dcaScheduler.js');
+        initDCAScheduler();
+        setDCAAdapter(getExchangeAdapter());
+        startDCAChecker();
+    } catch (e) {
+        console.warn('[Server] DCA Scheduler init failed:', e.message);
+    }
+
+    // Phase 6: Portfolio Rebalancer
+    try {
+        const { initRebalancer } = await import('./services/portfolioRebalancer.js');
+        initRebalancer(getExchangeAdapter(), portfolio);
+    } catch (e) {
+        console.warn('[Server] Rebalancer init failed:', e.message);
+    }
 
     // Check exchange credentials at startup (no longer fatal — user can provide via login)
     if (getActiveExchangeId() === 'kraken') {
@@ -3823,8 +4165,13 @@ const startServer = async () => {
     // ─── Core V2 Module Initialization ─────────────────────────
     try {
         // Initialize TelegramV2 (subscribes to EventBus events)
-        if (telegramV2?.initTelegramV2) {
-            telegramV2.initTelegramV2();
+        if (telegramV2?.createTelegramV2) {
+            const tg2Instance = telegramV2.createTelegramV2();
+            // Register exchange adapter for /price, /alert, /dca commands
+            try {
+                const adapter = getExchangeAdapter();
+                if (adapter) tg2Instance.registerExchangeAdapter(adapter);
+            } catch {}
             console.log('[Server] TelegramV2 event-driven notifications initialized');
         }
     } catch (e) {
@@ -4016,15 +4363,54 @@ const startServer = async () => {
         restoreThoughts(sid);
     }
 
+    // #17 — Enhanced auto-resume: restore session ID from SQLite if not in memory
+    if (!botState.sessionId && restoredState?.wasActive) {
+        try {
+            const db = getDb();
+            const row = db.prepare("SELECT value FROM settings WHERE key = 'last_session_id'").get();
+            if (row?.value) {
+                botState.sessionId = row.value;
+                console.log(`[Server] Restored session ID from DB: ${row.value}`);
+            }
+        } catch { /* settings table may not have the row */ }
+    }
+
     // Auto-start bot if it was active in previous session
     if (restoredState?.wasActive && botState.sessionId) {
-        botState.isActive = true;
-        botState.tradingMode = restoredState.botState?.tradingMode || 'SIMULATION';
-        botState.sessionStartTime = restoredState.uptime?.startTime || Date.now();
-        pmSetSessionStart(Date.now());
-        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
-        console.log('[Server] Bot auto-resumed from previous session');
-        addLog('[SESSION] Bot auto-resumed after restart', 'INFO');
+        // Validate session with a lightweight API call
+        let sessionValid = true;
+        if (botState.tradingMode !== 'SIMULATION' && getActiveExchangeId() === 'kraken') {
+            try {
+                const adapter = getExchangeAdapter();
+                await adapter.getBalance(botState.sessionId);
+            } catch (e) {
+                console.warn(`[Server] Session validation failed: ${e.message}. Not auto-resuming.`);
+                sessionValid = false;
+            }
+        }
+
+        if (sessionValid) {
+            botState.isActive = true;
+            botState.tradingMode = restoredState.botState?.tradingMode || 'SIMULATION';
+            botState.sessionStartTime = restoredState.uptime?.startTime || Date.now();
+            pmSetSessionStart(Date.now());
+            botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
+            console.log('[Server] Bot auto-resumed from previous session');
+            addLog('[SESSION] Bot auto-resumed after restart', 'INFO');
+
+            // Persist session ID for next restart
+            try {
+                const db = getDb();
+                db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_session_id', ?)").run(botState.sessionId);
+            } catch { /* ignore */ }
+
+            // Send Telegram notification about auto-resume
+            try {
+                const posCount = Object.keys(portfolio.positions).length;
+                const { queueMessage } = await import('./services/telegramService.js');
+                queueMessage?.(`▶️ <b>AUTO-RESUMED</b>\nMode: ${botState.tradingMode}\nPositions: ${posCount}\nSession: ${botState.sessionId.substring(0, 8)}...`);
+            } catch { /* telegram may not be configured */ }
+        }
     }
 
     // Start auto-save (every 60 seconds)

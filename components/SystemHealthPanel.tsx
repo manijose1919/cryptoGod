@@ -167,6 +167,7 @@ function formatUptime(seconds: number): string {
 export const SystemHealthPanel: React.FC = () => {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatusData | null>(null);
+  const [apiKeyHealth, setApiKeyHealth] = useState<Record<string, { configured: boolean; status: string; errorCount: number }> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [latencyHistory, setLatencyHistory] = useState<LatencyPoint[]>([]);
@@ -174,9 +175,10 @@ export const SystemHealthPanel: React.FC = () => {
 
   const fetchHealth = useCallback(async () => {
     try {
-      const [healthRes, statusRes] = await Promise.allSettled([
+      const [healthRes, statusRes, apiKeyRes] = await Promise.allSettled([
         fetch('/api/health'),
         fetch('/api/system/status'),
+        fetch('/api/api-health'),
       ]);
 
       // Parse health
@@ -243,6 +245,12 @@ export const SystemHealthPanel: React.FC = () => {
           activeConnections: sData.activeConnections ?? sData.connections,
           dbSize: sData.dbSize ?? sData.db_size,
         });
+
+        // Parse API key health
+        if (apiKeyRes.status === 'fulfilled' && apiKeyRes.value.ok) {
+          const akData = await apiKeyRes.value.json();
+          setApiKeyHealth(akData.services || akData);
+        }
 
         // Track latency history
         if (latencyVal > 0) {
@@ -382,6 +390,26 @@ export const SystemHealthPanel: React.FC = () => {
                           {svc.details}
                         </div>
                       )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* API Key Health */}
+          {apiKeyHealth && Object.keys(apiKeyHealth).length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">API Keys</h4>
+              <div className="grid grid-cols-2 gap-1.5">
+                {Object.entries(apiKeyHealth).map(([name, info]) => (
+                  <div key={name} className="flex items-center gap-2 p-2 rounded bg-gray-900/30">
+                    <StatusDot status={!info.configured ? 'stopped' : info.errorCount > 5 ? 'error' : info.status === 'ok' ? 'running' : 'degraded'} />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-gray-300 truncate">{name}</div>
+                      <div className="text-[10px] text-gray-600">
+                        {info.configured ? (info.errorCount > 0 ? `${info.errorCount} errors` : 'OK') : 'Not configured'}
+                      </div>
                     </div>
                   </div>
                 ))}

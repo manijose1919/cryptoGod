@@ -569,6 +569,35 @@ export class KrakenAdapter extends BaseExchangeAdapter {
     }
 
     /**
+     * #12 — Place a trailing stop order on Kraken.
+     * Kraken trailing-stop ordertype: triggers at (peak - offset).
+     * @param {string} ticker - Trading pair
+     * @param {number} volume - Amount to sell
+     * @param {number} trailOffset - Price distance (e.g., for -2% trail on $100 → offset = 2.0)
+     * @param {string} sessionId - Auth session
+     */
+    async placeTrailingStop(ticker, volume, trailOffset, sessionId) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: 'sell',
+            ordertype: 'trailing-stop',
+            price: `+${trailOffset.toFixed(2)}`, // + prefix means offset from peak
+            volume: volume.toFixed(8),
+        }, sessionId);
+
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side: 'sell',
+            trailOffset,
+            volume: parseFloat(volume.toFixed(8)),
+            status: 'open',
+            raw: result,
+        };
+    }
+
+    /**
      * Place a stop-loss-limit order (triggers at stop, fills at limit).
      * More precise but may not fill in flash crashes.
      */

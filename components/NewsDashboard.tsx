@@ -18,35 +18,42 @@ export const NewsDashboard: React.FC<NewsDashboardProps> = ({ ticker }) => {
     const [loading, setLoading] = useState<boolean>(true);
 
     useEffect(() => {
-        // Mock fetch for now - in a real app this would hit your backend
-        // We'll simulate fetching the data produced by the backend service
         const fetchNews = async () => {
             setLoading(true);
             try {
-                // In a real implementation, you'd have an endpoint like /api/news-analysis
-                // For this demo, we'll simulate the response structure
-                // based on what we implemented in the backend services
-                
-                // Simulate delay
-                await new Promise(r => setTimeout(r, 800));
+                const [feedRes, sentimentRes, trendingRes] = await Promise.allSettled([
+                    fetch('/api/news/feed').then(r => r.json()),
+                    fetch(`/api/news/sentiment/${ticker}`).then(r => r.json()),
+                    fetch('/api/news/trending').then(r => r.json()),
+                ]);
 
-                const mockNews: NewsItem[] = [
-                    { title: `${ticker} surges 10% following ETF rumors`, source: 'CoinDesk', publishedAt: new Date().toISOString(), sentiment: 'positive', url: '#' },
-                    { title: `Analysts predict ${ticker} breakout`, source: 'CoinTelegraph', publishedAt: new Date(Date.now() - 3600000).toISOString(), sentiment: 'positive', url: '#' },
-                    { title: `Market analysis: ${ticker} support levels hold`, source: 'Decrypt', publishedAt: new Date(Date.now() - 7200000).toISOString(), sentiment: 'neutral', url: '#' },
-                    { title: `Regulatory concerns impact ${ticker} volume`, source: 'Reuters', publishedAt: new Date(Date.now() - 10800000).toISOString(), sentiment: 'negative', url: '#' },
-                    { title: `${ticker} ecosystem growth accelerates`, source: 'The Block', publishedAt: new Date(Date.now() - 14400000).toISOString(), sentiment: 'positive', url: '#' },
-                ];
+                // Parse CryptoPanic feed into news items
+                const feedData = feedRes.status === 'fulfilled' ? feedRes.value : {};
+                const cryptoPanicNews = (feedData.cryptoPanic || []).map((item: any) => ({
+                    title: item.title || item.headline || 'Untitled',
+                    source: item.source?.title || item.source || 'CryptoPanic',
+                    publishedAt: item.published_at || item.created_at || new Date().toISOString(),
+                    sentiment: item.votes?.positive > item.votes?.negative ? 'positive' :
+                               item.votes?.negative > item.votes?.positive ? 'negative' : 'neutral',
+                    url: item.url || '#',
+                }));
+                const dbNews = (feedData.dbNews || []).map((item: any) => ({
+                    title: item.title || 'News',
+                    source: item.source || 'DB',
+                    publishedAt: item.published_at || new Date().toISOString(),
+                    sentiment: item.sentiment || 'neutral',
+                    url: item.url || '#',
+                }));
+                setNews([...cryptoPanicNews, ...dbNews].slice(0, 10));
 
-                const mockPlatforms = {
-                    'Twitter': 45,
-                    'Reddit': 30,
-                    'YouTube': 15,
-                    'Discord': 10
-                };
-
-                setNews(mockNews);
-                setTrendingPlatforms(mockPlatforms);
+                // Trending platforms from sentiment data
+                const sentData = sentimentRes.status === 'fulfilled' ? sentimentRes.value : {};
+                const reddit = sentData?.reddit;
+                const platforms: Record<string, number> = {};
+                if (reddit?.mentionCount) platforms['Reddit'] = Math.min(reddit.mentionCount, 100);
+                const trendingData = trendingRes.status === 'fulfilled' ? trendingRes.value : {};
+                if (trendingData?.coins?.length) platforms['CoinGecko Trending'] = trendingData.coins.length;
+                setTrendingPlatforms(platforms);
             } catch (e) {
                 console.error("Failed to fetch news", e);
             } finally {
@@ -55,6 +62,8 @@ export const NewsDashboard: React.FC<NewsDashboardProps> = ({ ticker }) => {
         };
 
         fetchNews();
+        const interval = setInterval(fetchNews, 120_000); // Refresh every 2 min
+        return () => clearInterval(interval);
     }, [ticker]);
 
     if (loading) {

@@ -35,9 +35,16 @@ class TelegramV2Service {
   private digestTimer: ReturnType<typeof setInterval> | null = null;
   private commandPollTimer: ReturnType<typeof setInterval> | null = null;
   private lastUpdateId = 0;
+  private muted = false;
+  private muteTimer: ReturnType<typeof setTimeout> | null = null;
+  private signalsEvaluated = 0;
+  private signalsActedOn = 0;
+  private totalFeesToday = 0;
 
   // References to engine instances for command handling
   private engines: Map<string, { getStatus: () => unknown; pause: () => void; resume: () => void; stop: () => void; setMode: (m: string) => void }> = new Map();
+  // Exchange adapter for /price command
+  private exchangeAdapter: { getTicker?: (pair: string) => Promise<{ last: number; change24h?: number; volume24h?: number }> } | null = null;
 
   constructor(config: TelegramConfig) {
     this.config = config;
@@ -58,6 +65,15 @@ class TelegramV2Service {
   registerEngine(exchangeId: string, engine: unknown): void {
     this.engines.set(exchangeId, engine as typeof this.engines extends Map<string, infer V> ? V : never);
   }
+
+  registerExchangeAdapter(adapter: unknown): void {
+    this.exchangeAdapter = adapter as typeof this.exchangeAdapter;
+  }
+
+  // For tracking signal stats from bot loop
+  recordSignalEvaluated(): void { this.signalsEvaluated++; }
+  recordSignalActedOn(): void { this.signalsActedOn++; }
+  recordFees(amount: number): void { this.totalFeesToday += amount; }
 
   // ─── Event Subscriptions ─────────────────────────────────
 
@@ -147,7 +163,7 @@ class TelegramV2Service {
       `⏱️ ${new Date(event.timestamp).toLocaleTimeString()}`,
     ].join('\n');
 
-    await this.send(msg);
+    await this.send(msg, true); // Always send risk alerts even when muted
   }
 
   // ─── Session Change ──────────────────────────────────────
@@ -217,12 +233,22 @@ class TelegramV2Service {
       `<b>COMBINED:</b>`,
       `  Total P&L: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`,
       `  Total Trades: ${totalTrades} (${totalWins}W/${totalTrades - totalWins}L)`,
+      totalTrades > 0 ? `  Win Rate: ${((totalWins / totalTrades) * 100).toFixed(0)}%` : '',
+      ``,
+      `<b>ACTIVITY:</b>`,
+      `  Signals Evaluated: ${this.signalsEvaluated}`,
+      `  Signals Acted On: ${this.signalsActedOn}`,
+      `  Total Fees Paid: $${this.totalFeesToday.toFixed(2)}`,
+      this.getBestWorstCoinToday(k, c),
     ].filter(Boolean).join('\n');
 
-    await this.send(msg);
+    await this.send(msg, true); // Force send even if muted
 
     // Reset daily stats
     this.dailyStats = this.freshDailyStats();
+    this.signalsEvaluated = 0;
+    this.signalsActedOn = 0;
+    this.totalFeesToday = 0;
   }
 
   // ─── Telegram Command Interface ──────────────────────────
@@ -266,17 +292,18 @@ class TelegramV2Service {
           `  Positions: ${s.positions}`,
         );
       }
-      await this.send(lines.join('\n'));
+      if (this.muted) lines.push('\n🔇 Notifications muted');
+      await this.send(lines.join('\n'), true);
     }
 
     else if (text === '/pause') {
       for (const engine of this.engines.values()) engine.pause();
-      await this.send('⏸️ All engines paused');
+      await this.send('⏸️ All engines paused', true);
     }
 
     else if (text === '/resume') {
       for (const engine of this.engines.values()) engine.resume();
-      await this.send('▶️ All engines resumed');
+      await this.send('▶️ All engines resumed', true);
     }
 
     else if (text === '/positions') {
@@ -294,7 +321,132 @@ class TelegramV2Service {
           }
         }
       }
-      await this.send(lines.join('\n'));
+      await this.send(lines.join('\n'), true);
+    }
+
+    // #21 — /price command
+    else if (text.startsWith('/price')) {
+      const parts = text.split(/\s+/);
+      const base = (parts[1] || 'BTC').toUpperCase();
+      const pair = base.endsWith('USD') ? base : `${base}USD`;
+
+      if (this.exchangeAdapter?.getTicker) {
+        try {
+          const ticker = await this.exchangeAdapter.getTicker(pair);
+          const change = ticker.change24h != null ? `${ticker.change24h >= 0 ? '+' : ''}${ticker.change24h.toFixed(2)}%` : 'N/A';
+          const vol = ticker.volume24h != null ? `$${(ticker.volume24h / 1e6).toFixed(1)}M` : 'N/A';
+          await this.send([
+            `💰 <b>${pair}</b>`,
+            `Price: $${this.fmtPrice(ticker.last)}`,
+            `24h Change: ${change}`,
+            `24h Volume: ${vol}`,
+          ].join('\n'), true);
+        } catch {
+          await this.send(`❌ Could not fetch price for ${pair}`, true);
+        }
+      } else {
+        await this.send('❌ Exchange adapter not registered for price queries', true);
+      }
+    }
+
+    // #22 — /pnl command
+    else if (text === '/pnl') {
+      const lines = ['💵 <b>P&L SUMMARY</b>', '━━━━━━━━━━━━━━━━━━'];
+      let totalPnl = 0;
+      let totalPositions = 0;
+      for (const [id, engine] of this.engines) {
+        const s = engine.getStatus() as Record<string, unknown>;
+        const pnl = Number(s.pnlUsd) || 0;
+        totalPnl += pnl;
+        totalPositions += Number(s.positions) || 0;
+        lines.push(`<b>${(id as string).toUpperCase()}:</b> ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`);
+      }
+      const todayPnl = this.dailyStats.kraken.pnl + this.dailyStats['crypto.com'].pnl;
+      lines.push('');
+      lines.push(`Today's P&L: ${todayPnl >= 0 ? '+' : ''}$${todayPnl.toFixed(2)}`);
+      lines.push(`Session P&L: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`);
+      lines.push(`Open Positions: ${totalPositions}`);
+      await this.send(lines.join('\n'), true);
+    }
+
+    // #23 — /mute and /unmute
+    else if (text.startsWith('/mute')) {
+      this.muted = true;
+      if (this.muteTimer) clearTimeout(this.muteTimer);
+      const parts = text.split(/\s+/);
+      const duration = parts[1]; // e.g., "8h", "30m"
+      if (duration) {
+        const match = duration.match(/^(\d+)(h|m)$/);
+        if (match) {
+          const ms = match[2] === 'h' ? parseInt(match[1]) * 3600000 : parseInt(match[1]) * 60000;
+          this.muteTimer = setTimeout(() => {
+            this.muted = false;
+            this.send('🔔 Notifications unmuted (timer expired)', true);
+          }, ms);
+          await this.send(`🔇 Muted for ${duration}. Critical alerts still sent.`, true);
+        } else {
+          await this.send('🔇 Muted indefinitely. Use /unmute to restore. Critical alerts still sent.', true);
+        }
+      } else {
+        await this.send('🔇 Muted indefinitely. Use /unmute to restore. Critical alerts still sent.', true);
+      }
+    }
+
+    else if (text === '/unmute') {
+      this.muted = false;
+      if (this.muteTimer) { clearTimeout(this.muteTimer); this.muteTimer = null; }
+      await this.send('🔔 Notifications unmuted', true);
+    }
+
+    // #6 — /alert command: /alert BTC 100000 or /alert BTC above 100000
+    else if (text.startsWith('/alert')) {
+      const parts = text.split(/\s+/);
+      if (parts.length < 3) {
+        await this.send('Usage: /alert BTC 100000 [above|below]\nExample: /alert ETH 4000 below', true);
+        return;
+      }
+      const base = parts[1].toUpperCase();
+      const targetPrice = parseFloat(parts[2]);
+      const direction = (parts[3] || 'above').toLowerCase();
+      if (isNaN(targetPrice)) {
+        await this.send('❌ Invalid price. Usage: /alert BTC 100000', true);
+        return;
+      }
+      const ticker = base.endsWith('USD') ? base : `${base}USD`;
+      const condition = direction === 'below' ? 'CROSSES_BELOW' : 'CROSSES_ABOVE';
+      try {
+        const { createAlert } = await import('../services/priceAlertService.js') as { createAlert: (t: string, c: string, p: number) => { id: number } };
+        const alert = createAlert(ticker, condition, targetPrice);
+        await this.send(`✅ Alert #${alert.id} created: ${ticker} ${condition.replace('_', ' ').toLowerCase()} $${targetPrice}`, true);
+      } catch (e: unknown) {
+        await this.send(`❌ Failed to create alert: ${(e as Error).message}`, true);
+      }
+    }
+
+    // #9 — /dca command: /dca BTC 50 weekly or /dca BTC 100 24h
+    else if (text.startsWith('/dca')) {
+      const parts = text.split(/\s+/);
+      if (parts.length < 3) {
+        await this.send('Usage: /dca BTC 50 [daily|weekly|4h|24h]\nExample: /dca ETH 100 weekly', true);
+        return;
+      }
+      const base = parts[1].toUpperCase();
+      const amount = parseFloat(parts[2]);
+      const intervalStr = (parts[3] || 'daily').toLowerCase();
+      if (isNaN(amount) || amount < 5) {
+        await this.send('❌ Amount must be at least $5. Usage: /dca BTC 50 daily', true);
+        return;
+      }
+      const ticker = base.endsWith('USD') ? base : `${base}USD`;
+      const intervalMap: Record<string, number> = { '4h': 4, '8h': 8, '12h': 12, 'daily': 24, '24h': 24, 'weekly': 168 };
+      const intervalHours = intervalMap[intervalStr] || 24;
+      try {
+        const { createSchedule } = await import('../services/dcaScheduler.js') as { createSchedule: (t: string, a: number, h: number) => { id: number } };
+        const schedule = createSchedule(ticker, amount, intervalHours);
+        await this.send(`✅ DCA #${schedule.id} created: Buy $${amount} of ${ticker} every ${intervalStr}`, true);
+      } catch (e: unknown) {
+        await this.send(`❌ Failed to create DCA: ${(e as Error).message}`, true);
+      }
     }
 
     else if (text === '/help') {
@@ -304,9 +456,15 @@ class TelegramV2Service {
         '/pause — Pause all trading',
         '/resume — Resume trading',
         '/positions — Open positions',
+        '/price [COIN] — Current price (default: BTC)',
+        '/pnl — P&L summary',
+        '/alert COIN PRICE [above|below] — Price alert',
+        '/dca COIN AMT [daily|weekly|4h] — DCA schedule',
+        '/mute [duration] — Mute alerts (e.g., /mute 8h)',
+        '/unmute — Unmute alerts',
         '/digest — Force daily digest',
         '/help — This message',
-      ].join('\n'));
+      ].join('\n'), true);
     }
 
     else if (text === '/digest') {
@@ -316,8 +474,10 @@ class TelegramV2Service {
 
   // ─── Helpers ─────────────────────────────────────────────
 
-  private async send(html: string): Promise<void> {
+  private async send(html: string, forceSend = false): Promise<void> {
     if (!this.config.enabled) return;
+    // Mute skips non-critical messages
+    if (this.muted && !forceSend) return;
 
     try {
       const url = `https://api.telegram.org/bot${this.config.botToken}/sendMessage`;
@@ -340,6 +500,15 @@ class TelegramV2Service {
     if (price >= 1000) return price.toFixed(2);
     if (price >= 1) return price.toFixed(4);
     return price.toFixed(6);
+  }
+
+  private getBestWorstCoinToday(k: DailyStats['kraken'], c: DailyStats['crypto.com']): string {
+    const best = Math.max(k.bestTrade, c.bestTrade);
+    const worst = Math.min(k.worstTrade, c.worstTrade);
+    const parts: string[] = [];
+    if (best > 0) parts.push(`  Best Trade: +$${best.toFixed(2)}`);
+    if (worst < 0) parts.push(`  Worst Trade: $${worst.toFixed(2)}`);
+    return parts.join('\n');
   }
 
   private freshDailyStats(): DailyStats {
