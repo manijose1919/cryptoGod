@@ -6,9 +6,9 @@ interface ThemeState {
 }
 
 export const useThemeStore = create<ThemeState>((set) => {
-  // Initialize from localStorage, default to dark
+  // Initialize from localStorage, default to light
   const stored = typeof window !== 'undefined' ? localStorage.getItem('theme') : null;
-  const isDark = stored ? stored === 'dark' : true;
+  const isDark = stored ? stored === 'dark' : false;
 
   // Apply on load
   if (typeof document !== 'undefined') {

@@ -21,11 +21,11 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
-  { id: 'dashboard', label: 'DASH', key: 'F1', color: '#ff8c00' },
-  { id: 'kraken', label: 'KRAKEN', key: 'F2', color: '#ff8c00' },
-  { id: 'crypto.com', label: 'CDC', key: 'F3', color: '#58a6ff' },
-  { id: 'portfolio', label: 'PORTFOLIO', key: 'F4', color: '#00c853' },
-  { id: 'ml', label: 'ML', key: 'F5', color: '#bc8cff' },
+  { id: 'dashboard', label: 'Dashboard', key: 'F1', color: '#6366f1' },
+  { id: 'kraken', label: 'Kraken', key: 'F2', color: '#3b82f6' },
+  { id: 'crypto.com', label: 'CDC', key: 'F3', color: '#8b5cf6' },
+  { id: 'portfolio', label: 'Portfolio', key: 'F4', color: '#10b981' },
+  { id: 'ml', label: 'ML', key: 'F5', color: '#a78bfa' },
 ];
 
 interface Props {
@@ -84,7 +84,7 @@ export function TabLayout({ renderDashboard }: Props) {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px', paddingRight: '8px' }}>
           <button className="theme-toggle" onClick={toggleTheme}
             title={isDark ? 'Light mode' : 'Dark mode'}>
-            {isDark ? '\u2600' : '\u263E'}
+            {isDark ? '\u2600\uFE0F' : '\u{1F319}'}
           </button>
         </div>
       </nav>
