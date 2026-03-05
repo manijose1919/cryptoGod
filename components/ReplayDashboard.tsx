@@ -3,6 +3,13 @@ import { Link } from 'react-router-dom';
 import { ReplayEngine, type ReplayState, type ReplayCandle } from '../services/replayService';
 import { getAvailableData, type AvailableData } from '../services/backtestService';
 
+interface Annotation {
+  index: number;
+  type: 'entry' | 'exit' | 'note';
+  note: string;
+  price: number;
+}
+
 const NAV_LINKS = [
   { to: '/', label: 'Crypto' },
   { to: '/stocks', label: 'Stocks' },
@@ -21,6 +28,9 @@ export const ReplayDashboard: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [speed, setSpeed] = useState(500);
   const [loaded, setLoaded] = useState(false);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [annotationMode, setAnnotationMode] = useState<'entry' | 'exit' | 'note' | null>(null);
+  const [noteText, setNoteText] = useState('');
 
   useEffect(() => {
     getAvailableData().then(setAvailable).catch(() => {});
@@ -59,6 +69,19 @@ export const ReplayDashboard: React.FC = () => {
     engineRef.current.setSpeed(newSpeed);
   };
 
+  const addAnnotation = useCallback(() => {
+    if (!state || !annotationMode) return;
+    const newAnnotation: Annotation = {
+      index: state.currentIndex,
+      type: annotationMode,
+      note: noteText || annotationMode.toUpperCase(),
+      price: state.currentPrice,
+    };
+    setAnnotations(prev => [...prev, newAnnotation]);
+    setAnnotationMode(null);
+    setNoteText('');
+  }, [state, annotationMode, noteText]);
+
   // Mini candlestick rendering
   const renderCandles = (candles: ReplayCandle[]) => {
     if (candles.length === 0) return null;
@@ -67,14 +90,20 @@ export const ReplayDashboard: React.FC = () => {
     const low = Math.min(...displayCandles.map(c => c.l));
     const range = high - low || 1;
 
+    const startIdx = candles.length > 80 ? (state?.currentIndex || 0) - 80 + (candles.length - displayCandles.length) : 0;
+
     return (
-      <div className="h-48 flex items-end gap-px bg-gray-900/50 rounded p-1">
+      <div className="h-48 flex items-end gap-px bg-gray-900/50 rounded p-1 relative">
         {displayCandles.map((candle, i) => {
           const isGreen = candle.c >= candle.o;
           const bodyTop = ((high - Math.max(candle.o, candle.c)) / range) * 100;
           const bodyHeight = Math.max(1, (Math.abs(candle.c - candle.o) / range) * 100);
           const wickTop = ((high - candle.h) / range) * 100;
           const wickBottom = ((candle.l - low) / range) * 100;
+
+          // Check for annotation at this candle index
+          const globalIdx = startIdx + i;
+          const ann = annotations.find(a => a.index === globalIdx);
 
           return (
             <div key={i} className="flex-1 min-w-[2px] relative" style={{ height: '100%' }}>
@@ -84,6 +113,16 @@ export const ReplayDashboard: React.FC = () => {
               {/* Body */}
               <div className={`absolute left-0 right-0 rounded-sm ${isGreen ? 'bg-green-500' : 'bg-red-500'}`}
                 style={{ top: `${bodyTop}%`, height: `${bodyHeight}%`, minHeight: '1px' }} />
+              {/* Annotation marker */}
+              {ann && (
+                <div
+                  className={`absolute left-1/2 -translate-x-1/2 w-2 h-2 rounded-full z-10 ${
+                    ann.type === 'entry' ? 'bg-green-400' : ann.type === 'exit' ? 'bg-red-400' : 'bg-yellow-400'
+                  }`}
+                  style={{ top: '-4px' }}
+                  title={`${ann.type}: ${ann.note} @ $${ann.price.toFixed(2)}`}
+                />
+              )}
             </div>
           );
         })}
@@ -178,6 +217,41 @@ export const ReplayDashboard: React.FC = () => {
                 <div className="text-lg font-bold text-white">${state.currentPrice.toFixed(2)}</div>
               </div>
               {renderCandles(state.visibleCandles)}
+
+              {/* Annotation controls */}
+              <div className="flex items-center gap-2 mt-2">
+                <span className="text-[10px] text-gray-400">Annotate:</span>
+                {(['entry', 'exit', 'note'] as const).map(type => (
+                  <button
+                    key={type}
+                    onClick={() => setAnnotationMode(annotationMode === type ? null : type)}
+                    className={`text-[10px] px-2 py-0.5 rounded ${
+                      annotationMode === type
+                        ? (type === 'entry' ? 'bg-green-700' : type === 'exit' ? 'bg-red-700' : 'bg-yellow-700') + ' text-white'
+                        : 'bg-gray-700 text-gray-400'
+                    }`}
+                  >
+                    {type === 'entry' ? 'Mark Entry' : type === 'exit' ? 'Mark Exit' : 'Add Note'}
+                  </button>
+                ))}
+                {annotationMode && (
+                  <>
+                    <input
+                      type="text"
+                      value={noteText}
+                      onChange={e => setNoteText(e.target.value)}
+                      placeholder="Note..."
+                      className="bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-[10px] text-white w-32"
+                    />
+                    <button onClick={addAnnotation} className="bg-cyan-700 text-white text-[10px] px-2 py-0.5 rounded">
+                      Add
+                    </button>
+                  </>
+                )}
+                {annotations.length > 0 && (
+                  <span className="text-[10px] text-gray-500 ml-2">{annotations.length} annotations</span>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
