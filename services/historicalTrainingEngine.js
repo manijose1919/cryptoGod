@@ -2194,9 +2194,9 @@ export function distillSeed(sourceRunId, options = {}) {
   updateTrainingRun(newRunId, {
     status: 'completed',
     endTime: Date.now(),
-    totalTrades: Object.values(distilled.tradeMemory?.regimeStrategy || {}).reduce((s, d) => s + d.wins, 0),
-    winRate: 100,
-    totalPnl: stats.totalWinPnl,
+    totalTrades: 0,
+    winRate: 0,
+    totalPnl: 0,
     maxDrawdown: 0,
     sharpeRatio: 0,
     learnedStateJson: JSON.stringify(distilled),

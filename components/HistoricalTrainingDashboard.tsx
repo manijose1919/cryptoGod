@@ -588,11 +588,17 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                 className="bg-gray-800 text-white text-sm px-2 py-1.5 rounded border border-gray-600 w-56"
               >
                 <option value="">Fresh start (no seed)</option>
-                {completedRuns.map(run => (
-                  <option key={run.run_id} value={run.run_id}>
-                    {run.run_id.slice(6, 20)}... ({run.total_trades} trades, {run.win_rate?.toFixed(0)}% WR)
-                  </option>
-                ))}
+                {completedRuns.map(run => {
+                  const isSynthetic = run.run_id.startsWith('distill_') || run.run_id.startsWith('breed_') || run.run_id.startsWith('mod_');
+                  const tag = run.run_id.startsWith('distill_') ? '[Distilled] '
+                    : run.run_id.startsWith('breed_') ? '[Bred] '
+                    : run.run_id.startsWith('mod_') ? '[Modified] ' : '';
+                  return (
+                    <option key={run.run_id} value={run.run_id}>
+                      {tag}{run.run_id.slice(6, 20)}...{isSynthetic ? ' (seed only)' : ` (${run.total_trades} trades, ${run.win_rate?.toFixed(0)}% WR)`}
+                    </option>
+                  );
+                })}
               </select>
             </div>
 
@@ -751,6 +757,10 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                   const configJson = (run as any).config_json;
                   let epoch = 0;
                   try { epoch = configJson ? JSON.parse(configJson).epoch || 0 : 0; } catch {}
+                  const isSynthetic = run.run_id.startsWith('distill_') || run.run_id.startsWith('breed_') || run.run_id.startsWith('mod_');
+                  const syntheticType = run.run_id.startsWith('distill_') ? 'Distilled'
+                    : run.run_id.startsWith('breed_') ? 'Bred'
+                    : run.run_id.startsWith('mod_') ? 'Modified' : null;
                   return (
                     <button
                       key={run.run_id}
@@ -769,15 +779,24 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                         }`} />
                         <span className="text-gray-300 font-mono">{run.run_id.slice(6, 20)}...</span>
                         {epoch > 0 && <span className="text-purple-400 text-[10px]">Epoch {epoch}</span>}
+                        {syntheticType && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-900/40 text-purple-300 font-medium">{syntheticType}</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className="text-gray-400">{run.total_trades} trades</span>
-                        <span className={run.win_rate >= 50 ? 'text-green-400' : 'text-red-400'}>
-                          {run.win_rate?.toFixed(1)}% WR
-                        </span>
-                        <span className={run.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-                          ${run.total_pnl?.toFixed(2)}
-                        </span>
+                        {isSynthetic ? (
+                          <span className="text-gray-500 italic">seed only — no trades</span>
+                        ) : (
+                          <>
+                            <span className="text-gray-400">{run.total_trades} trades</span>
+                            <span className={run.win_rate >= 50 ? 'text-green-400' : 'text-red-400'}>
+                              {run.win_rate?.toFixed(1)}% WR
+                            </span>
+                            <span className={run.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}>
+                              ${run.total_pnl?.toFixed(2)}
+                            </span>
+                          </>
+                        )}
                         {run.status === 'error' && (
                           <span className="text-red-400" title={(run as any).error}>ERR</span>
                         )}
@@ -791,9 +810,21 @@ export const HistoricalTrainingDashboard: React.FC = () => {
           )}
 
           {/* Selected run results */}
-          {results && (
+          {results && (() => {
+            const selIsSynthetic = selectedRun ? (selectedRun.startsWith('distill_') || selectedRun.startsWith('breed_') || selectedRun.startsWith('mod_')) : false;
+            const selType = selectedRun?.startsWith('distill_') ? 'Distilled Seed'
+              : selectedRun?.startsWith('breed_') ? 'Bred Seed'
+              : selectedRun?.startsWith('mod_') ? 'Modified Seed' : null;
+            return (
             <div className="space-y-4 border-t border-gray-700/50 pt-4">
+              {selIsSynthetic && (
+                <div className="glass-card p-3 bg-purple-900/20 border border-purple-500/30 text-center">
+                  <span className="text-purple-300 text-sm font-medium">{selType}</span>
+                  <span className="text-gray-400 text-xs ml-2">— parameter refinement only, no trades were simulated. Use as a seed for a real training run to see performance.</span>
+                </div>
+              )}
               {/* Final stats */}
+              {!selIsSynthetic && (
               <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
                 <div className="glass-card p-3 text-center">
                   <div className="text-[10px] text-gray-400">Total Trades</div>
@@ -830,6 +861,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                   </div>
                 </div>
               </div>
+              )}
 
               {/* Equity curve */}
               {equityCurve.length > 0 && (
@@ -894,7 +926,8 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                 )}
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {runs.length === 0 && !training && (
             <div className="text-gray-500 text-sm text-center py-8">
