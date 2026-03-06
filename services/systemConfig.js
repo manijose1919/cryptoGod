@@ -47,7 +47,7 @@ const DEFAULT_FLAGS = {
   MONTE_CARLO_ENABLED: true,
   SMART_EXECUTION_ENABLED: true,
   PORTFOLIO_OPTIMIZER_ENABLED: true,
-  CONTINUOUS_BACKTEST_ENABLED: true,  // Batch 4C: background strategy quality monitoring
+  CONTINUOUS_BACKTEST_ENABLED: false,  // DISABLED — blocks event loop (buildFeatureVector per trade)
 
   // Phase 1: TF.js LSTM
   TF_ENABLED: true,
