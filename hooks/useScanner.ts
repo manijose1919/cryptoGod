@@ -19,7 +19,7 @@ export function useScanner() {
 
         const scannerInterval = setInterval(() => {
             const currentPortfolio = portfolioRef.current;
-            const hasOpenPositions = Object.keys(currentPortfolio.positions).length > 0;
+            const hasOpenPositions = Object.keys(currentPortfolio.positions || {}).length > 0;
 
             if (hasOpenPositions) {
                 if (!scannerPaused) {
