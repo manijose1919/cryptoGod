@@ -116,7 +116,7 @@ export function useSessionActions() {
             });
             const data = await res.json();
             if (data.success) {
-                setPortfolio({ cash: data.budget, initialBudget: data.budget, positions: {} });
+                setPortfolio({ cash: data.budget, initialBudget: data.budget, positions: {}, holdings: {} });
                 setTicker(selectedTicker);
                 setTrades([]);
                 resetEquityTracking(0);
@@ -129,7 +129,7 @@ export function useSessionActions() {
             }
         } catch (e: any) {
             addLog(`Session start error: ${e.message}`, 'ERROR');
-            setPortfolio({ cash: budget, initialBudget: budget, positions: {} });
+            setPortfolio({ cash: budget, initialBudget: budget, positions: {}, holdings: {} });
             setTicker(selectedTicker);
             setTrades([]);
             resetEquityTracking(0);
@@ -263,7 +263,7 @@ export function useSessionActions() {
             const res = await fetch(`/api/sessions/${sessionId}/restore`, { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                setPortfolio({ cash: data.budget, initialBudget: data.budget, positions: {} });
+                setPortfolio({ cash: data.budget, initialBudget: data.budget, positions: {}, holdings: {} });
                 setIsTradingActive(true);
                 setIsBotActive(true);
                 addLog(`Restored session from ${data.restoredFrom} with $${data.budget.toFixed(2)}`, 'SPECIAL');
