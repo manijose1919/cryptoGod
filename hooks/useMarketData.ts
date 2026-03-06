@@ -228,7 +228,7 @@ export function useMarketData() {
     useEffect(() => {
         if (!isTradingActive) return;
         const pollMarketData = async () => {
-            const tickers = Object.keys(watchlistDataRef.current);
+            const tickers = Object.keys(watchlistDataRef.current || {});
             if (tickers.length === 0) return;
             const tickersPerCycle = 5;
             const cycleIndex = Math.floor(Date.now() / 10000) % Math.ceil(tickers.length / tickersPerCycle);

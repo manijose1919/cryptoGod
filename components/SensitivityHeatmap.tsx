@@ -111,8 +111,8 @@ export const SensitivityHeatmap: React.FC<Props> = ({ runId }) => {
                 </tr>
               </thead>
               <tbody>
-                {Object.entries(results.paramResults).map(([key, data]) => {
-                  const isFragile = results.fragileParams.includes(key);
+                {Object.entries(results?.paramResults || {}).map(([key, data]) => {
+                  const isFragile = (results?.fragileParams || []).includes(key);
                   return (
                     <tr key={key} className={isFragile ? 'bg-yellow-900/10' : ''}>
                       <td className={`py-1 px-2 font-mono ${isFragile ? 'text-yellow-300' : 'text-gray-300'}`}>

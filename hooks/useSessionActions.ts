@@ -228,6 +228,7 @@ export function useSessionActions() {
                     cash: data.finalCash || 0,
                     initialBudget: data.initialBudget || portfolio.initialBudget,
                     positions: {},
+                    holdings: {},
                 });
                 setIsBotActive(false);
                 addLog(`Session stopped. Final: $${data.finalCash?.toFixed(2)} (${data.pnlPercent}%)`, 'SPECIAL');
@@ -248,7 +249,7 @@ export function useSessionActions() {
             const res = await fetch('/api/session/stop', { method: 'POST' });
             const data = await res.json();
             if (data.success) {
-                setPortfolio({ cash: 0, initialBudget: 0, positions: {} });
+                setPortfolio({ cash: 0, initialBudget: 0, positions: {}, holdings: {} });
                 setIsBotActive(false);
                 setIsTradingActive(false);
                 addLog(`Session ended. Final value: $${data.finalCash?.toFixed(2)} | PnL: ${data.pnlPercent}% | Trades: ${data.totalTrades || 0}`, 'SPECIAL');

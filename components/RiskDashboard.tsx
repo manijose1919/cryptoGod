@@ -452,9 +452,9 @@ export const RiskDashboard: React.FC = () => {
                       Remaining: {data.riskBudget.remaining.toFixed(0)} units
                     </div>
                   </div>
-                  {Object.keys(data.riskBudget.byStrategy).length > 0 && (
+                  {Object.keys(data?.riskBudget?.byStrategy || {}).length > 0 && (
                     <div className="space-y-1">
-                      {Object.entries(data.riskBudget.byStrategy).map(([strategy, budget]) => (
+                      {Object.entries(data?.riskBudget?.byStrategy || {}).map(([strategy, budget]) => (
                         <div key={strategy} className="flex justify-between text-[10px] px-1">
                           <span className="text-gray-400">{strategy}</span>
                           <span className="text-gray-300 font-mono">{(budget as number).toFixed(1)}</span>

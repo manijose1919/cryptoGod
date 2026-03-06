@@ -46,7 +46,7 @@ export const PredictiveDisplay: React.FC<PredictiveDisplayProps> = ({ data: pred
             </h4>
             
             <div className="grid grid-cols-3 gap-3 mb-6">
-                {Object.entries(prediction.horizons).map(([horizon, data]) => (
+                {Object.entries(prediction?.horizons || {}).map(([horizon, data]) => (
                     <div key={horizon} className="text-center bg-gray-900/60 p-3 rounded-2xl border border-gray-700/50">
                         <div className="text-[10px] text-gray-500 uppercase font-black mb-1">{horizon}</div>
                         <div className={`text-2xl font-black ${getDirectionColor(data.direction)}`}>
