@@ -122,7 +122,7 @@ function PositionCard({
 }
 
 const SwingTradesPanel: React.FC<SwingTradesPanelProps> = ({ positions, currentPrices }) => {
-  const allPositions = Object.values(positions);
+  const allPositions = Object.values(positions || {});
   const swingTrades = allPositions.filter(isSwingTrade);
   const dayTrades = allPositions.filter(pos => !isSwingTrade(pos));
 

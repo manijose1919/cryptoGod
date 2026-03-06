@@ -48,7 +48,7 @@ export function useSessionActions() {
                     setPortfolio(prev => ({
                         cash: data.portfolio.cash,
                         initialBudget: data.portfolio.initialBudget,
-                        positions: data.portfolio.positions.reduce((acc: any, pos: any) => {
+                        positions: (Array.isArray(data.portfolio.positions) ? data.portfolio.positions : []).reduce((acc: any, pos: any) => {
                             acc[pos.ticker] = {
                                 quantity: pos.quantity, openPrice: pos.openPrice,
                                 currentPrice: pos.currentPrice, entryStrategy: pos.entryStrategy,

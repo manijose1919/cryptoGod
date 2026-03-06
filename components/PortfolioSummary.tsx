@@ -13,7 +13,7 @@ const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, wat
   const { cash, initialBudget, positions } = portfolio;
   const isRealMode = tradingMode === 'REAL';
   
-  const positionsValue = Object.values(positions).reduce((acc, position) => {
+  const positionsValue = Object.values(positions || {}).reduce((acc, position) => {
 // FIX: Property 'at' does not exist on type 'Candle[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.
     const currentPrice = watchlistData[position.ticker]?.candles?.[watchlistData[position.ticker]?.candles.length - 1]?.close ?? position.openPrice;
     return acc + (position.quantity * currentPrice);
@@ -62,10 +62,10 @@ const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, wat
         )}
 
         <div className="pt-3 border-t border-gray-700">
-            <h3 className="text-gray-400 font-semibold mb-2">Open Positions ({Object.keys(positions).length})</h3>
+            <h3 className="text-gray-400 font-semibold mb-2">Open Positions ({Object.keys(positions || {}).length})</h3>
             <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-                {Object.keys(positions).length > 0 ? (
-                    Object.values(positions).map(pos => {
+                {Object.keys(positions || {}).length > 0 ? (
+                    Object.values(positions || {}).map(pos => {
 // FIX: Property 'at' does not exist on type 'Candle[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.
                         const currentPrice = watchlistData[pos.ticker]?.candles?.[watchlistData[pos.ticker]?.candles.length - 1]?.close ?? pos.openPrice;
                         const positionPnl = (currentPrice - pos.openPrice) * pos.quantity;
