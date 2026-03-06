@@ -133,7 +133,7 @@ export function useIndicators() {
         if (!riskMetricsEnabled || !isTradingActive) return;
 
         const calculateMetrics = () => {
-            const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce((sum, pos) => {
+            const totalValue = portfolio.cash + Object.values(portfolio.positions || {}).reduce((sum, pos) => {
                 const price = watchlistDataRef.current[pos.ticker]?.candles?.at(-1)?.close ?? pos.openPrice;
                 return sum + (pos.quantity * price);
             }, 0);

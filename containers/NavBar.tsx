@@ -80,7 +80,7 @@ export function NavBar({ onOpenHistory }: NavBarProps) {
                     WS
                 </span>
                 {isBotActive && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />Bot Active</span>}
-                <span>{Object.keys(portfolio.positions).length} positions</span>
+                <span>{Object.keys(portfolio?.positions || {}).length} positions</span>
                 {elapsed && <span style={{ color: 'var(--text-muted)' }}>{elapsed}</span>}
             </div>
         </nav>
