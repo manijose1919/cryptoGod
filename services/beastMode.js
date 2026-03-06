@@ -45,8 +45,12 @@ export function setRoundTripFee(fee) {
 }
 
 // Per-ticker regime cache
-const regimeCache = new Map(); // ticker -> { regime, timestamp, ema10, ema30, rsi }
+const regimeCache = new Map(); // ticker -> { regime, timestamp, ema10, ema30, rsi, prevRegime, ... }
 const REGIME_CACHE_TTL = 60000; // 60s cache - prevents regime ping-ponging
+
+// Regime transition history — stores last 5 regimes per ticker for transition detection
+const regimeHistory = new Map(); // ticker -> [{ regime, timestamp, ema10Slope }]
+const MAX_REGIME_HISTORY = 5;
 
 // ============================================
 // EMA HELPER
@@ -141,20 +145,100 @@ export function getMarketRegime(candles, ticker = '') {
     regime = 'SIDEWAYS';
   }
 
-  // Cache it
+  // Cache it + track transition history
   if (ticker) {
+    const prev = regimeCache.get(ticker);
+    const prevRegime = prev?.regime || regime;
+    const prevSlope = parseFloat(prev?.slope || 0);
+    const slopeAccel = ema10Slope - prevSlope; // acceleration of EMA10 slope
+
     regimeCache.set(ticker, {
       regime,
+      prevRegime,
       timestamp: Date.now(),
       ema10: ema10Now,
       ema30: ema30Now,
       rsi,
       spread: spread.toFixed(3),
       slope: ema10Slope.toFixed(3),
+      slopeAccel: slopeAccel.toFixed(4),
     });
+
+    // Maintain regime history for transition detection
+    const history = regimeHistory.get(ticker) || [];
+    if (history.length === 0 || history[history.length - 1].regime !== regime) {
+      history.push({ regime, timestamp: Date.now(), ema10Slope });
+      if (history.length > MAX_REGIME_HISTORY) history.shift();
+      regimeHistory.set(ticker, history);
+    }
   }
 
   return regime;
+}
+
+// ============================================
+// 1B. REGIME TRANSITION DETECTION
+// ============================================
+
+/**
+ * Detect regime transitions and compute confidence/direction.
+ * Returns { transition, from, to, confidence, slopeAccel, recommendation }
+ *
+ * Transitions:
+ *   SIDEWAYS → UPTREND   = "BREAKOUT"  (high alpha — +15 confidence boost)
+ *   DOWNTREND → SIDEWAYS  = "RECOVERY"  (moderate alpha — +8 confidence boost)
+ *   UPTREND → SIDEWAYS    = "FADING"    (exit signal — tighten stops)
+ *   UPTREND → DOWNTREND   = "REVERSAL"  (strong exit — force tighten)
+ *   SIDEWAYS → DOWNTREND  = "BREAKDOWN" (avoid entry, tighten)
+ */
+export function detectRegimeTransition(ticker) {
+  const cached = regimeCache.get(ticker);
+  if (!cached) return { transition: null, confidence: 0 };
+
+  const { regime, prevRegime, slopeAccel } = cached;
+  const accel = parseFloat(slopeAccel || 0);
+
+  if (regime === prevRegime) {
+    return { transition: null, from: regime, to: regime, confidence: 0, slopeAccel: accel, recommendation: 'HOLD' };
+  }
+
+  let transition, confidenceBoost, recommendation;
+
+  if (prevRegime === 'SIDEWAYS' && regime === 'UPTREND') {
+    transition = 'BREAKOUT';
+    confidenceBoost = 15;
+    recommendation = 'BOOST_ENTRY'; // Best alpha: catch the breakout
+  } else if (prevRegime === 'DOWNTREND' && regime === 'SIDEWAYS') {
+    transition = 'RECOVERY';
+    confidenceBoost = 8;
+    recommendation = 'BOOST_ENTRY';
+  } else if (prevRegime === 'DOWNTREND' && regime === 'UPTREND') {
+    transition = 'V_REVERSAL';
+    confidenceBoost = 12;
+    recommendation = 'BOOST_ENTRY';
+  } else if (prevRegime === 'UPTREND' && regime === 'SIDEWAYS') {
+    transition = 'FADING';
+    confidenceBoost = -5;
+    recommendation = 'TIGHTEN_EXITS';
+  } else if (prevRegime === 'UPTREND' && regime === 'DOWNTREND') {
+    transition = 'REVERSAL';
+    confidenceBoost = -15;
+    recommendation = 'FORCE_TIGHTEN';
+  } else if (prevRegime === 'SIDEWAYS' && regime === 'DOWNTREND') {
+    transition = 'BREAKDOWN';
+    confidenceBoost = -10;
+    recommendation = 'TIGHTEN_EXITS';
+  } else {
+    transition = 'UNKNOWN';
+    confidenceBoost = 0;
+    recommendation = 'HOLD';
+  }
+
+  // Amplify confidence by slope acceleration (accelerating momentum = stronger signal)
+  if (accel > 0.02) confidenceBoost += 3;
+  if (accel < -0.02) confidenceBoost -= 3;
+
+  return { transition, from: prevRegime, to: regime, confidence: confidenceBoost, slopeAccel: accel, recommendation };
 }
 
 // ============================================
@@ -515,6 +599,7 @@ export function fullResetBeastMode(balance) {
   streakState.currentBalance = balance || 0;
   streakState.peakBalance = balance || 0;
   regimeCache.clear();
+  regimeHistory.clear();
 }
 
 // ============================================

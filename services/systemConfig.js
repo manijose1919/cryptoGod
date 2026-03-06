@@ -72,7 +72,7 @@ const DEFAULT_FLAGS = {
   META_LEARNER_ALPHA: 0.1,
 
   // Phase 5: Synthetic Data
-  SYNTHETIC_DATA_ENABLED: false,    // Off by default — experimental
+  SYNTHETIC_DATA_ENABLED: true,     // Enabled — augments training with TimeGAN samples
   SYNTHETIC_MULTIPLIER: 3,
   SYNTHETIC_QUALITY_THRESHOLD: 0.35,
 
@@ -89,6 +89,9 @@ const DEFAULT_FLAGS = {
   FEATURE_INTERACTIONS_ENABLED: true,
   MTF_FEATURES_ENABLED: true,
   WAVELET_FEATURES_ENABLED: true,
+
+  // Execution: prefer post-only maker orders (0.16% vs 0.26% per side on Kraken)
+  PREFER_MAKER_ORDERS: true,
 };
 
 // In-memory cache of current flags (seeded from defaults, overwritten by DB on init)

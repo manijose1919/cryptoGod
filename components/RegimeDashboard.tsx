@@ -30,6 +30,7 @@ export default function RegimeDashboard() {
   const [regimes, setRegimes] = useState<RegimeInfo[]>([]);
   const [fearGreed, setFearGreed] = useState<{ value: number; label: string } | null>(null);
   const [derivs, setDerivs] = useState<Record<string, unknown> | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -41,6 +42,7 @@ export default function RegimeDashboard() {
       if (regRes.status === 'fulfilled') setRegimes(regRes.value?.regimes || []);
       if (fgRes.status === 'fulfilled' && fgRes.value?.enabled !== false) setFearGreed(fgRes.value);
       if (drvRes.status === 'fulfilled') setDerivs(drvRes.value);
+      setLastUpdated(new Date());
     }
 
     fetchData();
@@ -92,6 +94,12 @@ export default function RegimeDashboard() {
               </span>
             ))}
           </div>
+        </div>
+      )}
+
+      {lastUpdated && (
+        <div className="text-[10px] text-slate-500 mt-2 text-right">
+          Updated {lastUpdated.toLocaleTimeString([], { hour12: false })}
         </div>
       )}
     </div>

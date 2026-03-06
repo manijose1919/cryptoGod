@@ -35,15 +35,15 @@ export const AILearningPanel: React.FC<AILearningPanelProps> = ({
         </div>
         <div className="bg-black/30 rounded-lg p-2 text-center">
           <div className="text-xs text-gray-500">Win Rate</div>
-          <div className={`text-lg font-bold ${winRateColor}`}>{learningState.winRate.toFixed(1)}%</div>
+          <div className={`text-lg font-bold ${winRateColor}`}>{(learningState.winRate || 0).toFixed(1)}%</div>
         </div>
         <div className="bg-black/30 rounded-lg p-2 text-center">
           <div className="text-xs text-gray-500">Avg Win</div>
-          <div className="text-lg font-bold text-green-400">+{learningState.avgWinPercent.toFixed(2)}%</div>
+          <div className="text-lg font-bold text-green-400">+{(learningState.avgWinPercent || 0).toFixed(2)}%</div>
         </div>
         <div className="bg-black/30 rounded-lg p-2 text-center">
           <div className="text-xs text-gray-500">Avg Loss</div>
-          <div className="text-lg font-bold text-red-400">-{learningState.avgLossPercent.toFixed(2)}%</div>
+          <div className="text-lg font-bold text-red-400">-{(learningState.avgLossPercent || 0).toFixed(2)}%</div>
         </div>
       </div>
 
@@ -59,7 +59,7 @@ export const AILearningPanel: React.FC<AILearningPanelProps> = ({
               <div key={strat} className="flex justify-between bg-black/20 rounded px-2 py-1">
                 <span className="text-gray-400">{strat}</span>
                 <span className={stats.winRate >= 50 ? 'text-green-400' : 'text-red-400'}>
-                  {stats.winRate.toFixed(0)}% ({stats.trades})
+                  {(stats.winRate || 0).toFixed(0)}% ({stats.trades})
                 </span>
               </div>
             ))}
@@ -70,19 +70,19 @@ export const AILearningPanel: React.FC<AILearningPanelProps> = ({
       <div className="flex justify-between text-xs mb-4">
         {learningState.bestStrategy && (
           <div className="text-green-400">
-            Best: {learningState.bestStrategy} ({learningState.strategyStats[learningState.bestStrategy].winRate.toFixed(0)}%)
+            Best: {learningState.bestStrategy} ({(learningState.strategyStats[learningState.bestStrategy]?.winRate || 0).toFixed(0)}%)
           </div>
         )}
         {learningState.worstStrategy && (
           <div className="text-red-400">
-            Worst: {learningState.worstStrategy} ({learningState.strategyStats[learningState.worstStrategy].winRate.toFixed(0)}%)
+            Worst: {learningState.worstStrategy} ({(learningState.strategyStats[learningState.worstStrategy]?.winRate || 0).toFixed(0)}%)
           </div>
         )}
       </div>
 
       {/* Learning Status */}
       <div className="mt-3 text-xs text-gray-500 text-center">
-        Profit Factor: {learningState.profitFactor.toFixed(2)} |
+        Profit Factor: {(learningState.profitFactor || 0).toFixed(2)} |
         Learned from {learningState.totalTrades} trades
       </div>
     </div>

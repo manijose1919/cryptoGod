@@ -326,6 +326,85 @@ function calculateAverageCorrelation(matrix, tickers) {
 }
 
 /**
+ * Detect lead-lag opportunities: when a leader (BTC/ETH) has moved significantly
+ * but correlated followers haven't caught up yet.
+ *
+ * @param {Map<string, Array>} allCandles - Map of ticker -> candles array
+ * @param {string[]} targetTickers - Tickers to check as potential followers
+ * @returns {Array<{ ticker, leader, leaderMove, followerMove, correlation, expectedMove, confidence }>}
+ */
+export function detectLeadLagOpportunities(allCandles, targetTickers) {
+  const enabled = getFlag('CORRELATION_ENGINE_ENABLED');
+  if (!enabled) return [];
+
+  const LEADERS = ['BTCUSD', 'ETHUSD']; // Primary market leaders
+  const MIN_LEADER_MOVE = 0.8;    // Leader must move >0.8% in last 30 candles
+  const MAX_FOLLOWER_MOVE = 0.3;  // Follower must have moved <0.3% (hasn't caught up)
+  const MIN_CORRELATION = 0.6;     // Must be meaningfully correlated
+  const LOOKBACK = 30;             // ~30 minutes at 1m candles
+
+  const opportunities = [];
+
+  try {
+    // Calculate recent % moves for leaders
+    const leaderMoves = {};
+    for (const leader of LEADERS) {
+      const candles = allCandles?.get?.(leader) || allCandles?.[leader];
+      if (!candles || candles.length < LOOKBACK + 5) continue;
+      const recent = candles[candles.length - 1].c;
+      const past = candles[candles.length - LOOKBACK].c;
+      if (past > 0) leaderMoves[leader] = ((recent - past) / past) * 100;
+    }
+
+    // Check each target as potential follower
+    for (const ticker of targetTickers) {
+      if (LEADERS.includes(ticker)) continue;
+
+      const candles = allCandles?.get?.(ticker) || allCandles?.[ticker];
+      if (!candles || candles.length < LOOKBACK + 5) continue;
+
+      const recent = candles[candles.length - 1].c;
+      const past = candles[candles.length - LOOKBACK].c;
+      if (past <= 0) continue;
+      const followerMove = ((recent - past) / past) * 100;
+
+      for (const [leader, leaderMove] of Object.entries(leaderMoves)) {
+        // Only bullish lead-lag (leader moved up, follower hasn't)
+        if (leaderMove < MIN_LEADER_MOVE) continue;
+        if (Math.abs(followerMove) > MAX_FOLLOWER_MOVE) continue;
+
+        const corr = getCorrelation(ticker, leader);
+        if (corr < MIN_CORRELATION) continue;
+
+        // Expected follower move = leader move × correlation coefficient
+        const expectedMove = leaderMove * corr;
+        const gap = expectedMove - followerMove;
+
+        if (gap > 0.3) {
+          // Confidence: higher correlation + bigger gap = higher confidence
+          const confidence = Math.min(25, Math.round(gap * corr * 15));
+          opportunities.push({
+            ticker,
+            leader,
+            leaderMove: parseFloat(leaderMove.toFixed(2)),
+            followerMove: parseFloat(followerMove.toFixed(2)),
+            correlation: parseFloat(corr.toFixed(3)),
+            expectedMove: parseFloat(expectedMove.toFixed(2)),
+            gap: parseFloat(gap.toFixed(2)),
+            confidence, // 0-25 confidence boost
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[CorrelationEngine] Lead-lag detection error:', err.message);
+  }
+
+  // Sort by confidence descending
+  return opportunities.sort((a, b) => b.confidence - a.confidence);
+}
+
+/**
  * Check if the matrix is stale and needs updating
  */
 export function isMatrixStale() {

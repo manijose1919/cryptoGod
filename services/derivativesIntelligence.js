@@ -456,7 +456,7 @@ export function getLiquidationLevels(ticker) {
   if (!entry) return { ticker, levels: [], available: false };
 
   const data = entry.data;
-  const currentPrice = data.spotPrice || 0;
+  const currentPrice = data.lastPrice || 0;
   if (!currentPrice) return { ticker, levels: [], available: false };
 
   // Estimate liquidation clusters from funding rate magnitude and OI
@@ -482,6 +482,82 @@ export function getLiquidationLevels(ticker) {
   return { ticker, currentPrice, levels, fundingRate: funding, available: true };
 }
 
+// ─── Cascade Prediction ─────────────────────────────────────
+
+/**
+ * Predict liquidation cascade risk for a ticker.
+ * Uses funding rate, OI-price divergence, and L/S ratio to estimate
+ * the probability of a liquidation cascade in the next 1-4 hours.
+ *
+ * @param {string} ticker - e.g., 'BTCUSD' or 'BTC'
+ * @returns {{ risk: 'LOW'|'MEDIUM'|'HIGH'|'CRITICAL', score: number, factors: string[], trailTightenPct: number }}
+ *   - trailTightenPct: multiply current trail % by this (e.g., 0.5 = halve the trail)
+ */
+export function predictCascadeRisk(ticker) {
+  const data = getDerivativesSignal(ticker);
+  if (!data) return { risk: 'LOW', score: 0, factors: [], trailTightenPct: 1.0 };
+
+  let score = 0;
+  const factors = [];
+
+  // Factor 1: Extreme positive funding (longs paying shorts → overcrowded)
+  const funding = data.fundingRateAnnualized || 0;
+  if (funding > 80) {
+    score += 35;
+    factors.push(`Extreme funding: ${funding.toFixed(0)}% ann.`);
+  } else if (funding > 40) {
+    score += 20;
+    factors.push(`High funding: ${funding.toFixed(0)}% ann.`);
+  } else if (funding > 20) {
+    score += 8;
+  }
+
+  // Factor 2: OI-Price bearish divergence (OI up + price down = trapped longs)
+  const oiDiv = data.oiPriceDivergence || 0;
+  if (oiDiv > 8) {
+    score += 30;
+    factors.push(`Strong OI-price divergence: ${oiDiv.toFixed(1)}`);
+  } else if (oiDiv > 4) {
+    score += 15;
+    factors.push(`OI-price divergence: ${oiDiv.toFixed(1)}`);
+  }
+
+  // Factor 3: L/S ratio heavily long
+  const lsRatio = data.longShortRatio || 1;
+  if (lsRatio > 2.0) {
+    score += 25;
+    factors.push(`L/S ratio: ${lsRatio.toFixed(2)} (extreme long bias)`);
+  } else if (lsRatio > 1.5) {
+    score += 12;
+    factors.push(`L/S ratio: ${lsRatio.toFixed(2)} (long-heavy)`);
+  }
+
+  // Factor 4: Active long liquidations (cascade already starting)
+  const liqImbalance = data.liquidationImbalance || 0;
+  if (liqImbalance > 0.6 && (data.longLiquidations24h || 0) > 500000) {
+    score += 20;
+    factors.push(`Long liquidations dominating: imbalance ${liqImbalance.toFixed(2)}`);
+  }
+
+  // Classify risk level
+  let risk, trailTightenPct;
+  if (score >= 80) {
+    risk = 'CRITICAL';
+    trailTightenPct = 0.3; // Tighten trail to 30% of normal
+  } else if (score >= 55) {
+    risk = 'HIGH';
+    trailTightenPct = 0.5; // Tighten trail to 50%
+  } else if (score >= 30) {
+    risk = 'MEDIUM';
+    trailTightenPct = 0.75; // Slightly tighter
+  } else {
+    risk = 'LOW';
+    trailTightenPct = 1.0; // No change
+  }
+
+  return { risk, score, factors, trailTightenPct };
+}
+
 export default {
   startDerivativesPolling,
   stopDerivativesPolling,
@@ -492,4 +568,5 @@ export default {
   getAllDerivativesData,
   getDerivativesStatus,
   getLiquidationLevels,
+  predictCascadeRisk,
 };

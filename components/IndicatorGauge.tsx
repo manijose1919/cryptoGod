@@ -7,6 +7,7 @@ interface IndicatorGaugeProps {
   lower_threshold?: number;
   upper_threshold?: number;
   higher_is_better?: boolean;
+  tooltip?: string;
 }
 
 const getGradientColor = (value: number) => {
@@ -17,7 +18,7 @@ const getGradientColor = (value: number) => {
   return 'from-red-500 via-red-500 to-red-400';
 };
 
-export const IndicatorGauge: React.FC<IndicatorGaugeProps> = ({ label, value, lower_threshold, upper_threshold, higher_is_better }) => {
+export const IndicatorGauge: React.FC<IndicatorGaugeProps> = ({ label, value, lower_threshold, upper_threshold, higher_is_better, tooltip }) => {
   const displayValue = value ?? 50;
   const rotation = (displayValue / 100) * 180 - 90;
   const gradientClass = getGradientColor(displayValue);
@@ -36,8 +37,8 @@ export const IndicatorGauge: React.FC<IndicatorGaugeProps> = ({ label, value, lo
   }
 
   return (
-    <div className="bg-gray-800/50 backdrop-blur-sm p-3 rounded-xl border border-gray-700 text-center">
-      <p className="text-xs text-gray-400 mb-2 uppercase tracking-wider">{label}</p>
+    <div className="bg-gray-800/50 backdrop-blur-sm p-3 rounded-xl border border-gray-700 text-center" title={tooltip}>
+      <p className="text-xs text-gray-400 mb-2 uppercase tracking-wider cursor-help">{label}</p>
       <div className="w-full h-20 relative mx-auto" style={{ maxWidth: '160px' }}>
         <div className="absolute inset-0 overflow-hidden rounded-t-full">
           <div className={`w-full h-full bg-gradient-to-r ${gradientClass} transition-all duration-500 ease-in-out`}></div>

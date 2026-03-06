@@ -80,6 +80,10 @@ let retrainCount = 0;
 let newSamplesSinceRetrain = 0;
 let performanceHistory = [];
 
+// Accumulated trade results for genetic evolution fitness
+const recentTradeResults = []; // { pnl, pnlPercent, strategy, ticker, outcome }
+const MAX_TRADE_RESULTS = 100;
+
 // Configuration
 const RETRAIN_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const MIN_NEW_SAMPLES = 20;                   // minimum new labeled samples to trigger retrain
@@ -231,7 +235,17 @@ export async function onTradeComplete(tradeData) {
       }
     }
 
-    // 4. Update counters
+    // 4. Accumulate trade result for genetic evolution fitness
+    recentTradeResults.push({
+      pnl: tradeData.pnl || 0,
+      pnlPercent: tradeData.pnlPercent || 0,
+      strategy: tradeData.strategy,
+      ticker: tradeData.ticker,
+      outcome: tradeData.outcome,
+    });
+    if (recentTradeResults.length > MAX_TRADE_RESULTS) recentTradeResults.shift();
+
+    // 5. Update counters
     totalTradesProcessed++;
     newSamplesSinceRetrain++;
 
@@ -360,18 +374,18 @@ export async function checkAndRetrain() {
       }
     }
 
-    // System B: Evolve genetic population
+    // System B: Evolve genetic population with accumulated trade results as fitness
     if (systemConfig?.getFlag('GENETIC_ENABLED') && geneticEngine?.getPopulation) {
       try {
         const pop = geneticEngine.getPopulation();
-        // Simple evolution: use recent trade results as proxy for genome fitness
-        // In production, you'd track per-genome-per-trade results
-        const tradeResults = [];
-        // Evolve with whatever results we have (may be empty, which is fine)
-        if (pop.genomes.length > 0) {
-          pop.evolve(tradeResults);
+        if (pop.genomes.length > 0 && recentTradeResults.length > 0) {
+          // Pass real trade results as fitness signal
+          pop.evolve(recentTradeResults);
           pop.persist();
-          console.log(`[SelfTeach] Genetic evolution: gen ${pop.generation}`);
+          console.log(`[SelfTeach] Genetic evolution: gen ${pop.generation}, fitness from ${recentTradeResults.length} trades`);
+        } else if (pop.genomes.length > 0) {
+          // No trades yet — skip evolution (don't evolve with empty fitness)
+          console.log(`[SelfTeach] Genetic evolution skipped: no trade results yet`);
         }
       } catch (e) {
         console.warn('[SelfTeach] Genetic evolution failed:', e.message);

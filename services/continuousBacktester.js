@@ -161,7 +161,11 @@ async function runContinuousBacktest() {
     // Fetch candle history from DB
     const tickers = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'BNBUSD'];
 
+    // Process strategies one at a time, yielding between each to avoid blocking event loop
     for (const strategy of STRATEGIES) {
+      // Yield to event loop between strategies (prevents blocking bot loop / WS handlers)
+      await new Promise(resolve => setImmediate(resolve));
+
       let totalTrades = 0;
       let wins = 0;
       let totalPnl = 0;
@@ -191,7 +195,6 @@ async function runContinuousBacktest() {
             // Emit ML training sample from backtest trade
             try {
               if (buildFeatureVector && insertMLFeaturesBatch) {
-                // Build feature vector from candles up to trade entry point
                 const entryCandles = candles.slice(0, (trade.entryIndex || Math.floor(candles.length / 2)) + 1);
                 if (entryCandles.length >= 30) {
                   const fv = buildFeatureVector(ticker, entryCandles, {});

@@ -78,24 +78,37 @@ class ShortSellingEngine {
     regime: string,
     mlConfidence: number,
     tcScore: number,
+    rsi?: number,
+    priceChange5?: number,
   ): { shouldShort: boolean; reason: string; size?: number } {
     if (!this.config.enabled) {
       return { shouldShort: false, reason: 'Short selling disabled' };
     }
 
-    // Regime check
+    // Regime check — only short in bearish regimes
     if (!this.config.onlyInRegimes.includes(regime)) {
       return { shouldShort: false, reason: `Regime ${regime} not in short list` };
     }
 
-    // Confidence check
+    // ML Confidence check
     if (mlConfidence < this.config.minConfidence) {
       return { shouldShort: false, reason: `ML confidence ${(mlConfidence * 100).toFixed(0)}% < ${this.config.minConfidence * 100}%` };
     }
 
-    // TC Score check (for shorts, we want HIGH TC = overbought)
-    if (tcScore < 70) {
-      return { shouldShort: false, reason: `TC score ${tcScore} not overbought enough (need >70)` };
+    // SHORT SIGNAL: TC should be LOW (bearish trend) for shorts, NOT high
+    // TC < 30 = strong bearish trend confirmation
+    if (tcScore > 40) {
+      return { shouldShort: false, reason: `TC score ${tcScore} too bullish for short (need <40)` };
+    }
+
+    // RSI overbought check: RSI > 70 = overextended = mean-reversion short opportunity
+    // If RSI provided, require either RSI > 65 OR strong bearish momentum (price drop > 2%)
+    const rsiVal = rsi ?? 50;
+    const priceChg = priceChange5 ?? 0;
+    const hasOverboughtRSI = rsiVal > 65;
+    const hasBearishMomentum = priceChg < -2.0; // >2% drop in last 5 candles
+    if (!hasOverboughtRSI && !hasBearishMomentum) {
+      return { shouldShort: false, reason: `No short signal: RSI=${rsiVal.toFixed(0)} (need>65), 5-bar chg=${priceChg.toFixed(1)}% (need<-2%)` };
     }
 
     // Position limit check
@@ -114,13 +127,19 @@ class ShortSellingEngine {
       return { shouldShort: false, reason: `Short exposure ${((totalExposure / this.simBalance) * 100).toFixed(1)}% >= ${this.config.maxExposurePct * 100}%` };
     }
 
-    // Calculate position size (conservative: 5-10% of sim balance)
-    const sizePct = 0.05 + (mlConfidence - this.config.minConfidence) * 0.15; // 5-10% based on confidence
-    const size = this.simBalance * Math.min(sizePct, 0.10);
+    // Calculate position size (conservative: 5-15% of sim balance)
+    // Higher size for stronger signals
+    const signalStrength = (hasOverboughtRSI ? 0.05 : 0) + (hasBearishMomentum ? 0.05 : 0);
+    const sizePct = 0.05 + signalStrength + (mlConfidence - this.config.minConfidence) * 0.10;
+    const size = this.simBalance * Math.min(sizePct, 0.15);
+
+    const signals = [];
+    if (hasOverboughtRSI) signals.push(`RSI=${rsiVal.toFixed(0)}`);
+    if (hasBearishMomentum) signals.push(`5bar=${priceChg.toFixed(1)}%`);
 
     return {
       shouldShort: true,
-      reason: `Bearish ${regime}, TC=${tcScore}, ML=${(mlConfidence * 100).toFixed(0)}%`,
+      reason: `Bearish ${regime}, TC=${tcScore}, ML=${(mlConfidence * 100).toFixed(0)}%, ${signals.join(', ')}`,
       size,
     };
   }

@@ -364,5 +364,80 @@ export default function createIntelligenceRouter(ctx) {
         }
     });
 
+    // ================================================================
+    // Data Surfacing Endpoints — expose stored DB data to dashboard
+    // ================================================================
+
+    // GET /genetic/evolution — Genome population and evolution log
+    router.get('/genetic/evolution', async (req, res) => {
+        try {
+            const { getGeneticGenomes } = await import('../services/database.js');
+            const limit = parseInt(req.query.limit) || 50;
+            const genomes = getGeneticGenomes(limit);
+            // Also try to get the engine stats
+            let engineStats = null;
+            try {
+                const { getEvolutionStats } = await import('../services/geneticStrategyEngine.js');
+                engineStats = getEvolutionStats?.();
+            } catch {}
+            res.json({ genomes, engineStats });
+        } catch (e) {
+            log.error('genetic/evolution failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /ml/gatekeeper-log — Recent gatekeeper decisions (PASS/BLOCK)
+    router.get('/ml/gatekeeper-log', async (req, res) => {
+        try {
+            const { getRecentGatekeeperDecisions } = await import('../services/database.js');
+            const limit = parseInt(req.query.limit) || 100;
+            res.json(getRecentGatekeeperDecisions(limit));
+        } catch (e) {
+            log.error('ml/gatekeeper-log failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /execution/history — Execution metrics (slippage, fill rates)
+    router.get('/execution/history', async (req, res) => {
+        try {
+            const { getExecutionMetrics } = await import('../services/database.js');
+            const ticker = req.query.ticker || null;
+            const limit = parseInt(req.query.limit) || 100;
+            res.json(getExecutionMetrics(ticker, limit));
+        } catch (e) {
+            log.error('execution/history failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /ml/thoughts-history — ML thoughts from DB (survives restarts)
+    router.get('/ml/thoughts-history', async (req, res) => {
+        try {
+            const { getMLThoughts } = await import('../services/database.js');
+            const limit = parseInt(req.query.limit) || 200;
+            const sessionId = req.query.sessionId || null;
+            res.json(getMLThoughts(sessionId, limit));
+        } catch (e) {
+            log.error('ml/thoughts-history failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /derivatives/history — Current derivatives intelligence data
+    router.get('/derivatives/history', async (req, res) => {
+        try {
+            let data = {};
+            if (ctx.derivativesIntel) {
+                data = ctx.derivativesIntel.getAllDerivativesData?.() || {};
+            }
+            res.json(data);
+        } catch (e) {
+            log.error('derivatives/history failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     return router;
 }

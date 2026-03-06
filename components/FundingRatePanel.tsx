@@ -17,6 +17,8 @@ interface FundingRate {
 export default function FundingRatePanel() {
   const [rates, setRates] = useState<FundingRate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
     async function fetchRates() {
@@ -24,7 +26,9 @@ export default function FundingRatePanel() {
         const res = await fetch('/api/funding-rates/compare');
         const data = await res.json();
         setRates(data?.rates || []);
-      } catch { /* ignore */ }
+        setLastUpdated(new Date());
+        setError(false);
+      } catch { setError(true); }
       setLoading(false);
     }
 
@@ -34,6 +38,7 @@ export default function FundingRatePanel() {
   }, []);
 
   if (loading) return <div className="glass-card-sm p-4 text-slate-400 text-sm">Loading funding rates...</div>;
+  if (error) return <div className="glass-card-sm p-4 text-slate-500 text-sm">Unable to load funding rate data</div>;
   if (rates.length === 0) return <div className="glass-card-sm p-4 text-slate-500 text-sm">No funding rate data</div>;
 
   return (
@@ -60,7 +65,7 @@ export default function FundingRatePanel() {
                   {(r.rate * 100).toFixed(4)}%
                 </td>
                 <td className={r.annualized >= 0 ? 'text-green-400' : 'text-red-400'}>
-                  {r.annualized.toFixed(1)}%
+                  {(r.annualized || 0).toFixed(1)}%
                 </td>
                 <td>{r.basis != null ? `${(r.basis * 100).toFixed(2)}%` : 'N/A'}</td>
                 <td>
@@ -80,8 +85,11 @@ export default function FundingRatePanel() {
         </tbody>
       </table>
 
-      <div className="text-xs text-slate-500 mt-2">
-        High annualized rates ({'>'}20%) may indicate funding rate arbitrage opportunity
+      <div className="text-xs text-slate-500 mt-2 flex justify-between">
+        <span title="Annualized funding rates above 20% may signal arbitrage opportunities between spot and perpetual futures.">
+          High annualized rates ({'>'}20%) may indicate funding rate arbitrage opportunity
+        </span>
+        {lastUpdated && <span>Updated {lastUpdated.toLocaleTimeString([], { hour12: false })}</span>}
       </div>
     </div>
   );

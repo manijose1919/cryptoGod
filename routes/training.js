@@ -42,6 +42,45 @@ import {
   triggerMLRetrain,
 } from '../services/walkForwardEngine.js';
 
+import {
+  startMonteCarlo,
+  stopMonteCarlo,
+  getMonteCarloStatus,
+  getMonteCarloResults,
+} from '../services/monteCarloEngine.js';
+import {
+  startSensitivityAnalysis,
+  stopSensitivityAnalysis,
+  getSensitivityStatus,
+  getSensitivityResults,
+} from '../services/sensitivityAnalysis.js';
+import {
+  startCrossPairValidation,
+  stopCrossPairValidation,
+  getCrossPairStatus,
+  getCrossPairResults,
+} from '../services/crossPairEngine.js';
+import {
+  startRegimeTraining,
+  stopRegimeTraining,
+  getRegimeTrainingStatus,
+  getRegimeTrainingResults,
+  createComposite,
+} from '../services/regimeTrainingEngine.js';
+import {
+  startShortTraining,
+  stopShortTraining,
+  getShortTrainingStatus,
+  getShortTrainingResults,
+} from '../services/shortTrainingEngine.js';
+import {
+  startGridTraining,
+  stopGridTraining,
+  getGridTrainingStatus,
+  getGridTrainingResults,
+} from '../services/gridTrainingEngine.js';
+import { calculateStakingYield } from '../services/stakingCalculator.js';
+
 // Import live system state transfer functions
 import { importState as awImportState, exportState as awExportState } from '../services/adaptiveWeights.js';
 import { importState as beastImportState, exportState as beastExportState } from '../services/beastMode.js';
@@ -471,6 +510,191 @@ router.post('/modify-seed', (req, res) => {
     res.json({ success: true, ...result });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================
+// MONTE CARLO STRESS TEST
+// ============================================
+
+router.post('/monte-carlo/start', async (req, res) => {
+  try {
+    const result = await startMonteCarlo(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/monte-carlo/stop', (req, res) => {
+  res.json(stopMonteCarlo());
+});
+
+router.get('/monte-carlo/status', (req, res) => {
+  res.json(getMonteCarloStatus());
+});
+
+router.get('/monte-carlo/results/:runId', (req, res) => {
+  const results = getMonteCarloResults(req.params.runId);
+  if (!results) return res.status(404).json({ error: 'No Monte Carlo results found' });
+  res.json(results);
+});
+
+// ============================================
+// SENSITIVITY ANALYSIS
+// ============================================
+
+router.post('/sensitivity/start', async (req, res) => {
+  try {
+    const result = await startSensitivityAnalysis(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/sensitivity/stop', (req, res) => {
+  res.json(stopSensitivityAnalysis());
+});
+
+router.get('/sensitivity/status', (req, res) => {
+  res.json(getSensitivityStatus());
+});
+
+router.get('/sensitivity/results/:runId', (req, res) => {
+  const results = getSensitivityResults(req.params.runId);
+  if (!results) return res.status(404).json({ error: 'No sensitivity results found' });
+  res.json(results);
+});
+
+// ============================================
+// CROSS-PAIR VALIDATION
+// ============================================
+
+router.post('/cross-pair/start', async (req, res) => {
+  try {
+    const result = await startCrossPairValidation(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/cross-pair/stop', (req, res) => {
+  res.json(stopCrossPairValidation());
+});
+
+router.get('/cross-pair/status', (req, res) => {
+  res.json(getCrossPairStatus());
+});
+
+router.get('/cross-pair/results/:runId', (req, res) => {
+  const results = getCrossPairResults(req.params.runId);
+  if (!results) return res.status(404).json({ error: 'No cross-pair results found' });
+  res.json(results);
+});
+
+// ============================================
+// REGIME-SPECIFIC TRAINING
+// ============================================
+
+router.post('/regime/start', async (req, res) => {
+  try {
+    const result = await startRegimeTraining(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/regime/stop', (req, res) => {
+  res.json(stopRegimeTraining());
+});
+
+router.get('/regime/status', (req, res) => {
+  res.json(getRegimeTrainingStatus());
+});
+
+router.get('/regime/results', (req, res) => {
+  const results = getRegimeTrainingResults();
+  if (!results) return res.status(404).json({ error: 'No regime training results' });
+  res.json(results);
+});
+
+router.post('/regime/composite', (req, res) => {
+  try {
+    const { baseRunId } = req.body || {};
+    const result = createComposite(baseRunId);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// ============================================
+// SHORT SELLING TRAINING
+// ============================================
+
+router.post('/short/start', async (req, res) => {
+  try {
+    const result = await startShortTraining(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/short/stop', (req, res) => {
+  res.json(stopShortTraining());
+});
+
+router.get('/short/status', (req, res) => {
+  res.json(getShortTrainingStatus());
+});
+
+router.get('/short/results', (req, res) => {
+  const results = getShortTrainingResults();
+  if (!results) return res.status(404).json({ error: 'No short training results' });
+  res.json(results);
+});
+
+// ============================================
+// GRID TRADING TRAINING
+// ============================================
+
+router.post('/grid/start', async (req, res) => {
+  try {
+    const result = await startGridTraining(req.body || {});
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+router.post('/grid/stop', (req, res) => {
+  res.json(stopGridTraining());
+});
+
+router.get('/grid/status', (req, res) => {
+  res.json(getGridTrainingStatus());
+});
+
+router.get('/grid/results', (req, res) => {
+  const results = getGridTrainingResults();
+  if (!results) return res.status(404).json({ error: 'No grid training results' });
+  res.json(results);
+});
+
+// ============================================
+// STAKING CALCULATOR
+// ============================================
+
+router.post('/staking/calculate', (req, res) => {
+  try {
+    const result = calculateStakingYield(req.body || {});
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 

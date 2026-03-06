@@ -40,6 +40,7 @@ export function CenterPanel({ handleRunMonteCarlo }: CenterPanelProps) {
                     lower_threshold={SIGNAL_THRESHOLDS.TREND_BULLISH_ENTRY}
                     upper_threshold={SIGNAL_THRESHOLDS.TREND_BEARISH_EXIT}
                     higher_is_better={false}
+                    tooltip="Trend Clarity (TC): Measures trend strength 0-100. Low values = strong clear trend (bullish for longs). High values = choppy/unclear trend. Entry threshold shown by color."
                 />
                 <IndicatorGauge
                     label="Breakout Power"
@@ -47,6 +48,7 @@ export function CenterPanel({ handleRunMonteCarlo }: CenterPanelProps) {
                     lower_threshold={SIGNAL_THRESHOLDS.BREAKOUT_SQUEEZE_ENTRY}
                     upper_threshold={SIGNAL_THRESHOLDS.BREAKOUT_EXPANSION_EXIT}
                     higher_is_better={false}
+                    tooltip="Breakout Power: Measures Bollinger Band squeeze/expansion. Low = tight squeeze (potential breakout imminent). High = expanded bands (breakout already happened)."
                 />
                 <IndicatorGauge
                     label="Whale Money Flow"
@@ -54,6 +56,7 @@ export function CenterPanel({ handleRunMonteCarlo }: CenterPanelProps) {
                     lower_threshold={SIGNAL_THRESHOLDS.WHALE_SELLING_EXIT}
                     upper_threshold={SIGNAL_THRESHOLDS.WHALE_BUYING_ENTRY}
                     higher_is_better={true}
+                    tooltip="Whale Money Flow: Tracks large-volume transactions. High = institutional buying pressure (bullish). Low = whale selling/distribution (bearish). 50 = neutral."
                 />
                 <IndicatorGauge
                     label="Momentum"
@@ -61,6 +64,7 @@ export function CenterPanel({ handleRunMonteCarlo }: CenterPanelProps) {
                     lower_threshold={50 - SIGNAL_THRESHOLDS.MOMENTUM_BEARISH_EXIT}
                     upper_threshold={50 + SIGNAL_THRESHOLDS.MOMENTUM_BULLISH_ENTRY}
                     higher_is_better={true}
+                    tooltip="Momentum: Combines short-term and long-term rate of change. Above 50 = bullish momentum, below 50 = bearish. Stronger readings = stronger directional move."
                 />
             </div>
 
@@ -121,7 +125,7 @@ export function CenterPanel({ handleRunMonteCarlo }: CenterPanelProps) {
                 <NewsDashboard ticker={ticker} />
             </div>
             <MLDashboard ticker={ticker} />
-            <MLThoughtProcess pollInterval={2000} />
+            <MLThoughtProcess pollInterval={5000} />
         </div>
     );
 }

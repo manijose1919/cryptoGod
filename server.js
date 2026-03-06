@@ -50,13 +50,13 @@ import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, expor
 // WebSocket services are accessed dynamically via getWebSocketService()
 import * as cryptoComWsService from './services/websocketService.js';
 import { analyzeMultiTimeframe, shouldEnterLong, getMultiTimeframeStatus } from './services/multiTimeframe.js';
-import { recordTradeResult as cbRecordTrade, setDailyBalance, setCurrentBalance, shouldPauseTrading, resetCircuitBreaker, fullResetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
+import { recordTradeResult as cbRecordTrade, setDailyBalance, setCurrentBalance, setCurrentRegime as cbSetRegime, shouldPauseTrading, resetCircuitBreaker, fullResetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
 import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategyThrottled, getAdaptiveWeightsStatus, fullResetWeights, exportState as awExportState, importState as awImportState } from './services/adaptiveWeights.js';
 import { calculateAllIndicators } from './services/advancedIndicators.js';
 import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
-import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment } from './services/socialSentiment.js';
+import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment, fetchCryptoNews, fetchCoinGeckoTrending, getTickerNewsSentiment, isTrendingCoin } from './services/socialSentiment.js';
 import { getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
-import { getMarketRegime, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, fullResetBeastMode, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee, setTargetOverrides } from './services/beastMode.js';
+import { getMarketRegime, detectRegimeTransition, getStrategyPool, isStrategyAllowedForRegime, adjustForVolatility, getCompoundMultiplier, getDynamicTargets, checkDynamicExit, recordTradeResult as beastRecordTrade, updateBalance as beastUpdateBalance, setSessionBalance as beastSetSessionBalance, fullResetBeastMode, getBeastModeStatus, exportState as beastExportState, importState as beastImportState, setRoundTripFee as beastSetRoundTripFee, setTargetOverrides, checkMaxDrawdown } from './services/beastMode.js';
 import { triggerOptimization, getOptimizedEntryParams, getOptimizedTargets, getOptimizerStatus, forceOptimize, recordPostOptTrade, resetToDefaults as resetOptimizer, setFeeForSimulation, exportState as optExportState, importState as optImportState } from './services/parameterOptimizer.js';
 
 // Phase 6: New Backend Services (SIM parity)
@@ -78,10 +78,10 @@ import { getFundingRateSignal, getFundingConfidenceAdjustment, shouldBlockEntryO
 import { getOrderBookSignal, getOrderBookConfidenceAdjustment } from './services/orderBookSignals.js';
 import { analyzeOrderBook, optimizeEntryExit } from './services/orderBookService.js';
 import { getCorrelationMatrix, checkCorrelationRisk } from './services/correlationRiskBackend.js';
-import { initJournalTable, recordTradeForJournal, autoJournal, getJournalEntries, forceGenerateJournal } from './services/tradeJournal.js';
+import { initJournalTable, recordTradeForJournal, autoJournal, getJournalEntries, forceGenerateJournal, recordTradeDetail, getMinedBlockedHours, getTickerStrategyScore, getRegimeStrategyAdj } from './services/tradeJournal.js';
 
 // Batch 3: Quality of Life Services
-import { initTelegram, isEnabled as telegramEnabled, getStatus as telegramStatus, alertTradeExecution, alertCircuitBreaker, sendTestMessage } from './services/telegramService.js';
+import { initTelegram, isEnabled as telegramEnabled, getStatus as telegramStatus, alertTradeExecution, alertCircuitBreaker, sendTestMessage, alertRegimeTransition, alertMLDegradation, alertConcentrationRisk } from './services/telegramService.js';
 
 // Batch 5: Session Persistence
 import {
@@ -452,8 +452,207 @@ function getActiveFees() {
     return { perSide, roundTrip: perSide * 2 };
 }
 
+// ═══ PRICE VELOCITY TRACKER ═══
+// Computes real-time price velocity ($/sec) and acceleration (change in velocity) from tick stream.
+// Used for: faster exit when velocity turns negative, entry confirmation when acceleration is positive.
+const priceVelocityTracker = (() => {
+    const tickHistory = new Map(); // ticker → [{price, ts}, ...]
+    const MAX_TICKS = 30; // Keep last 30 ticks per ticker
+    const WINDOW_MS = 60000; // 60-second velocity window
+
+    function recordTick(ticker, price) {
+        if (!tickHistory.has(ticker)) tickHistory.set(ticker, []);
+        const ticks = tickHistory.get(ticker);
+        ticks.push({ price, ts: Date.now() });
+        // Trim old ticks
+        while (ticks.length > MAX_TICKS) ticks.shift();
+    }
+
+    function getMetrics(ticker) {
+        const ticks = tickHistory.get(ticker);
+        if (!ticks || ticks.length < 3) return { velocity: 0, acceleration: 0, tickCount: 0 };
+
+        const now = Date.now();
+        const recent = ticks.filter(t => now - t.ts < WINDOW_MS);
+        if (recent.length < 3) return { velocity: 0, acceleration: 0, tickCount: recent.length };
+
+        // Velocity: price change per second over the window
+        const first = recent[0];
+        const last = recent[recent.length - 1];
+        const dtSec = (last.ts - first.ts) / 1000;
+        const velocity = dtSec > 0 ? (last.price - first.price) / dtSec : 0;
+
+        // Acceleration: compare velocity of first half vs second half
+        const mid = Math.floor(recent.length / 2);
+        const firstHalf = recent.slice(0, mid);
+        const secondHalf = recent.slice(mid);
+        const v1 = firstHalf.length >= 2
+            ? (firstHalf[firstHalf.length - 1].price - firstHalf[0].price) / ((firstHalf[firstHalf.length - 1].ts - firstHalf[0].ts) / 1000 || 1)
+            : 0;
+        const v2 = secondHalf.length >= 2
+            ? (secondHalf[secondHalf.length - 1].price - secondHalf[0].price) / ((secondHalf[secondHalf.length - 1].ts - secondHalf[0].ts) / 1000 || 1)
+            : 0;
+        const acceleration = v2 - v1;
+
+        // Normalize to percentage of price
+        const pricePctVelocity = last.price > 0 ? (velocity / last.price) * 100 * 60 : 0; // %/min
+        const pricePctAccel = last.price > 0 ? (acceleration / last.price) * 100 * 60 : 0;
+
+        return {
+            velocity: pricePctVelocity,  // %/min
+            acceleration: pricePctAccel, // %/min²
+            tickCount: recent.length,
+            rawVelocity: velocity,       // $/sec
+        };
+    }
+
+    return { recordTick, getMetrics };
+})();
+
+// ═══ TIME-OF-DAY WIN RATE TRACKER ═══
+// Tracks win rates by UTC hour (0-23) and day-of-week (0=Sun..6=Sat).
+// Self-learning: blocks entries during historically unprofitable time slots.
+const timeOfDayTracker = (() => {
+    // hourStats[h] = { wins, losses }  for h in 0..23
+    const hourStats = Array.from({ length: 24 }, () => ({ wins: 0, losses: 0 }));
+    // dayStats[d] = { wins, losses }  for d in 0..6 (Sun..Sat)
+    const dayStats = Array.from({ length: 7 }, () => ({ wins: 0, losses: 0 }));
+    // Combined hour×day matrix for finer granularity (168 slots)
+    const hourDayMatrix = Array.from({ length: 7 }, () =>
+        Array.from({ length: 24 }, () => ({ wins: 0, losses: 0 }))
+    );
+    const MIN_TRADES_FOR_GATE = 8; // Need 8+ trades in a slot before blocking
+
+    function recordTrade(entryTime, pnl) {
+        const d = new Date(entryTime);
+        const hour = d.getUTCHours();
+        const day = d.getUTCDay();
+        if (pnl >= 0) {
+            hourStats[hour].wins++;
+            dayStats[day].wins++;
+            hourDayMatrix[day][hour].wins++;
+        } else {
+            hourStats[hour].losses++;
+            dayStats[day].losses++;
+            hourDayMatrix[day][hour].losses++;
+        }
+    }
+
+    function shouldBlockEntry() {
+        const now = new Date();
+        const hour = now.getUTCHours();
+        const day = now.getUTCDay();
+        const reasons = [];
+
+        // Check hour-level win rate
+        const hTotal = hourStats[hour].wins + hourStats[hour].losses;
+        if (hTotal >= MIN_TRADES_FOR_GATE) {
+            const hWR = hourStats[hour].wins / hTotal;
+            if (hWR < 0.35) {
+                reasons.push(`Hour ${hour} UTC: ${(hWR * 100).toFixed(0)}% WR (${hTotal} trades)`);
+            }
+        }
+
+        // Check day-level win rate
+        const dTotal = dayStats[day].wins + dayStats[day].losses;
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        if (dTotal >= MIN_TRADES_FOR_GATE * 3) { // Need more trades for day-level gate
+            const dWR = dayStats[day].wins / dTotal;
+            if (dWR < 0.35) {
+                reasons.push(`${dayNames[day]}: ${(dWR * 100).toFixed(0)}% WR (${dTotal} trades)`);
+            }
+        }
+
+        // Check combined hour×day (most specific, needs more data)
+        const hdSlot = hourDayMatrix[day][hour];
+        const hdTotal = hdSlot.wins + hdSlot.losses;
+        if (hdTotal >= MIN_TRADES_FOR_GATE) {
+            const hdWR = hdSlot.wins / hdTotal;
+            if (hdWR < 0.30) {
+                reasons.push(`${dayNames[day]} ${hour}:00 UTC: ${(hdWR * 100).toFixed(0)}% WR (${hdTotal} trades)`);
+            }
+        }
+
+        return { blocked: reasons.length > 0, reasons };
+    }
+
+    function getStatus() {
+        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const hourSummary = hourStats.map((s, h) => {
+            const total = s.wins + s.losses;
+            return { hour: h, wins: s.wins, losses: s.losses, winRate: total > 0 ? (s.wins / total * 100).toFixed(0) + '%' : 'N/A', total };
+        }).filter(s => s.total > 0);
+        const daySummary = dayStats.map((s, d) => {
+            const total = s.wins + s.losses;
+            return { day: dayNames[d], wins: s.wins, losses: s.losses, winRate: total > 0 ? (s.wins / total * 100).toFixed(0) + '%' : 'N/A', total };
+        }).filter(s => s.total > 0);
+        return { hourSummary, daySummary, shouldBlockEntry: shouldBlockEntry() };
+    }
+
+    // Bootstrap from existing trade log on startup
+    function bootstrapFromTradeLog(tradeLog) {
+        if (!tradeLog || !Array.isArray(tradeLog)) return;
+        for (const t of tradeLog) {
+            if (t.entryTime) recordTrade(t.entryTime, t.pnl || 0);
+        }
+        console.log(`[TimeOfDay] Bootstrapped from ${tradeLog.length} historical trades`);
+    }
+
+    return { recordTrade, shouldBlockEntry, getStatus, bootstrapFromTradeLog };
+})();
+
 /** Stored reference to broadcastToFrontend for WS reconnect on exchange switch */
 let _broadcastToFrontend = null;
+
+// ═══ PER-TICKER LOSS COOLDOWN ═══
+// Raises entry threshold after consecutive losses on a ticker
+const tickerLossCooldown = (() => {
+    const lossStreak = new Map(); // ticker → { consecutiveLosses, cooldownUntil }
+    const COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown after 3 consecutive losses
+    const MAX_CONSECUTIVE_LOSSES = 3;
+
+    function recordTrade(ticker, pnl) {
+        if (!lossStreak.has(ticker)) lossStreak.set(ticker, { consecutiveLosses: 0, cooldownUntil: 0 });
+        const entry = lossStreak.get(ticker);
+        if (pnl < 0) {
+            entry.consecutiveLosses++;
+            if (entry.consecutiveLosses >= MAX_CONSECUTIVE_LOSSES) {
+                entry.cooldownUntil = Date.now() + COOLDOWN_MS;
+                console.log(`[TickerCooldown] ${ticker}: ${entry.consecutiveLosses} consecutive losses — cooldown for 1 hour`);
+            }
+        } else {
+            entry.consecutiveLosses = 0; // Reset on win
+        }
+    }
+
+    function getScoreAdjustment(ticker) {
+        const entry = lossStreak.get(ticker);
+        if (!entry) return 0;
+        if (entry.cooldownUntil > Date.now()) {
+            return 15; // Raise minimum score by 15 during cooldown
+        }
+        // Smaller penalty for 1-2 consecutive losses
+        if (entry.consecutiveLosses >= 2) return 8;
+        if (entry.consecutiveLosses >= 1) return 3;
+        return 0;
+    }
+
+    function getStatus() {
+        const result = {};
+        for (const [ticker, entry] of lossStreak) {
+            if (entry.consecutiveLosses > 0 || entry.cooldownUntil > Date.now()) {
+                result[ticker] = {
+                    consecutiveLosses: entry.consecutiveLosses,
+                    onCooldown: entry.cooldownUntil > Date.now(),
+                    cooldownRemaining: Math.max(0, entry.cooldownUntil - Date.now()),
+                };
+            }
+        }
+        return result;
+    }
+
+    return { recordTrade, getScoreAdjustment, getStatus };
+})();
 
 /** Initialize WebSocket for the active exchange with candle/trade relay to frontend */
 function initExchangeWebSocket(tickers, broadcastFn) {
@@ -485,6 +684,19 @@ function initExchangeWebSocket(tickers, broadcastFn) {
                     }
                 });
             }
+            // Track price velocity from tick stream
+            priceVelocityTracker.recordTick(ticker, trade.price);
+
+            // Feed VPIN updates from real-time trade stream
+            if (orderBookMicro?.updateVPIN) {
+                try {
+                    orderBookMicro.updateVPIN(ticker, trade.price, trade.quantity || 0, trade.side || 'unknown');
+                } catch (e) { /* non-critical */ }
+            }
+
+            // Track volume bursts for breakout detection
+            trackTickVolume(ticker, trade);
+
             // Real-time SL/TP exit check on every trade tick
             if (portfolio.positions[ticker] && exitLevelCache.has(ticker)) {
                 checkTickExit(ticker, trade.price);
@@ -712,12 +924,66 @@ app.get('/api/backtest/continuous', (req, res) => {
     }
 });
 
+// --- Trade Journal Patterns API ---
+app.get('/api/journal/patterns', (req, res) => {
+    try {
+        res.json({ minedBlockedHours: getMinedBlockedHours() });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Portfolio Risk Summary API ---
+app.get('/api/engines/risk-summary', (req, res) => {
+    try {
+        const corrStatus = portfolioCorrelationEngine.getCorrelationStatus();
+        let cvarData = {};
+        try { if (cvarKelly) cvarData = cvarKelly.getStatus?.() || {}; } catch (e) {}
+
+        // Build position risk data
+        const posRisk = [];
+        const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
+            (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0);
+        for (const [ticker, pos] of Object.entries(portfolio.positions)) {
+            const value = pos.quantity * (pos.currentPrice || pos.openPrice);
+            const pnlPct = pos.openPrice > 0 ? ((pos.currentPrice || pos.openPrice) - pos.openPrice) / pos.openPrice * 100 : 0;
+            const correlated = [];
+            for (const [other] of Object.entries(portfolio.positions)) {
+                if (other !== ticker) correlated.push(other);
+            }
+            posRisk.push({ ticker, weight: totalValue > 0 ? value / totalValue : 0, pnlPct, correlated });
+        }
+
+        const ddCheck = checkMaxDrawdown();
+        res.json({
+            correlation: corrStatus,
+            cvarKelly: cvarData,
+            heatScore: botState.heatScore || 0,
+            drawdown: ddCheck.drawdownPercent || 0,
+            maxDrawdown: 15,
+            positions: posRisk,
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // --- Redis Cache Stats API (Batch 1A) ---
 app.get('/api/cache/stats', (req, res) => {
     try {
         res.json(redisCache ? redisCache.getStats() : { mode: 'none' });
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Execution Quality Feedback Endpoint ---
+app.get('/api/execution/stats', (req, res) => {
+    try {
+        const stats = executionEngine?.getExecutionStats?.() || { totalExecutions: 0 };
+        res.json(stats);
+    } catch (e) {
+        res.json({ totalExecutions: 0, error: e.message });
     }
 });
 
@@ -747,6 +1013,142 @@ app.get('/api/health/ml', (req, res) => {
         });
     } catch (e) {
         res.status(500).json({ status: 'error', error: e.message });
+    }
+});
+
+// --- System Status Endpoint (used by App.tsx + PerformanceDashboard) ---
+app.get('/api/system/status', (req, res) => {
+    try {
+        const cbStatus = getCircuitBreakerStatus();
+        res.json({
+            aiLearning: {
+                isActive: botState.isRunning || false,
+                winRate: cbStatus.winRate || 0,
+                totalTrades: cbStatus.totalTrades || 0,
+                avgWinPercent: cbStatus.avgWin || 0,
+                avgLossPercent: cbStatus.avgLoss || 0,
+                kellyFraction: cbStatus.kelly || 0,
+                netPnl: cbStatus.netPnl || 0,
+            },
+            portfolio: {
+                cash: portfolio.cash,
+                initialBudget: portfolio.startingCash || 1000,
+                positions: Object.keys(portfolio.positions).length,
+            },
+            logs: logs.slice(-200),
+            uptime: process.uptime(),
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/status', (req, res) => {
+    try {
+        res.json({
+            portfolio: {
+                cash: portfolio.cash,
+                initialBudget: portfolio.startingCash || 1000,
+                positions: portfolio.positions,
+            },
+            logs: logs.slice(-200),
+            tradeLog: portfolio.tradeLog?.slice(-100) || [],
+            isRunning: botState.isRunning,
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- Risk Dashboard Endpoints ---
+app.get('/api/risk/var', (req, res) => {
+    try {
+        const cvarStatus = cvarKelly?.getCVaRStatus?.() || {};
+        const cbStatus = getCircuitBreakerStatus();
+        const ddCheck = checkMaxDrawdown();
+        const kellySize = getKellyPositionSize(portfolio.cash + Object.values(portfolio.positions).reduce(
+            (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0));
+
+        res.json({
+            var95: parseFloat(cvarStatus.var95) || 0,
+            var99: 0,
+            cvar95: parseFloat(cvarStatus.cvar) || 0,
+            cvar99: 0,
+            method: 'historical',
+            confidence: 0.95,
+            timestamp: Date.now(),
+            kelly: {
+                full: kellySize.kelly?.fraction || 0,
+                half: (kellySize.kelly?.fraction || 0) * 0.5,
+                quarter: (kellySize.kelly?.fraction || 0) * 0.25,
+                recommended: kellySize.fraction || 0.10,
+                winRate: kellySize.kelly?.stats?.winRate || cbStatus.winRate || 0,
+                avgWin: kellySize.kelly?.stats?.avgWin || 0,
+                avgLoss: kellySize.kelly?.stats?.avgLoss || 0,
+            },
+            drawdown: {
+                current: ddCheck.drawdownPercent || 0,
+                max: 15,
+                duration: 0,
+                peakValue: peakValue,
+                troughValue: peakValue * (1 - (ddCheck.drawdownPercent || 0) / 100),
+            },
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/risk-budget', (req, res) => {
+    try {
+        const cbStatus = getCircuitBreakerStatus();
+        const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
+            (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0);
+        const positionCount = Object.keys(portfolio.positions).length;
+        const usedPct = totalValue > 0 ? ((totalValue - portfolio.cash) / totalValue * 100) : 0;
+
+        res.json({
+            total: 100,
+            used: usedPct,
+            remaining: 100 - usedPct,
+            byStrategy: {},
+            positionSizing: Object.entries(portfolio.positions).map(([ticker, pos]) => ({
+                ticker,
+                weight: totalValue > 0 ? ((pos.quantity * (pos.currentPrice || pos.openPrice)) / totalValue * 100) : 0,
+                pnlPct: pos.openPrice > 0 ? ((pos.currentPrice || pos.openPrice) - pos.openPrice) / pos.openPrice * 100 : 0,
+            })),
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/monte-carlo', async (req, res) => {
+    try {
+        let monteCarloService;
+        try { monteCarloService = await import('./services/monteCarloService.js'); }
+        catch { return res.json(null); }
+
+        const trades = portfolio.tradeLog?.map(t => t.pnlPercent || 0) || [];
+        if (trades.length < 5) return res.json(null);
+
+        const result = monteCarloService.runMonteCarlo?.(trades, { simulations: 500, periods: 50 });
+        res.json(result || null);
+    } catch (e) {
+        res.json(null);
+    }
+});
+
+app.get('/api/stress-test', (req, res) => {
+    try {
+        res.json({
+            portfolioHeat: {
+                total: botState.heatScore || 0,
+                max: 100,
+            },
+        });
+    } catch (e) {
+        res.json(null);
     }
 });
 
@@ -878,6 +1280,91 @@ const instrumentSpecs = new Map(); // Cache: instrument_name -> { quantity_decim
 // Sentiment cache: ticker -> { score, timestamp }. TTL = 5 minutes (sentiment changes slowly)
 const SENTIMENT_CACHE_TTL_MS = 5 * 60 * 1000;
 const sentimentCachePersistent = new Map();
+
+// Flash crash protection: track price snapshots for velocity detection
+const flashCrashState = {
+    priceSnapshots: new Map(), // ticker -> { price, timestamp }
+    flashCrashActive: false,
+    flashCrashUntil: 0,       // timestamp when flash crash lockout expires
+    VELOCITY_THRESHOLD: -0.05, // -5% in window = flash crash
+    VELOCITY_WINDOW_MS: 2 * 60 * 1000, // 2-minute window
+    LOCKOUT_DURATION_MS: 5 * 60 * 1000, // 5-minute entry lockout after crash
+};
+
+/**
+ * Check for flash crash: if BTC drops >5% in 2 minutes, activate protection.
+ * Returns true if flash crash protection is active (block new entries).
+ */
+function checkFlashCrash(marketDataMap) {
+    const now = Date.now();
+
+    // Check if lockout has expired
+    if (flashCrashState.flashCrashActive && now > flashCrashState.flashCrashUntil) {
+        flashCrashState.flashCrashActive = false;
+        addLog('[FLASH-CRASH] Protection expired — resuming normal entries', 'INFO');
+    }
+
+    // Check BTC and ETH price velocity (bellwether assets)
+    for (const bellwether of ['BTCUSD', 'ETHUSD']) {
+        const candles = marketDataMap.get(bellwether);
+        if (!candles || candles.length < 3) continue;
+        const currentPrice = candles[candles.length - 1].c;
+        const prev = flashCrashState.priceSnapshots.get(bellwether);
+
+        if (prev && (now - prev.timestamp) <= flashCrashState.VELOCITY_WINDOW_MS) {
+            const velocity = (currentPrice - prev.price) / prev.price;
+            if (velocity <= flashCrashState.VELOCITY_THRESHOLD) {
+                flashCrashState.flashCrashActive = true;
+                flashCrashState.flashCrashUntil = now + flashCrashState.LOCKOUT_DURATION_MS;
+                addLog(`[FLASH-CRASH] ${bellwether} dropped ${(velocity * 100).toFixed(2)}% in ${((now - prev.timestamp) / 1000).toFixed(0)}s — blocking new entries for 5 min`, 'WARN');
+                if (telegramEnabled()) {
+                    try { alertCircuitBreaker(`FLASH CRASH: ${bellwether} ${(velocity*100).toFixed(2)}% in ${((now-prev.timestamp)/1000).toFixed(0)}s`); } catch(e) {}
+                }
+            }
+        }
+
+        // Update snapshot
+        flashCrashState.priceSnapshots.set(bellwether, { price: currentPrice, timestamp: now });
+    }
+
+    return flashCrashState.flashCrashActive;
+}
+
+// Volume burst tracker: detects sudden buy-side volume spikes from WS tick data
+const volumeBurstState = new Map(); // ticker -> { buys30s: number, sells30s: number, lastReset: number }
+const VOLUME_BURST_WINDOW_MS = 30_000; // 30-second window
+const VOLUME_BURST_THRESHOLD = 3.0;    // 3× normal = burst
+
+function trackTickVolume(ticker, trade) {
+    const now = Date.now();
+    let state = volumeBurstState.get(ticker);
+    if (!state || (now - state.lastReset) > VOLUME_BURST_WINDOW_MS) {
+        // Save previous window stats before resetting
+        if (state) {
+            state.prevBuys = state.buys30s;
+            state.prevSells = state.sells30s;
+        }
+        state = { buys30s: 0, sells30s: 0, lastReset: now, prevBuys: state?.buys30s || 0, prevSells: state?.sells30s || 0 };
+        volumeBurstState.set(ticker, state);
+    }
+    const qty = trade.quantity || trade.amount || 0;
+    if (trade.side === 'buy' || trade.side === 'b') {
+        state.buys30s += qty;
+    } else {
+        state.sells30s += qty;
+    }
+}
+
+/**
+ * Check if a ticker has a buy-side volume burst (3× normal in 30s window).
+ * Returns { burst: boolean, ratio: number }
+ */
+function getVolumeBurstSignal(ticker) {
+    const state = volumeBurstState.get(ticker);
+    if (!state || state.prevBuys <= 0) return { burst: false, ratio: 0 };
+    const ratio = state.buys30s / Math.max(0.001, state.prevBuys);
+    return { burst: ratio >= VOLUME_BURST_THRESHOLD, ratio };
+}
 
 const addLog = (message, type = 'INFO') => {
     const newLog = {
@@ -1147,7 +1634,7 @@ function saveSessionState() {
  * @param {Array<{o,h,l,c,v}>} candles
  * @returns {{ pass: boolean, avgUsdVol: number, reason?: string }}
  */
-function checkLiquidity(candles) {
+function checkLiquidity(candles, ticker) {
     if (!candles || candles.length < 5) return { pass: false, avgUsdVol: 0, reason: 'insufficient candles' };
 
     const recent = candles.slice(-20);
@@ -1159,15 +1646,17 @@ function checkLiquidity(candles) {
     }
 
     // Volume check: avg USD volume per candle
+    // New listings get a lower threshold ($1K vs $5K) to allow earlier entry
     let totalUsdVol = 0;
     for (const c of recent) {
         const typicalPrice = (c.o + c.c) / 2;
         totalUsdVol += (c.v || 0) * typicalPrice;
     }
     const avgUsdVol = totalUsdVol / recent.length;
+    const minVolume = (ticker && isNewListing && isNewListing(ticker)) ? 1000 : CONFIG.MIN_AVG_CANDLE_USD_VOLUME;
 
-    if (avgUsdVol < CONFIG.MIN_AVG_CANDLE_USD_VOLUME) {
-        return { pass: false, avgUsdVol, reason: `avg candle vol $${avgUsdVol.toFixed(0)} < $${CONFIG.MIN_AVG_CANDLE_USD_VOLUME}` };
+    if (avgUsdVol < minVolume) {
+        return { pass: false, avgUsdVol, reason: `avg candle vol $${avgUsdVol.toFixed(0)} < $${minVolume}` };
     }
 
     // Stale price check: if latest WS price diverges >50% from candle close, skip
@@ -1187,6 +1676,77 @@ function simpleEMA(closes, period) {
         ema = (closes[i] - ema) * mult + ema;
     }
     return ema;
+}
+
+/**
+ * Calculate VWAP (Volume Weighted Average Price) for candle array.
+ * Returns the latest VWAP value.
+ */
+function calculateVWAPLatest(candles) {
+    if (!candles || candles.length === 0) return null;
+    let cumTPV = 0, cumVol = 0;
+    for (const c of candles) {
+        const tp = ((c.h || c.high || 0) + (c.l || c.low || 0) + (c.c || c.close || 0)) / 3;
+        const vol = c.v || c.volume || 0;
+        cumTPV += tp * vol;
+        cumVol += vol;
+    }
+    return cumVol > 0 ? cumTPV / cumVol : null;
+}
+
+/**
+ * Calculate StochRSI latest K value (0-100).
+ * < 20 = oversold, > 80 = overbought.
+ */
+function calculateStochRSILatest(candles, rsiPeriod = 14, stochPeriod = 14) {
+    if (!candles || candles.length < rsiPeriod + stochPeriod) return 50;
+    const closes = candles.map(c => c.c || c.close || 0);
+    // Calculate RSI series
+    const rsiValues = [];
+    let avgGain = 0, avgLoss = 0;
+    for (let i = 1; i <= rsiPeriod; i++) {
+        const change = closes[i] - closes[i - 1];
+        if (change > 0) avgGain += change; else avgLoss += Math.abs(change);
+    }
+    avgGain /= rsiPeriod; avgLoss /= rsiPeriod;
+    rsiValues.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+    for (let i = rsiPeriod + 1; i < closes.length; i++) {
+        const change = closes[i] - closes[i - 1];
+        avgGain = (avgGain * (rsiPeriod - 1) + (change > 0 ? change : 0)) / rsiPeriod;
+        avgLoss = (avgLoss * (rsiPeriod - 1) + (change < 0 ? Math.abs(change) : 0)) / rsiPeriod;
+        rsiValues.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+    }
+    // Apply stochastic formula to last stochPeriod RSI values
+    if (rsiValues.length < stochPeriod) return 50;
+    const window = rsiValues.slice(-stochPeriod);
+    const minRSI = Math.min(...window);
+    const maxRSI = Math.max(...window);
+    if (maxRSI === minRSI) return 50;
+    return ((rsiValues[rsiValues.length - 1] - minRSI) / (maxRSI - minRSI)) * 100;
+}
+
+/**
+ * Calculate Delta Volume — buy-side minus sell-side pressure (0-100 scale, 50 = neutral).
+ * > 60 = buy dominance, < 40 = sell dominance.
+ */
+function calculateDeltaVolumeLatest(candles, period = 14) {
+    if (!candles || candles.length < period) return 50;
+    const recent = candles.slice(-period);
+    let totalBuyVol = 0, totalSellVol = 0;
+    for (const c of recent) {
+        const h = c.h || c.high || 0;
+        const l = c.l || c.low || 0;
+        const cl = c.c || c.close || 0;
+        const vol = c.v || c.volume || 0;
+        const range = h - l;
+        if (range === 0) continue;
+        const buyProportion = (cl - l) / range;
+        totalBuyVol += vol * buyProportion;
+        totalSellVol += vol * (1 - buyProportion);
+    }
+    const total = totalBuyVol + totalSellVol;
+    if (total === 0) return 50;
+    return (totalBuyVol / total) * 100; // 0-100: >50 = buy dominant
 }
 
 /**
@@ -1224,17 +1784,51 @@ function refreshExitLevels(marketDataMap) {
         const targets = getDynamicTargets(candles);
         const openPrice = position.openPrice;
 
+        // Mid-trade regime transition detection: update exit levels when regime changes
+        const currentRegimeForTicker = targets.regime;
+        if (position.regime && currentRegimeForTicker && position.regime !== currentRegimeForTicker) {
+            const oldRegime = position.regime;
+            position.regime = currentRegimeForTicker;
+            addLog(`[REGIME-SHIFT] ${ticker}: ${oldRegime} → ${currentRegimeForTicker} (mid-trade exit levels recomputed)`, 'INFO');
+        }
+
         // Upgrade #9: ATR-based dynamic exits with regime multipliers
         const atr = calculateATRFromCandles(candles, 14);
         const atrPct = openPrice > 0 ? (atr / openPrice) : 0.01;
 
-        // Regime multipliers for exit tightness
+        // Regime multipliers for exit tightness (market direction)
         let regimeMultiplier = 1.0;
         if (targets.regime === 'SIDEWAYS') regimeMultiplier = 0.75;
         else if (targets.regime === 'UPTREND') regimeMultiplier = 1.25;
         else if (targets.regime === 'DOWNTREND') regimeMultiplier = 0.5;
 
-        const adjustedATR = atrPct * regimeMultiplier;
+        // Volatility regime multiplier (market volatility level)
+        // Compare current ATR% to historical ATR% to classify volatility regime
+        let volRegimeMultiplier = 1.0;
+        if (candles.length >= 50) {
+            // Compute ATR percentile from last 50 candles
+            const atrHistory = [];
+            for (let i = 14; i < candles.length; i++) {
+                const slice = candles.slice(i - 14, i);
+                const histATR = calculateATRFromCandles(slice, 14);
+                const histPrice = slice[slice.length - 1].c || 1;
+                atrHistory.push(histATR / histPrice);
+            }
+            atrHistory.sort((a, b) => a - b);
+            const percentileIdx = atrHistory.findIndex(v => v >= atrPct);
+            const atrPercentile = percentileIdx >= 0 ? (percentileIdx / atrHistory.length) * 100 : 50;
+
+            if (atrPercentile < 25) {
+                // Low volatility: tighter stops, smaller targets (mean-reversion environment)
+                volRegimeMultiplier = 0.7;
+            } else if (atrPercentile > 75) {
+                // High volatility: wider stops, bigger targets (trend/breakout environment)
+                volRegimeMultiplier = 1.4;
+            }
+            // else: normal volatility, multiplier stays 1.0
+        }
+
+        const adjustedATR = atrPct * regimeMultiplier * volRegimeMultiplier;
 
         // Stage 1: exit 25% at 1.0× ATR profit
         const stage1Price = openPrice * (1 + adjustedATR * 1.0 + fees.roundTrip);
@@ -1243,25 +1837,31 @@ function refreshExitLevels(marketDataMap) {
         // Stage 3: trail remaining at 1.5× ATR below high-water mark
         const trailATRPct = adjustedATR * 1.5;
 
-        // TP price: use stage 2 as main TP target
-        const tpPrice = stage2Price;
+        // TP price: use seed/optimizer TP if available (12-35%), otherwise fall back to ATR-based stage 2
+        // The seed trains optimal TP per regime (e.g., STRONG_UP=35%, UP=20%, DOWN=8%)
+        // ATR-based stage 2 (typically 0.6-1.0%) is far too tight when seed overrides are active
+        const tpPrice = targets.optimized
+            ? openPrice * (1 + targets.takeProfitPct / 100)
+            : stage2Price;
 
-        // SL price: 2× ATR below entry (fee-adjusted)
-        const feeAdjustedSL = adjustedATR * 2.0 + fees.roundTrip;
+        // SL price: use seed/optimizer SL if available, otherwise 2× ATR
+        const feeAdjustedSL = targets.optimized
+            ? targets.stopLossPct / 100
+            : adjustedATR * 2.0 + fees.roundTrip;
         const slPrice = openPrice * (1 - feeAdjustedSL);
 
         // Trail activation: at stage 1 price
         const trailActivationPrice = stage1Price;
 
         // Trail distance percentage
-        const trailPct = Math.max(0.3, trailATRPct * 100);
+        const trailPct = Math.max(1.0, trailATRPct * 100); // Floor 1.0% — 0.3% was noise on BTC
 
         // Per-trade profit goal (dollar amount)
         const profitGoal = profitGoals?.[position.entryStrategy] || 0;
 
         exitLevelCache.set(ticker, {
             tpPrice, slPrice, trailActivationPrice, trailPct, profitGoal, regime: targets.regime,
-            stage1Price, stage2Price, atrPct: adjustedATR, regimeMultiplier
+            stage1Price, stage2Price, atrPct: adjustedATR, regimeMultiplier, volRegimeMultiplier
         });
 
         // Update native exchange SL if price moved significantly (>1% difference)
@@ -1324,6 +1924,53 @@ function calculateATRFromCandles(candles, period = 14) {
     return slice.reduce((a, b) => a + b, 0) / slice.length;
 }
 
+/**
+ * Partial sell: reduce position quantity by a fraction, book proportional PnL.
+ * Used for staged exits (25% at stage1, 35% at stage2).
+ */
+async function handlePartialSell(position, price, fraction, reason) {
+    const ticker = position.ticker;
+    const sellQty = position.quantity * fraction;
+    if (sellQty <= 0) return;
+
+    const fees = getActiveFees();
+    let avgPrice = price;
+
+    if (botState.tradingMode === 'SIMULATION') {
+        const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(ticker);
+        const slippagePct = (isMajor ? 2 : 8) / 10000 * 100;
+        avgPrice = price * (1 - slippagePct / 100);
+    } else {
+        try {
+            const adapter = getExchangeAdapter();
+            const orderResult = await withTimeout(
+                adapter.placeSellOrder(ticker, sellQty, botState.sessionId, instrumentSpecs),
+                20000, 'partialSell'
+            );
+            avgPrice = parseFloat(orderResult.avgPrice) || price;
+        } catch (e) {
+            addLog(`[PARTIAL-SELL] Exchange order failed for ${ticker}: ${e.message} — using market price`, 'WARN');
+        }
+    }
+
+    const sellFee = avgPrice * sellQty * fees.perSide;
+    const buyFee = position.openPrice * sellQty * fees.perSide;
+    const partialPnl = (avgPrice - position.openPrice) * sellQty - sellFee - buyFee;
+
+    // Reduce position quantity, add proceeds to cash
+    position.quantity -= sellQty;
+    portfolio.cash += (sellQty * avgPrice) - sellFee;
+
+    addLog(`[PARTIAL-EXIT] ${ticker}: Sold ${(fraction * 100).toFixed(0)}% (${sellQty.toFixed(6)}) @ $${avgPrice.toFixed(2)} | PnL: $${partialPnl.toFixed(2)} | ${reason}`, partialPnl >= 0 ? 'PROFIT' : 'LOSS');
+
+    logThought({
+        type: 'SELL', ticker, action: partialPnl >= 0 ? 'PARTIAL_PROFIT' : 'PARTIAL_LOSS',
+        confidence: 0, reason: `${reason} (${(fraction*100).toFixed(0)}% of position)`,
+        indicators: { entryPrice: position.openPrice, exitPrice: avgPrice, pnl: partialPnl, fraction },
+        regime: '',
+    });
+}
+
 async function checkTickExit(ticker, price) {
     const position = portfolio.positions[ticker];
     if (!position || position._exitPending) return;
@@ -1336,10 +1983,45 @@ async function checkTickExit(ticker, price) {
     if (price < (position.lowestPrice || Infinity)) position.lowestPrice = price;
     position.currentPrice = price;
 
+    // --- STAGED PARTIAL EXITS ---
+    // Skip staged partials when seed TP overrides are active — partials at 1-2× ATR (0.6-1.0%)
+    // would sell 60% of the position before the seed's 12-35% TP is reached
+    const skipStaged = levels.regime && levels.tpPrice && (levels.tpPrice / position.openPrice - 1) > 0.05; // TP > 5% = seed override active
+
+    // Stage 1: exit 25% at 1.0× ATR profit (if not already done)
+    if (!skipStaged && !position._stage1Done && levels.stage1Price && price >= levels.stage1Price) {
+        position._stage1Done = true;
+        try {
+            const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
+            await handlePartialSell(position, price, 0.25,
+                `[RT-STAGE1] +${pnl}% hit 1×ATR @ ${levels.stage1Price.toFixed(4)}`);
+        } catch (e) {
+            console.error(`[RT-STAGE1] Failed for ${ticker}: ${e.message}`);
+            position._stage1Done = false;
+        }
+        return; // Don't check further exits this tick
+    }
+
+    // Stage 2: exit 35% at 2.0× ATR profit (of remaining position)
+    if (!skipStaged && position._stage1Done && !position._stage2Done && levels.stage2Price && price >= levels.stage2Price) {
+        position._stage2Done = true;
+        // 35% of original = ~46.7% of remaining (after 25% was sold)
+        const stage2Fraction = Math.min(0.467, 0.35 / (1 - 0.25));
+        try {
+            const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
+            await handlePartialSell(position, price, stage2Fraction,
+                `[RT-STAGE2] +${pnl}% hit 2×ATR @ ${levels.stage2Price.toFixed(4)}`);
+        } catch (e) {
+            console.error(`[RT-STAGE2] Failed for ${ticker}: ${e.message}`);
+            position._stage2Done = false;
+        }
+        return;
+    }
+
     let exitReason = null;
     let isStopLoss = false; // SL exits always fire (protective); TP/trail exits are profit-checked
 
-    // 1. Per-trade profit goal
+    // 1. Per-trade profit goal (on remaining quantity)
     if (levels.profitGoal > 0) {
         const profit = (price - position.openPrice) * position.quantity;
         if (profit >= levels.profitGoal) {
@@ -1347,13 +2029,13 @@ async function checkTickExit(ticker, price) {
         }
     }
 
-    // 2. Take-profit
+    // 2. Take-profit (full exit of remainder)
     if (!exitReason && price >= levels.tpPrice) {
         const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
         exitReason = `[RT-TP] +${pnl}% hit TP @ ${levels.tpPrice.toFixed(4)} (${levels.regime})`;
     }
 
-    // 3. Trailing stop (only if trail activated)
+    // 3. Trailing stop (only if trail activated — stage1 price acts as trail activation)
     if (!exitReason && position.highestPrice >= levels.trailActivationPrice) {
         const trailLevel = position.highestPrice * (1 - levels.trailPct / 100);
         if (price <= trailLevel) {
@@ -1368,36 +2050,180 @@ async function checkTickExit(ticker, price) {
         isStopLoss = true;
     }
 
+    // 5. Mid-trade regime-aware exit switching
+    // If regime flipped against position since entry, tighten trailing stop dynamically
+    if (!exitReason && position.entryRegime) {
+        const transition = detectRegimeTransition(ticker);
+        if (transition.transition) {
+            const pnlPct = (price - position.openPrice) / position.openPrice * 100;
+            if (transition.recommendation === 'FORCE_TIGHTEN' || transition.recommendation === 'TIGHTEN_EXITS') {
+                // Regime flipped bearish — tighten trail to 50% of normal giveback
+                if (position.highestPrice > position.openPrice && pnlPct > 0.5) {
+                    const tightTrailPct = (levels.trailPct || 2) * 0.5; // halve the trail giveback
+                    const tightTrailLevel = position.highestPrice * (1 - tightTrailPct / 100);
+                    if (price <= tightTrailLevel) {
+                        exitReason = `[RT-REGIME-FLIP] ${transition.from}→${transition.to} (${transition.transition}): price ${price.toFixed(4)} <= tight trail ${tightTrailLevel.toFixed(4)}`;
+                    }
+                }
+                // If in loss and regime flipped bearish hard, force exit to cut losses early
+                if (!exitReason && transition.recommendation === 'FORCE_TIGHTEN' && pnlPct < -1.0) {
+                    exitReason = `[RT-REGIME-REVERSAL] ${transition.from}→${transition.to}: cutting loss at ${pnlPct.toFixed(2)}% — regime reversed`;
+                    isStopLoss = true; // bypass profitability check
+                }
+            }
+        }
+    }
+
+    // 6. Liquidation cascade risk — proactively tighten trailing stop
+    if (!exitReason && derivativesIntel && position.highestPrice > position.openPrice) {
+        try {
+            const cascade = derivativesIntel.predictCascadeRisk(ticker);
+            if (cascade.risk !== 'LOW' && cascade.trailTightenPct < 1.0) {
+                const tightTrailPct = (levels.trailPct || 2) * cascade.trailTightenPct;
+                const cascadeTrailLevel = position.highestPrice * (1 - tightTrailPct / 100);
+                if (price <= cascadeTrailLevel) {
+                    exitReason = `[RT-CASCADE] ${cascade.risk} risk (score=${cascade.score}): ${cascade.factors.join(', ')} — tight trail hit @ ${cascadeTrailLevel.toFixed(4)}`;
+                }
+            }
+        } catch (e) { /* non-critical */ }
+    }
+
+    // 6b. Funding rate exit tightening — extreme funding = overleveraged market = vulnerability
+    if (!exitReason && derivativesIntel && position.highestPrice > position.openPrice) {
+        try {
+            const derivSignal = derivativesIntel.getDerivativesSignal?.(ticker.replace('USD', ''));
+            if (derivSignal?.fundingRate) {
+                const fundingAPR = Math.abs(derivSignal.fundingRate * 3 * 365 * 100); // 8h rate to annualized
+                // If funding is extreme (>50% APR), tighten trailing stop by 30%
+                if (fundingAPR > 50) {
+                    const fundingTightTrail = (levels.trailPct || 2) * 0.70; // 30% tighter
+                    const fundingTrailLevel = position.highestPrice * (1 - fundingTightTrail / 100);
+                    if (price <= fundingTrailLevel) {
+                        exitReason = `[RT-FUNDING] Extreme funding ${fundingAPR.toFixed(0)}% APR — tight trail hit @ ${fundingTrailLevel.toFixed(4)}`;
+                    }
+                }
+            }
+        } catch (e) { /* non-critical */ }
+    }
+
+    // 7. Time-based max hold exit — prevent zombie positions
+    // TREND positions that linger too long are usually failed setups that didn't trigger SL
+    if (!exitReason) {
+        const holdMs = Date.now() - (position.entryTime || position.openTime || Date.now());
+        const holdHours = holdMs / (1000 * 60 * 60);
+        const maxHoldHours = position.entryStrategy === 'TREND' ? (botState._seedMaxHoldHours || 168) : 24; // Seed default 168h for TREND, 24h others
+        if (holdHours >= maxHoldHours) {
+            const pnlPct = (price - position.openPrice) / position.openPrice * 100;
+            exitReason = `[RT-MAX-HOLD] ${holdHours.toFixed(1)}h >= ${maxHoldHours}h limit (PnL: ${pnlPct.toFixed(2)}%)`;
+            if (pnlPct < 0) isStopLoss = true; // Force exit even at loss — position is stale
+        }
+    }
+
+    // 8. Breakeven stop — after position well into profit, protect breakeven
+    // Raised from 0.6%/0.1% → 1.5%/0.3%: old thresholds exited on minor retracements after barely covering fees
+    // Only before stage1 — once partial exits happen, trailing stop manages risk
+    if (!exitReason && !isStopLoss) {
+        const pnlPct = (price - position.openPrice) / position.openPrice * 100;
+        const peakPnlPct = position.highestPrice ? ((position.highestPrice - position.openPrice) / position.openPrice * 100) : 0;
+        if (peakPnlPct >= 1.5 && pnlPct < 0.3 && !position._stage1Done) {
+            exitReason = `[RT-BREAKEVEN] Peak was +${peakPnlPct.toFixed(2)}%, now +${pnlPct.toFixed(2)}% — protecting breakeven`;
+            isStopLoss = true;
+        }
+    }
+
+    // 9. Velocity-based emergency exit: if price is crashing (strong negative velocity + acceleration)
+    // and we're in profit, exit before the crash wipes gains
+    if (!exitReason && !isStopLoss) {
+        const vel = priceVelocityTracker.getMetrics(ticker);
+        if (vel.tickCount >= 5) {
+            const pnlPct = (price - position.openPrice) / position.openPrice * 100;
+            // Sharp crash: velocity < -0.5%/min AND accelerating downward
+            if (vel.velocity < -0.5 && vel.acceleration < -0.1 && pnlPct > 0.3) {
+                exitReason = `[RT-VELOCITY] Price crashing: ${vel.velocity.toFixed(3)}%/min, accel=${vel.acceleration.toFixed(3)} — protecting +${pnlPct.toFixed(2)}% profit`;
+            }
+            // In loss and velocity strongly negative — cut early before it gets worse
+            if (vel.velocity < -1.0 && vel.acceleration < -0.3 && pnlPct < -1.0) {
+                exitReason = `[RT-VELOCITY-SL] Rapid decline: ${vel.velocity.toFixed(3)}%/min — cutting loss at ${pnlPct.toFixed(2)}%`;
+                isStopLoss = true;
+            }
+        }
+    }
+
     // Pre-check exit profitability after estimated slippage + fees (for non-SL exits only).
-    // Stop-loss exits always fire because they're protective. But TP/trailing exits that
-    // would become net losses after slippage + fees should NOT fire — wait for a better price.
     if (exitReason && !isStopLoss) {
         const fees = getActiveFees();
         const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(ticker);
-        const estSlippagePct = isMajor ? 0.05 : 0.15; // % slippage estimate (Kraken has wider spreads)
-        const estExitPrice = price * (1 - estSlippagePct / 100); // sells slip down
+        const estSlippagePct = isMajor ? 0.05 : 0.15;
+        const estExitPrice = price * (1 - estSlippagePct / 100);
         const sellFee = estExitPrice * position.quantity * fees.perSide;
         const buyFee = position.openPrice * position.quantity * fees.perSide;
         const netPnl = (estExitPrice - position.openPrice) * position.quantity - sellFee - buyFee;
 
         if (netPnl < 0) {
-            // This "profitable" exit would actually be a loss after costs — skip it
-            // Log occasionally (1 in 20) to avoid log spam
             if (Math.random() < 0.05) {
                 addLog(`[RT-SKIP] ${ticker}: Exit at ${price.toFixed(4)} would net $${netPnl.toFixed(2)} after slippage+fees — waiting for better price`, 'INFO');
             }
-            return; // Don't exit — let price move further into profit
+            return;
         }
     }
 
     if (exitReason) {
-        position._exitPending = true; // Prevent double-exit from bot loop
+        position._exitPending = true;
         try {
             await handleSell(position, price, exitReason);
         } catch (err) {
             console.error(`[RT-EXIT] Failed for ${ticker}: ${err.message}`);
-            // Clear flag so bot loop can retry
             if (portfolio.positions[ticker]) portfolio.positions[ticker]._exitPending = false;
+        }
+        return;
+    }
+
+    // ═══ DYNAMIC PYRAMIDING — Add to winners when trend is confirmed ═══
+    // Conditions: +2%+ profit, strong trend (TC>70), bullish regime, max 2 pyramids
+    if (!position._pyramidCount) position._pyramidCount = 0;
+    if (position._pyramidCount < 2 && !position._pyramidCooldown) {
+        const pnlPct = ((price - position.openPrice) / position.openPrice) * 100;
+        const pyramidThreshold = position._pyramidCount === 0 ? 2.0 : 4.0; // First at +2%, second at +4%
+
+        if (pnlPct >= pyramidThreshold && position.entryStrategy === 'TREND') {
+            // Verify trend is still strong
+            let tcScore = 0;
+            try {
+                const mom = position._cachedMom;
+                tcScore = mom?.tcScore || 0;
+            } catch (e) {}
+
+            // Check regime is still bullish
+            let regimeOk = false;
+            try {
+                const regime = getMarketRegime(ticker)?.regime || 'UNKNOWN';
+                regimeOk = regime === 'STRONG_UP' || regime === 'UP';
+            } catch (e) {}
+
+            if (tcScore > 70 && regimeOk) {
+                // Pyramid: add 30% of original position value
+                const originalValue = position.openPrice * (position._originalQuantity || position.quantity);
+                const pyramidNotional = originalValue * 0.30;
+
+                if (pyramidNotional >= 5 && portfolio.cash >= pyramidNotional) {
+                    if (!position._originalQuantity) position._originalQuantity = position.quantity;
+                    position._pyramidCount++;
+                    position._pyramidCooldown = true;
+                    // Cooldown: don't pyramid again for 30 minutes
+                    setTimeout(() => { if (portfolio.positions[ticker]) portfolio.positions[ticker]._pyramidCooldown = false; }, 30 * 60 * 1000);
+
+                    addLog(`[PYRAMID] Adding $${pyramidNotional.toFixed(2)} to ${ticker} (pyramid #${position._pyramidCount}, +${pnlPct.toFixed(1)}%, TC=${tcScore})`, 'BUY');
+                    try {
+                        await handleBuy(ticker, price, 'TREND', `PYRAMID #${position._pyramidCount} at +${pnlPct.toFixed(1)}%`, pyramidNotional, {
+                            isPyramid: true,
+                            pyramidNumber: position._pyramidCount,
+                        });
+                    } catch (e) {
+                        addLog(`[PYRAMID] Failed for ${ticker}: ${e.message}`, 'WARN');
+                        position._pyramidCount--;
+                    }
+                }
+            }
         }
     }
 }
@@ -1406,7 +2232,29 @@ async function checkTickExit(ticker, price) {
 // Trading Bot Loop (Optimized for Large Universes)
 // ============================================
 let botLoopRunning = false;
+let _signalScannerRef = null; // Reference to signal scanner for bot loop access
 let botLoopStartTime = 0;
+// Monte Carlo risk gate: cached results refreshed every 30 minutes
+let _mcRiskGate = { maxDD95: 0, sharpe50: 1, blocked: false, lastUpdate: 0 };
+const MC_REFRESH_MS = 30 * 60 * 1000; // 30 min
+async function refreshMonteCarloRiskGate() {
+    try {
+        const mc = await import('./services/monteCarloService.js');
+        const tradeHistory = cbExportState()?.tradeHistory || [];
+        if (tradeHistory.length < 20) { _mcRiskGate.blocked = false; return; }
+        const result = mc.runMonteCarloSimulation(tradeHistory, 300, portfolio.cash + Object.values(portfolio.positions).reduce((s, p) => s + p.quantity * ((p.currentPrice || p.openPrice) || 0), 0));
+        if (result) {
+            _mcRiskGate.maxDD95 = result.maxDrawdownCI?.p95 || 0;
+            _mcRiskGate.sharpe50 = result.sharpeCI?.p50 || 1;
+            // Block new entries if worst-case drawdown > 25% OR Sharpe is very poor
+            _mcRiskGate.blocked = _mcRiskGate.maxDD95 > 25 || _mcRiskGate.sharpe50 < 0.3;
+            _mcRiskGate.lastUpdate = Date.now();
+            if (_mcRiskGate.blocked) {
+                console.log(`[MC-RISK] Entries BLOCKED: p95 MaxDD=${_mcRiskGate.maxDD95.toFixed(1)}%, Sharpe=${_mcRiskGate.sharpe50.toFixed(2)}`);
+            }
+        }
+    } catch (e) { /* fail open — no Monte Carlo data = no gate */ }
+}
 // Fix #23 (Tier 3): MTF data cache to avoid redundant REST calls
 let _mtfCache5m = { data: null, ts: 0 };
 let _mtfCache15m = { data: null, ts: 0 };
@@ -1422,6 +2270,7 @@ async function tradingBotLoop() {
     try {
         // Defensive: ensure botLoopRunning is ALWAYS cleared, even on unexpected errors.
         // The finally block below handles this, but we also have the watchdog as a safety net.
+        const _boostEntryMultipliers = {}; // Per-ticker position size boosts from BOOST_ENTRY regime transitions
         const { sessionProfitGoal, riskAmount, profitGoals } = botState.settings;
 
         // --- CAPITAL TIER MANAGEMENT ---
@@ -1457,7 +2306,17 @@ async function tradingBotLoop() {
         // This ensures the bot scans all supported pairs even if session was started with just 1 ticker
         // Merge QUALITY_TICKERS with any newly detected listings
         const newCoinTickers = getActiveNewListings ? getActiveNewListings().map(n => n.ticker).filter(t => !QUALITY_TICKERS.includes(t)) : [];
-        const tickerPool = [...QUALITY_TICKERS, ...newCoinTickers].slice(0, 75);
+
+        // Fetch CoinGecko trending coins and add Kraken-available USD pairs to ticker pool
+        let trendingCoinsList = [];
+        try {
+            trendingCoinsList = await fetchCoinGeckoTrending();
+        } catch (e) { /* fail open */ }
+        const trendingTickers = trendingCoinsList
+            .map(c => `${(c.symbol || '').toUpperCase()}USD`)
+            .filter(t => t.length > 3 && !QUALITY_TICKERS.includes(t) && !newCoinTickers.includes(t));
+
+        const tickerPool = [...QUALITY_TICKERS, ...newCoinTickers, ...trendingTickers].slice(0, 75);
         const BATCH_SIZE = 20;
         const cycleIndex = Math.floor(Date.now() / 1000) % Math.max(1, Math.ceil(tickerPool.length / BATCH_SIZE));
         const scanBatch = tickerPool.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
@@ -1473,7 +2332,9 @@ async function tradingBotLoop() {
         const marketDataMap = new Map();
         let wsHits = 0, restHits = 0;
         for (const { ticker, candles, error, source } of allMarketData) {
-            if (!error && candles && candles.length >= CONFIG.MIN_CANDLES_REQUIRED) {
+            // New listings: lower candle requirement from 30 to 15 (enough for basic RSI/volume)
+            const minCandles = (isNewListing && isNewListing(ticker)) ? 15 : CONFIG.MIN_CANDLES_REQUIRED;
+            if (!error && candles && candles.length >= minCandles) {
                 marketDataMap.set(ticker, candles);
             }
             if (source === 'ws') wsHits++; else restHits++;
@@ -1487,6 +2348,19 @@ async function tradingBotLoop() {
         if (pauseCheck.paused) {
             if (Math.random() < 0.1) addLog(`[CIRCUIT BREAKER] Paused: ${pauseCheck.reason} (${pauseCheck.remainingMinutes}min left)`, 'WARN');
         }
+
+        // --- FLASH CRASH PROTECTION ---
+        const flashCrashBlocking = checkFlashCrash(marketDataMap);
+
+        // --- MAX DRAWDOWN CHECK (beastMode) ---
+        let maxDrawdownBlocking = false;
+        try {
+            const ddCheck = checkMaxDrawdown(15);
+            if (ddCheck.shouldStop) {
+                maxDrawdownBlocking = true;
+                if (Math.random() < 0.05) addLog(ddCheck.reason, 'WARN');
+            }
+        } catch (e) {}
 
         // --- MULTI-TIMEFRAME DATA (5m, 15m, 1h alongside 1m) ---
         // Fix #23 (Tier 3): Cache MTF data with TTL matching timeframe period
@@ -1672,6 +2546,19 @@ async function tradingBotLoop() {
                         if (div && div.type === 'bearish' && div.confidence >= CONFIG.THRESHOLDS.DIVERGENCE_MIN_CONFIDENCE) exitReason = 'Divergence Signal: Bearish divergence';
                         break;
                     }
+                    case 'SWING':
+                    case 'MA_CROSSOVER':
+                    case 'MEAN_REVERSION':
+                    case 'REVERSAL':
+                    case 'RANGE':
+                    case 'VWAP':
+                    default: {
+                        // Fallback: use ADAPTIVE TC + momentum combined check
+                        const adpFallback = calculateAdaptiveTCSeries(candles).pop() ?? 50;
+                        if (adpFallback > CONFIG.THRESHOLDS.ADAPTIVE_BEARISH_EXIT && momentumValue < CONFIG.THRESHOLDS.MOMENTUM_BEARISH_EXIT)
+                            exitReason = `${position.entryStrategy} Signal: Bearish adaptive+momentum`;
+                        break;
+                    }
                 }
             }
 
@@ -1719,6 +2606,23 @@ async function tradingBotLoop() {
             return 'UNKNOWN';
         })();
 
+        // Regime transition Telegram alert
+        if (!botState._lastRegime) botState._lastRegime = currentRegime;
+        if (currentRegime !== botState._lastRegime && currentRegime !== 'UNKNOWN' && botState._lastRegime !== 'UNKNOWN') {
+            addLog(`[REGIME] Transition: ${botState._lastRegime} → ${currentRegime}`, 'INFO');
+            if (telegramEnabled()) {
+                alertRegimeTransition(botState._lastRegime, currentRegime);
+            }
+            botState._lastRegime = currentRegime;
+        } else if (currentRegime !== 'UNKNOWN') {
+            botState._lastRegime = currentRegime;
+        }
+
+        // Update circuit breaker with current regime for adaptive thresholds
+        if (currentRegime !== 'UNKNOWN') {
+            cbSetRegime(currentRegime);
+        }
+
         // --- TIMEFRAME STRATEGY: detect market speed + get active profile ---
         let marketSpeed = 'FAST';
         let activeProfile = null;
@@ -1755,14 +2659,47 @@ async function tradingBotLoop() {
             },
         });
 
-        // Derive entry thresholds from timeframe profile, then overlay optimizer values
+        // Monte Carlo risk gate: refresh every 30 minutes, block entries if tail risk is too high
+        if (Date.now() - _mcRiskGate.lastUpdate > MC_REFRESH_MS) {
+            refreshMonteCarloRiskGate(); // fire-and-forget (async, won't block loop)
+        }
+        let mcRiskBlocking = false;
+        if (_mcRiskGate.blocked && botState.tradingMode !== 'SIMULATION') {
+            mcRiskBlocking = true;
+            logThought({ type: 'SKIP', ticker: '', action: 'MC_RISK_GATE',
+                confidence: 0,
+                reason: `Monte Carlo risk gate: p95 MaxDD=${_mcRiskGate.maxDD95.toFixed(1)}%, Sharpe=${_mcRiskGate.sharpe50.toFixed(2)} — new entries blocked`,
+                regime: currentRegime });
+        }
+
+        // Derive entry thresholds from timeframe profile, then overlay optimizer + adaptive values
         const optParams = getOptimizedEntryParams();
-        const minOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
+        // Overlay adaptive thresholds (learned from trade outcomes) if available
+        if (adaptiveThresholdsService?.getThreshold) {
+            try {
+                const adaptiveTrendEntry = adaptiveThresholdsService.getThreshold('TREND_BULLISH_ENTRY');
+                if (adaptiveTrendEntry != null) optParams.TREND_BULLISH_ENTRY = adaptiveTrendEntry;
+                const adaptiveFloor = adaptiveThresholdsService.getThreshold('compositeScoreFloor');
+                if (adaptiveFloor != null) optParams.compositeScoreFloor = adaptiveFloor;
+            } catch (e) { /* fall through to optimizer defaults */ }
+        }
+        // Regime-adaptive entry thresholds: lower bar in strong trends, higher bar in choppy markets
+        const regimeScoreFloors = {
+            'STRONG_UP': 40,   // Ride the wave — accept weaker signals
+            'UP': 45,          // Standard bullish
+            'SIDEWAYS': 60,    // High conviction needed — choppy kills profits
+            'DOWN': 55,        // Only strong setups in bearish markets
+            'STRONG_DOWN': 65, // Very selective — most entries lose here
+            'UNKNOWN': 50,     // Conservative default
+        };
+        const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
+        const regimeFloor = regimeScoreFloors[currentRegime] || 50;
+        const minOppScore = Math.max(baseMinOppScore, regimeFloor);
         const profileStrategies = activeProfile?.activeStrategies || null;
         const profilePosSize = activeProfile?.positionSizePercent ?? null;
 
         const openSlots = maxConcurrentTrades - Object.keys(portfolio.positions).length;
-        if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
+        if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && !flashCrashBlocking && !maxDrawdownBlocking && !mcRiskBlocking && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
 
             // Calculate Opportunity Scores for current batch (with liquidity filter)
             const candidates = [];
@@ -1772,13 +2709,16 @@ async function tradingBotLoop() {
                 if (!candles) continue;
 
                 // Liquidity gate: skip low-volume garbage tokens
-                const liq = checkLiquidity(candles);
+                const liq = checkLiquidity(candles, ticker);
                 if (!liq.pass) {
                     continue; // silently skip — too many low-vol tickers to log each one
                 }
 
                 const score = calculateOpportunityScore(candles, ticker);
-                if (score.compositeScore > minOppScore) candidates.push({ ticker, score, candles });
+                // Per-ticker cooldown raises threshold after consecutive losses
+                const tickerCooldownAdj = tickerLossCooldown.getScoreAdjustment(ticker);
+                const tickerMinScore = minOppScore + tickerCooldownAdj;
+                if (score.compositeScore > tickerMinScore) candidates.push({ ticker, score, candles });
 
                 // === SWING STRATEGY: 4h + 1D candle fetch and evaluation ===
                 const now4h = Date.now();
@@ -1861,24 +2801,69 @@ async function tradingBotLoop() {
 
             candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
-            // --- SENTIMENT ENRICHMENT: cached with 5min TTL to avoid redundant API calls ---
+            // --- SENTIMENT ENRICHMENT (Tiered) ---
+            // Tier 1 (ALL candidates): CryptoPanic news + CoinGecko trending (1 global call each, cached)
+            // Tier 2 (top 10):         Reddit + YouTube per-ticker sentiment (rate-limited, cached 5min)
             const sentimentCache = new Map();
+            let globalNews = [];
             try {
-                const topTickers = candidates.slice(0, 5).map(c => c.ticker);
+                // Tier 1: Fetch global news once, then filter per-ticker locally
+                // Use localNLPService for deeper headline analysis if available
+                globalNews = await fetchCryptoNews();
+                for (const candidate of candidates) {
+                    let newsScore = 0;
+                    let sources = 0;
+
+                    // Try NLP-enhanced scoring first (negation detection, intensity weighting)
+                    if (localNLPService?.scoreHeadlinesForTicker) {
+                        try {
+                            const headlines = globalNews.map(n => n.title);
+                            const nlpResult = localNLPService.scoreHeadlinesForTicker(headlines, candidate.ticker.replace(/USD$/, ''));
+                            if (nlpResult.count > 0) {
+                                newsScore = nlpResult.score * 0.40; // NLP score is already -1..1
+                                sources = 0.40;
+                            }
+                        } catch (e) { /* fall through to basic matching */ }
+                    }
+
+                    // Fallback: basic string matching if NLP didn't find anything
+                    if (sources === 0) {
+                        const tickerSentiment = getTickerNewsSentiment(candidate.ticker, globalNews);
+                        newsScore = tickerSentiment.sentiment * 0.40;
+                        sources = tickerSentiment.mentionCount > 0 ? 0.40 : 0;
+                    }
+
+                    // CoinGecko trending boost: +5 pts normalized to sentiment scale
+                    if (isTrendingCoin(candidate.ticker, trendingCoinsList)) {
+                        newsScore += 0.10; // small bullish boost for trending coins
+                        sources += 0.10;
+                        candidate._trending = true;
+                    }
+
+                    if (sources > 0) {
+                        sentimentCache.set(candidate.ticker, newsScore / sources);
+                        sentimentCachePersistent.set(candidate.ticker, { score: newsScore / sources, timestamp: Date.now() });
+                    }
+                }
+            } catch (e) { /* fail open — news sentiment defaults to 0 */ }
+
+            try {
+                // Tier 2: Reddit + YouTube for top 10 candidates (expanded from 5)
+                const topTickers = candidates.slice(0, 10).map(c => c.ticker);
                 const now = Date.now();
                 const tickersToFetchSentiment = [];
 
-                // Use cached sentiment where available
                 for (const ticker of topTickers) {
                     const cached = sentimentCachePersistent.get(ticker);
                     if (cached && (now - cached.timestamp) < SENTIMENT_CACHE_TTL_MS) {
-                        sentimentCache.set(ticker, cached.score);
+                        // Merge cached Reddit/YouTube with existing news sentiment
+                        const existing = sentimentCache.get(ticker) || 0;
+                        sentimentCache.set(ticker, (existing + cached.score) / 2);
                     } else {
                         tickersToFetchSentiment.push(ticker);
                     }
                 }
 
-                // Only fetch sentiment for tickers not in cache
                 if (tickersToFetchSentiment.length > 0) {
                     const sentimentResults = await Promise.allSettled(
                         tickersToFetchSentiment.map(async (ticker) => {
@@ -1902,7 +2887,11 @@ async function tradingBotLoop() {
                                     if (fg?.value != null) { const fgNorm = (fg.value - 50) / 50; score += fgNorm * 0.40; sources += 0.40; }
                                 } catch (e) {}
                             }
-                            return { ticker, sentiment: sources > 0 ? score / sources : 0 };
+                            const redditYtScore = sources > 0 ? score / sources : 0;
+                            // Blend Reddit/YouTube with existing news sentiment
+                            const existing = sentimentCache.get(ticker) || 0;
+                            const blended = existing !== 0 ? (existing * 0.4 + redditYtScore * 0.6) : redditYtScore;
+                            return { ticker, sentiment: blended };
                         })
                     );
                     for (const r of sentimentResults) {
@@ -1920,7 +2909,13 @@ async function tradingBotLoop() {
 
                 const { ticker, score, candles } = candidate;
                 const currentPrice = candles[candles.length - 1].c;
+
+                // ═══ PER-TICKER INDICATOR CACHE ═══
+                // Compute all indicators ONCE and reuse throughout entry evaluation + ML pipeline
                 const tcValue = calculateTCSeries(candles).pop() ?? 50;
+                const _cachedMom = calculateMomentumSeries(candles).pop() ?? 50;
+                const _cachedTrendDash = calculateTrendDashboard(candles);
+                const _cachedBullishCount = _cachedTrendDash ? Object.values(_cachedTrendDash).filter(v => v === true || v === 'BULLISH' || v === 'UP').length : 0;
 
                 // Determine entry strategy — evaluate ALL allowed strategies and pick strongest signal
                 let entryStrategy = null;
@@ -1949,10 +2944,9 @@ async function tradingBotLoop() {
                         stratCandidates.push({ strategy: 'TREND', value: tcValue, strength });
                     }
                     if (profileStrategies.includes('MOMENTUM')) {
-                        const momValue = calculateMomentumSeries(candles).pop() ?? 50;
-                        if (momValue > optParams.MOMENTUM_BULLISH_ENTRY) {
-                            const strength = (momValue - optParams.MOMENTUM_BULLISH_ENTRY) / (100 - optParams.MOMENTUM_BULLISH_ENTRY);
-                            stratCandidates.push({ strategy: 'MOMENTUM', value: momValue, strength });
+                        if (_cachedMom > optParams.MOMENTUM_BULLISH_ENTRY) {
+                            const strength = (_cachedMom - optParams.MOMENTUM_BULLISH_ENTRY) / (100 - optParams.MOMENTUM_BULLISH_ENTRY);
+                            stratCandidates.push({ strategy: 'MOMENTUM', value: _cachedMom, strength });
                         }
                     }
                     if (profileStrategies.includes('BREAKOUT')) {
@@ -1978,10 +2972,9 @@ async function tradingBotLoop() {
                             stratCandidates.push({ strategy: 'WHALE', value: whaleValue, strength });
                         }
                     }
-                    // CONFLUENCE: multiple bullish signals aligned
+                    // CONFLUENCE: multiple bullish signals aligned (reuse cached trendDashboard)
                     if (profileStrategies.includes('CONFLUENCE')) {
-                        const trendDash = calculateTrendDashboard(candles);
-                        const bullishCount = trendDash ? Object.values(trendDash).filter(v => v === true || v === 'BULLISH' || v === 'UP').length : 0;
+                        const bullishCount = _cachedBullishCount;
                         const confluenceThreshold = optParams.CONFLUENCE_BULLISH_ENTRY || 2;
                         if (bullishCount >= confluenceThreshold) {
                             const strength = Math.min(1, bullishCount / 5);
@@ -1995,7 +2988,10 @@ async function tradingBotLoop() {
                         for (const cand of stratCandidates) {
                             const adaptiveWeight = getStrategyWeight(cand.strategy); // 0 to 1
                             // Blended score: 60% signal strength + 40% historical performance weight
-                            cand.blendedScore = cand.strength * 0.6 + adaptiveWeight * 0.4;
+                            // Apply backtest penalty if continuous backtester shows poor win rate
+                            const backtestPenalty = continuousBacktester?.getStrategyPenalty
+                                ? continuousBacktester.getStrategyPenalty(cand.strategy) : 0;
+                            cand.blendedScore = (cand.strength * 0.6 + adaptiveWeight * 0.4) * (1 - backtestPenalty);
                         }
                         stratCandidates.sort((a, b) => b.blendedScore - a.blendedScore);
                         for (const cand of stratCandidates) {
@@ -2026,6 +3022,38 @@ async function tradingBotLoop() {
                         if (isStrategyEnabledForRegime('TREND', currentRegime) && !isStrategyThrottled('TREND')) {
                             entryStrategy = 'TREND';
                         }
+                    }
+                }
+
+                // New coin momentum signal: allow entry even without a clean TREND signal
+                // if the new listing shows strong initial momentum (price up >5%, volume increasing)
+                if (!entryStrategy && isNewListing && isNewListing(ticker) && candles.length >= 10) {
+                    const firstPrice = candles[0].c;
+                    const priceGain = (currentPrice - firstPrice) / firstPrice;
+                    // Check volume is increasing over last 5 candles
+                    const recentVols = candles.slice(-5).map(c => c.v || 0);
+                    const volIncreasing = recentVols.length >= 3 && recentVols[recentVols.length - 1] > recentVols[0];
+
+                    if (priceGain > 0.05 && volIncreasing) {
+                        entryStrategy = 'TREND'; // Use TREND strategy for exit logic
+                        triggerValue = tcValue;
+                        logThought({ type: 'ENTRY_EVAL', ticker, action: 'NEW_COIN_MOMENTUM',
+                            confidence: score.compositeScore,
+                            reason: `New listing momentum: +${(priceGain * 100).toFixed(1)}% gain, volume rising → TREND entry`,
+                            regime: currentRegime });
+                    }
+                }
+
+                // Cap new coin concurrent positions to 1 to limit exposure
+                if (entryStrategy && isNewListing && isNewListing(ticker)) {
+                    const existingNewCoinPositions = Object.keys(portfolio.positions)
+                        .filter(t => isNewListing(t)).length;
+                    if (existingNewCoinPositions >= 1) {
+                        logThought({ type: 'SKIP', ticker, action: 'NEW_COIN_CAP',
+                            confidence: score.compositeScore,
+                            reason: `Already holding ${existingNewCoinPositions} new coin position(s) — max 1 allowed`,
+                            regime: currentRegime });
+                        entryStrategy = null;
                     }
                 }
 
@@ -2066,6 +3094,7 @@ async function tradingBotLoop() {
 
                 // Tier 1A: Derivatives Intelligence entry gate
                 let derivativesAdj = 0;
+                let oiSurgeBreakout = false;
                 if (entryStrategy && derivativesIntel) {
                     try {
                         const derivBlock = derivativesIntel.shouldBlockLongEntry(ticker);
@@ -2076,12 +3105,42 @@ async function tradingBotLoop() {
                                 regime: currentRegime });
                             entryStrategy = null;
                         }
-                        // Add derivatives ML features to confidence scoring
+                        // Add ALL 5 derivatives ML features to confidence scoring (was only [0] and [4])
                         const derivFeatures = derivativesIntel.getDerivativesMLFeatures(ticker);
-                        // Negative funding (shorts paying longs) is bullish → boost
+                        // [0] Negative funding (shorts paying longs) = bullish
                         if (derivFeatures[0] < -0.2) derivativesAdj += 5;
-                        // Heavy short liquidations → bullish squeeze
+                        else if (derivFeatures[0] > 0.5) derivativesAdj -= 3; // Longs overleveraged
+                        // [1] OI change: rising OI in uptrend = new money, falling OI = exodus
+                        if (derivFeatures[1] > 0.05 && currentRegime.includes('UP')) derivativesAdj += 3;
+                        else if (derivFeatures[1] < -0.1) derivativesAdj -= 4;
+                        // [2] OI-price divergence: OI up + price down = bearish (strongest signal)
+                        if (derivFeatures[2] > 0.3) derivativesAdj -= 6;
+                        else if (derivFeatures[2] < -0.3) derivativesAdj += 4; // Short squeeze setup
+                        // [3] Long/short ratio: extreme long bias = crowded → contrarian bearish
+                        if (derivFeatures[3] > 0.3) derivativesAdj -= 3;
+                        else if (derivFeatures[3] < -0.3) derivativesAdj += 3; // Heavy shorts = squeeze
+                        // [4] Liquidation imbalance: short liq = bullish squeeze, long liq = cascade
                         if (derivFeatures[4] < -0.5) derivativesAdj += 3;
+                        else if (derivFeatures[4] > 0.5) derivativesAdj -= 3;
+
+                        // Cascade risk entry gate — block longs during active liquidation cascades
+                        if (entryStrategy) {
+                            const cascade = derivativesIntel.predictCascadeRisk(ticker);
+                            if (cascade.risk === 'CRITICAL' || (cascade.risk === 'HIGH' && cascade.score > 70)) {
+                                logThought({ type: 'SKIP', ticker, action: 'CASCADE_RISK_BLOCKED',
+                                    confidence: score.compositeScore,
+                                    reason: `Cascade risk ${cascade.risk} (score=${cascade.score}): ${cascade.factors?.join(', ') || 'multiple factors'}`,
+                                    regime: currentRegime });
+                                entryStrategy = null;
+                            } else if (cascade.risk === 'HIGH') {
+                                derivativesAdj -= 8; // Strong penalty but don't block
+                            }
+                        }
+                        // OI surge breakout confirmation — rising OI confirms real money behind breakouts
+                        if (entryStrategy && derivFeatures[1] > 0.10) {
+                            oiSurgeBreakout = true; // 15% size boost applied later in sizing section
+                            derivativesAdj += 4; // OI surge = strong conviction signal
+                        }
                     } catch (e) {}
                 }
 
@@ -2107,6 +3166,94 @@ async function tradingBotLoop() {
                         else if (fgIndex >= 80) fearGreedAdj -= 8;
                         else if (fgIndex >= 65) fearGreedAdj -= 3;
                     } catch (e) {}
+                }
+
+                // ═══ COMPOSITE MACRO SIGNAL — Sentiment × Derivatives interaction ═══
+                // The highest-alpha setup is when both F&G and funding agree on direction
+                let macroCompositeAdj = 0;
+                if (entryStrategy && fearGreedGate && derivativesIntel) {
+                    try {
+                        const fgIndex = fearGreedGate.getFearGreedIndex?.() || 50;
+                        const derivSignal = derivativesIntel.getDerivativesSignal?.(ticker.replace('USD', ''));
+                        const fundingAPR = derivSignal?.fundingRateAnnualized || 0;
+
+                        // Extreme Fear + negative/low funding = market panic + shorts paying = STRONG BUY
+                        if (fgIndex <= 25 && fundingAPR < 5) {
+                            macroCompositeAdj = 12; // Very bullish contrarian setup
+                        }
+                        // Extreme Greed + very high funding = euphoria + longs overleveraged = STRONG WARNING
+                        else if (fgIndex >= 75 && fundingAPR > 30) {
+                            macroCompositeAdj = -12; // Very bearish contrarian setup
+                            if (fgIndex >= 85 && fundingAPR > 50) {
+                                // Nuclear option: block entirely
+                                logThought({ type: 'SKIP', ticker, action: 'MACRO_EUPHORIA_BLOCK',
+                                    confidence: score.compositeScore,
+                                    reason: `F&G=${fgIndex} + Funding=${fundingAPR.toFixed(0)}% APR = extreme euphoria`,
+                                    regime: currentRegime });
+                                entryStrategy = null;
+                            }
+                        }
+                        // Moderate agreement amplification
+                        else if (fgIndex <= 40 && fundingAPR < 10) macroCompositeAdj = 5; // Mild fear + low funding
+                        else if (fgIndex >= 60 && fundingAPR > 25) macroCompositeAdj = -5; // Mild greed + high funding
+                    } catch (e) {}
+                }
+
+                // Volume burst signal: buy-side volume spike = breakout confirmation
+                let volumeBurstAdj = 0;
+                try {
+                    const burstSignal = getVolumeBurstSignal(ticker);
+                    if (burstSignal.burst) {
+                        volumeBurstAdj = 5; // +5 confidence for volume burst
+                    }
+                } catch (e) { /* non-critical */ }
+
+                // Price velocity confirmation: positive velocity + acceleration = momentum entry
+                let velocityAdj = 0;
+                try {
+                    const vel = priceVelocityTracker.getMetrics(ticker);
+                    if (vel.tickCount >= 5) {
+                        // Strong positive velocity = price moving up fast = momentum confirmation
+                        if (vel.velocity > 0.2 && vel.acceleration > 0) velocityAdj += 5;
+                        else if (vel.velocity > 0.5 && vel.acceleration > 0.1) velocityAdj += 8;
+                        // Negative velocity = price dropping = caution
+                        else if (vel.velocity < -0.3) velocityAdj -= 5;
+                        // Sharp deceleration from positive = momentum fading
+                        else if (vel.velocity > 0 && vel.acceleration < -0.2) velocityAdj -= 3;
+                    }
+                } catch (e) { /* non-critical */ }
+
+                // Signal scanner multi-timeframe confirmation
+                let scannerAdj = 0;
+                if (_signalScannerRef && entryStrategy) {
+                    try {
+                        const scanResults = _signalScannerRef.getScanResults();
+                        const tickerScan = scanResults?.[ticker];
+                        if (tickerScan?.combined) {
+                            const totalScore = tickerScan.combined.totalScore || 0;
+                            if (totalScore >= 20) scannerAdj += 10;
+                            else if (totalScore >= 10) scannerAdj += 5;
+                            else if (totalScore <= -15) scannerAdj -= 8;
+                            else if (totalScore <= -5) scannerAdj -= 3;
+                        }
+                    } catch (e) {}
+                }
+
+                // Tier 2A: VPIN toxic flow gate (orderBookMicrostructure)
+                if (entryStrategy && orderBookMicro) {
+                    try {
+                        const vpin = orderBookMicro.getVPIN(ticker);
+                        if (vpin > 0.7) {
+                            logThought({ type: 'SKIP', ticker, action: 'VPIN_TOXIC',
+                                confidence: score.compositeScore,
+                                reason: `VPIN=${vpin.toFixed(3)} > 0.7 — informed trading detected, blocking entry`,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        } else if (vpin > 0.5) {
+                            // Moderate toxicity — reduce position by 30%
+                            fearGreedSizeMultiplier *= 0.70;
+                        }
+                    } catch (e) { /* fail open */ }
                 }
 
                 // Tier 3B: Liquidation Sweep entry boost
@@ -2183,7 +3330,44 @@ async function tradingBotLoop() {
                 let mlSizeMultiplier = 1.0;
                 if (entryStrategy && mlPredictionService?.getMLAdvice) {
                     try {
-                        mlAdvice = await mlPredictionService.getMLAdvice(ticker, candles, {});
+                        // Build enriched options so ML features 28-103 are populated (not zero-filled)
+                        const mlOptions = {};
+                        try {
+                            if (derivativesIntel) {
+                                const sig = derivativesIntel.getDerivativesSignal(ticker);
+                                if (sig) mlOptions.derivativesData = sig;
+                            }
+                            if (fearGreedGate) {
+                                const fgi = fearGreedGate.getFearGreedIndex?.();
+                                mlOptions.sentimentData = {
+                                    fearGreedIndex: fgi?.value || 50,
+                                    fearGreedClassification: fgi?.classification || 'Neutral',
+                                    newsSentiment: sentimentCache.get(ticker) || 0,
+                                };
+                            }
+                            if (orderBookMicro) {
+                                const vpin = orderBookMicro.getVPIN?.(ticker);
+                                const analysis = orderBookMicro.getAnalysis?.(ticker);
+                                mlOptions.exchangeSnapshot = {
+                                    vpin: vpin || 0,
+                                    bidAskImbalance: analysis?.bidAskImbalance || 0,
+                                    weightedImbalance: analysis?.weightedImbalance || 0,
+                                    spreadBps: analysis?.spreadBps || 0,
+                                };
+                            }
+                            if (whaleFlowTracker) {
+                                const flow = whaleFlowTracker.getFlowSignal?.(ticker.replace('USD', ''));
+                                if (flow) mlOptions.onChainData = flow;
+                            }
+                            try {
+                                const defi = getLatestDeFiSnapshot?.();
+                                if (defi) mlOptions.defiData = typeof defi === 'string' ? JSON.parse(defi) : defi;
+                            } catch (e) {}
+                            mlOptions.marketRegime = currentRegime;
+                            mlOptions.lastTradeTime = botState.lastTradeTime || 0;
+                        } catch (enrichErr) { /* fail open — ML works with whatever data is available */ }
+
+                        mlAdvice = await mlPredictionService.getMLAdvice(ticker, candles, mlOptions);
                         if (mlAdvice.available) {
                             // ML agrees with LONG entry: boost position size by confidence
                             if (mlAdvice.direction === 'BUY' || mlAdvice.direction === 'LONG') {
@@ -2219,30 +3403,63 @@ async function tradingBotLoop() {
                 let geneticSignals = [];
                 let pipelineResult = null;
                 if (entryStrategy) {
-                    // Compute indicator snapshots needed for pipeline
-                    const momValue = calculateMomentumSeries(candles).pop() ?? 50;
-                    const bkoutValue = calculateBreakoutDetectorSeries(candles).pop() ?? 50;
+                    // Reuse cached indicators (computed once at top of candidate loop)
+                    const momValue = _cachedMom;
+                    const bkoutValue = calculateBreakoutDetectorSeries(candles).pop() ?? 50; // Not cached (scaled per-asset)
                     const adpValue = calculateAdaptiveTCSeries(candles).pop() ?? 50;
-                    const whaleValue = calculateWhaleMoneyFlowSeries(candles).pop() ?? 50;
-                    const trendDash = calculateTrendDashboard(candles);
-                    const bullishCount = trendDash ? Object.values(trendDash).filter(v => v === true || v === 'BULLISH' || v === 'UP').length : 0;
+                    const whaleValue = calculateWhaleMoneyFlowSeries(candles).pop() ?? 50; // Not cached (scaled per-asset)
+                    const trendDash = _cachedTrendDash;
+                    const bullishCount = _cachedBullishCount;
 
                     try {
                         if (getFlag('GENETIC_ENABLED')) {
                             const genPop = getGeneticPopulation();
+                            // Compute real indicator values from candles instead of hardcoding
+                            const _closes = candles.map(c => c.c);
+                            let _rsi = 50, _macdHist = 0, _bbB = 0.5, _atrNorm = 0;
+                            if (_closes.length >= 14) {
+                                // RSI
+                                let gains = 0, losses = 0;
+                                for (let i = _closes.length - 14; i < _closes.length; i++) {
+                                    const change = _closes[i] - _closes[i - 1];
+                                    if (change > 0) gains += change; else losses -= change;
+                                }
+                                const avgGain = gains / 14, avgLoss = losses / 14;
+                                _rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+                            }
+                            if (_closes.length >= 26) {
+                                // Simple MACD histogram (fast EMA12 - slow EMA26)
+                                const slice12 = _closes.slice(-12);
+                                const slice26 = _closes.slice(-26);
+                                const ema12 = slice12.reduce((a, b) => a + b, 0) / 12;
+                                const ema26 = slice26.reduce((a, b) => a + b, 0) / 26;
+                                _macdHist = (ema12 - ema26) / (_closes[_closes.length - 1] || 1) * 100;
+                            }
+                            if (_closes.length >= 20) {
+                                // Bollinger %B
+                                const bb20 = _closes.slice(-20);
+                                const bbMean = bb20.reduce((a, b) => a + b, 0) / 20;
+                                const bbStd = Math.sqrt(bb20.reduce((s, v) => s + (v - bbMean) ** 2, 0) / 20);
+                                const upper = bbMean + 2 * bbStd, lower = bbMean - 2 * bbStd;
+                                _bbB = upper !== lower ? (_closes[_closes.length - 1] - lower) / (upper - lower) : 0.5;
+                            }
+                            // ATR normalized
+                            const atr14 = calculateATRFromCandles(candles, 14);
+                            _atrNorm = _closes[_closes.length - 1] > 0 ? (atr14 / _closes[_closes.length - 1]) * 100 : 0;
+
                             const genIndicators = {
                                 tc: tcValue,
                                 momentum: momValue,
                                 breakout: bkoutValue,
                                 adaptive: adpValue,
                                 whale: whaleValue,
-                                divergence: 0,
-                                rsi: 50,
-                                macd_histogram: 0,
-                                bollinger_b: 0.5,
-                                volume_ratio: 1,
-                                atr_norm: 0,
-                                regime_score: currentRegime === 'UPTREND' ? 1 : currentRegime === 'DOWNTREND' ? -1 : 0,
+                                divergence: 0, // Divergence still needs full series — keep 0
+                                rsi: _rsi,
+                                macd_histogram: _macdHist,
+                                bollinger_b: _bbB,
+                                volume_ratio: score.volumeRatio || 1,
+                                atr_norm: _atrNorm,
+                                regime_score: currentRegime === 'UPTREND' || currentRegime === 'STRONG_UP' || currentRegime === 'UP' ? 1 : currentRegime === 'DOWNTREND' || currentRegime === 'DOWN' || currentRegime === 'STRONG_DOWN' ? -1 : 0,
                             };
                             geneticSignals = genPop.getTopSignals(genIndicators);
                         }
@@ -2298,6 +3515,18 @@ async function tradingBotLoop() {
                             { strategySignals, geneticSignals, onChainData, marketIntelligence }
                         );
 
+                        // Record ML prediction for A/B testing (champion vs challenger)
+                        if (pipelineResult && mlABTest) {
+                            try {
+                                const predDirection = pipelineResult.proceed ? 'UP' : 'DOWN';
+                                const predConfidence = pipelineResult.confidence || 50;
+                                mlABTest.recordPrediction(ticker,
+                                    { direction: predDirection, confidence: predConfidence },
+                                    null // Challenger prediction filled when challenger exists
+                                );
+                            } catch (e) { /* non-critical */ }
+                        }
+
                         if (pipelineResult && !pipelineResult.proceed) {
                             logThought({
                                 type: 'SKIP', ticker, action: 'ML_GATEKEEPER_BLOCKED',
@@ -2336,16 +3565,257 @@ async function tradingBotLoop() {
                 }
                 // ===== END ML PIPELINE =====
 
+                // Blocked hours filter (from best seed training + mined patterns)
+                if (entryStrategy) {
+                    const currentUTCHour = new Date().getUTCHours();
+                    // Merge seed-based blocked hours with mined blocked hours
+                    const seedBlocked = botState._blockedHours || [];
+                    let minedBlocked = [];
+                    try { minedBlocked = getMinedBlockedHours(); } catch (e) {}
+                    const allBlocked = [...new Set([...seedBlocked, ...minedBlocked])];
+                    if (allBlocked.includes(currentUTCHour)) {
+                        logThought({ type: 'SKIP', ticker, action: 'BLOCKED_HOUR',
+                            confidence: score.compositeScore,
+                            reason: `UTC hour ${currentUTCHour} blocked (seed: ${seedBlocked.includes(currentUTCHour) ? 'yes' : 'no'}, mined: ${minedBlocked.includes(currentUTCHour) ? 'yes' : 'no'})`,
+                            regime: currentRegime });
+                        entryStrategy = null;
+                    }
+                }
+
+                // Time-of-day win rate gate (self-learning from trade outcomes)
+                if (entryStrategy) {
+                    const todCheck = timeOfDayTracker.shouldBlockEntry();
+                    if (todCheck.blocked) {
+                        logThought({ type: 'SKIP', ticker, action: 'TIME_OF_DAY_GATE',
+                            confidence: score.compositeScore,
+                            reason: `Bad time slot: ${todCheck.reasons.join('; ')}`,
+                            regime: currentRegime });
+                        entryStrategy = null;
+                    }
+                }
+
+                // Journal pattern: skip ticker+strategy combos that consistently lose
+                if (entryStrategy) {
+                    const tickerScore = getTickerStrategyScore(ticker, entryStrategy);
+                    if (tickerScore?.shouldAvoid) {
+                        logThought({ type: 'SKIP', ticker, action: 'JOURNAL_PATTERN',
+                            confidence: score.compositeScore,
+                            reason: `${ticker}:${entryStrategy} historically bad — ${tickerScore.winRate}% WR over ${tickerScore.total} trades`,
+                            regime: currentRegime });
+                        entryStrategy = null;
+                    }
+                }
+
+                // Regime transition confidence boost/penalty
+                let regimeTransitionAdj = 0;
+                if (entryStrategy) {
+                    const transition = detectRegimeTransition(ticker);
+                    if (transition.transition) {
+                        regimeTransitionAdj = transition.confidence; // -15 to +15
+                        if (Math.abs(regimeTransitionAdj) >= 5) {
+                            logThought({ type: 'REGIME_TRANSITION', ticker, action: transition.transition,
+                                confidence: regimeTransitionAdj,
+                                reason: `${transition.from}→${transition.to} (accel=${transition.slopeAccel.toFixed(4)}) → ${transition.recommendation}`,
+                                regime: currentRegime });
+                        }
+                        // BOOST_ENTRY: Breakout/Recovery transitions — boost position size and lower threshold
+                        if (transition.recommendation === 'BOOST_ENTRY') {
+                            // Accelerating breakout → scale position size by slope acceleration
+                            const accelBoost = Math.min(0.3, Math.abs(transition.slopeAccel || 0) * 8);
+                            _boostEntryMultipliers[ticker] = 1 + accelBoost;
+                            regimeTransitionAdj += 8; // Extra confidence for breakout
+                            logThought({ type: 'BOOST_ENTRY', ticker, action: transition.transition,
+                                confidence: regimeTransitionAdj,
+                                reason: `${transition.transition}: ${transition.from}→${transition.to}, sizeBoost=${(1 + accelBoost).toFixed(2)}x`,
+                                regime: currentRegime });
+                        }
+                        // Block entry on BREAKDOWN or REVERSAL transitions
+                        if (transition.recommendation === 'FORCE_TIGHTEN' || (transition.transition === 'BREAKDOWN' && regimeTransitionAdj <= -8)) {
+                            logThought({ type: 'SKIP', ticker, action: 'REGIME_REVERSAL',
+                                confidence: regimeTransitionAdj, reason: `${transition.transition}: regime shifting against longs`, regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                    }
+                }
+
+                // Lead-lag correlation alpha (now bidirectional — blocks when leaders are bearish)
+                let leadLagAdj = 0;
+                if (entryStrategy && marketDataMap) {
+                    try {
+                        const opportunities = portfolioCorrelationEngine.detectLeadLagOpportunities(marketDataMap, [ticker]);
+                        const match = opportunities.find(o => o.ticker === ticker);
+                        if (match) {
+                            // Positive: leader is up, follower lagging = buy opportunity
+                            if (match.leaderMove > 0 && match.confidence > 0) {
+                                leadLagAdj = match.confidence; // 0-25
+                                logThought({ type: 'LEAD_LAG', ticker, action: 'BULLISH_ALPHA',
+                                    confidence: leadLagAdj,
+                                    reason: `${match.leader} +${match.leaderMove}% but ${ticker} only +${match.followerMove}% → expected catch-up`,
+                                    regime: currentRegime });
+                            }
+                            // NEGATIVE: leader is DOWN, follower hasn't dropped yet = avoid entry
+                            else if (match.leaderMove < -1 && match.correlation > 0.6) {
+                                leadLagAdj = -Math.round(Math.abs(match.leaderMove) * match.correlation * 5);
+                                leadLagAdj = Math.max(-15, leadLagAdj); // Cap at -15
+                                logThought({ type: 'LEAD_LAG', ticker, action: 'BEARISH_WARNING',
+                                    confidence: leadLagAdj,
+                                    reason: `${match.leader} ${match.leaderMove}% — ${ticker} likely to follow (corr=${match.correlation})`,
+                                    regime: currentRegime });
+                                // Strong bearish lead-lag should block entry entirely
+                                if (leadLagAdj <= -10 && match.correlation > 0.75) {
+                                    logThought({ type: 'SKIP', ticker, action: 'LEAD_LAG_BLOCKED',
+                                        confidence: leadLagAdj,
+                                        reason: `Leader ${match.leader} falling ${match.leaderMove}% with corr=${match.correlation} — blocking entry`,
+                                        regime: currentRegime });
+                                    entryStrategy = null;
+                                }
+                            }
+                        }
+                    } catch (e) { /* non-critical */ }
+                }
+
+                // ═══ NEWLY WIRED SERVICES ═══
+
+                // Candlestick pattern confirmation (was dead code — surgeTradingBackend.js)
+                let candlestickAdj = 0;
+                if (entryStrategy && candles && candles.length >= 5) {
+                    try {
+                        const patterns = detectCandlestickPatterns(candles);
+                        // Bullish reversal patterns at entry = strong confirmation
+                        if (patterns?.bullish) {
+                            const bullishPatterns = ['HAMMER', 'BULLISH_ENGULFING', 'MORNING_STAR', 'PIERCING_LINE', 'THREE_WHITE_SOLDIERS'];
+                            for (const p of patterns.bullish) {
+                                if (bullishPatterns.includes(p.pattern)) {
+                                    candlestickAdj += Math.round((p.strength || 50) / 10); // +5 to +10
+                                }
+                            }
+                        }
+                        // Bearish patterns should reduce conviction
+                        if (patterns?.bearish) {
+                            const bearishPatterns = ['SHOOTING_STAR', 'BEARISH_ENGULFING', 'EVENING_STAR', 'DARK_CLOUD', 'THREE_BLACK_CROWS'];
+                            for (const p of patterns.bearish) {
+                                if (bearishPatterns.includes(p.pattern)) {
+                                    candlestickAdj -= Math.round((p.strength || 50) / 10); // -5 to -10
+                                }
+                            }
+                        }
+                    } catch (e) { /* fail open */ }
+                }
+
+                // On-chain signals (was dead code — onChainBackend.js)
+                // Regime-conditioned on-chain signals
+                let onChainAdj = 0;
+                if (entryStrategy) {
+                    try {
+                        const onChain = getOnChainSignals(ticker);
+                        if (onChain?.overallSignal) {
+                            const sig = onChain.overallSignal;
+                            // Accumulation in downtrend = contrarian bottom signal (higher conviction)
+                            // Accumulation in uptrend = trend confirmation (normal conviction)
+                            const isBearish = currentRegime === 'DOWN' || currentRegime === 'STRONG_DOWN';
+                            if (sig === 'STRONG_ACCUMULATION') onChainAdj += isBearish ? 15 : 10;
+                            else if (sig === 'ACCUMULATION') onChainAdj += isBearish ? 8 : 5;
+                            else if (sig === 'DISTRIBUTION') onChainAdj -= 5;
+                            else if (sig === 'STRONG_DISTRIBUTION') onChainAdj -= 12;
+                        }
+                    } catch (e) { /* fail open */ }
+                }
+
+                // Asset volatility profile for position sizing (was dead code — assetIntelligenceBackend.js)
+                let assetVolatilitySizeMultiplier = 1.0;
+                if (entryStrategy) {
+                    try {
+                        const profile = getAssetProfile(ticker);
+                        if (profile?.volatilityTier) {
+                            // Higher volatility = smaller position (tail risk protection)
+                            if (profile.volatilityTier === 'EXTREME') assetVolatilitySizeMultiplier = 0.5;
+                            else if (profile.volatilityTier === 'HIGH') assetVolatilitySizeMultiplier = 0.7;
+                            else if (profile.volatilityTier === 'MEDIUM') assetVolatilitySizeMultiplier = 1.0;
+                            else if (profile.volatilityTier === 'LOW') assetVolatilitySizeMultiplier = 1.2;
+                        }
+                    } catch (e) { /* fail open */ }
+                }
+
+                // Pre-trade AI decision gate (was dead code — preTradeAI.js)
+                if (entryStrategy) {
+                    try {
+                        const preTradeResult = getPreTradeDecision(ticker, score.compositeScore, currentRegime, entryStrategy);
+                        if (preTradeResult && preTradeResult.decision === 'REJECT') {
+                            logThought({ type: 'SKIP', ticker, action: 'PRETRADE_AI_REJECT',
+                                confidence: score.compositeScore,
+                                reason: preTradeResult.reason || 'Pre-trade AI rejected entry',
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                    } catch (e) { /* fail open */ }
+                }
+
+                // VWAP + StochRSI + Delta Volume entry confirmation signals
+                let vwapAdj = 0, stochRSIAdj = 0, deltaVolAdj = 0;
+                if (entryStrategy && candles && candles.length >= 30) {
+                    try {
+                        // VWAP: price below VWAP in uptrend = pullback entry (bullish)
+                        const vwapValue = calculateVWAPLatest(candles);
+                        const latestClose = candles[candles.length - 1]?.c || candles[candles.length - 1]?.close;
+                        if (vwapValue && latestClose) {
+                            const vwapDev = ((latestClose - vwapValue) / vwapValue) * 100;
+                            if (vwapDev < -0.5 && currentRegime.includes('UP')) vwapAdj = 5;       // Below VWAP in uptrend = pullback entry
+                            else if (vwapDev < -1.5) vwapAdj = -3;                                  // Far below VWAP = weakness
+                            else if (vwapDev > 2.0) vwapAdj = -3;                                   // Far above VWAP = overextended
+                        }
+
+                        // StochRSI: < 20 = oversold (bullish), > 80 = overbought (bearish)
+                        const stochK = calculateStochRSILatest(candles);
+                        if (stochK < 20) stochRSIAdj = 5;        // Oversold momentum = good entry
+                        else if (stochK < 35) stochRSIAdj = 2;   // Moderately oversold
+                        else if (stochK > 80) stochRSIAdj = -5;  // Overbought = don't chase
+                        else if (stochK > 65) stochRSIAdj = -2;  // Moderately overbought
+
+                        // Delta Volume: > 60 = buy dominance (bullish), < 40 = sell dominance
+                        const deltaVol = calculateDeltaVolumeLatest(candles);
+                        if (deltaVol > 65) deltaVolAdj = 4;      // Strong buy pressure
+                        else if (deltaVol > 55) deltaVolAdj = 2;  // Moderate buy pressure
+                        else if (deltaVol < 35) deltaVolAdj = -5; // Sell-dominated — don't buy into selling
+                        else if (deltaVol < 45) deltaVolAdj = -2; // Moderate sell pressure
+                    } catch (e) { /* fail open */ }
+                }
+
+                // Adversarial brains consensus adjustment (from ML gatekeeper pipeline)
+                let adversarialAdj = 0;
+                if (pipelineResult?.adversarialConsensus) {
+                    const adv = pipelineResult.adversarialConsensus;
+                    if (adv.consensus === 'STRONG_BUY') adversarialAdj = 6;
+                    else if (adv.consensus === 'WEAK_BUY') adversarialAdj = 2;
+                    else if (adv.consensus === 'CONTESTED') adversarialAdj = -3;
+                    else if (adv.consensus === 'REJECT') adversarialAdj = -8;
+                }
+
                 // Hard floor: reject any entry with adjusted compositeScore below optimizer floor
-                // Now includes sentiment adjustment so strongly negative sentiment can reject entries
-                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj;
+                // Now includes ALL signal sources: sentiment, regime, lead-lag, candlestick, on-chain, VWAP, StochRSI, delta volume, adversarial
+                // Journal-mined regime+strategy adjustment
+                let journalAdj = 0;
+                if (entryStrategy) {
+                    try { journalAdj = getRegimeStrategyAdj(currentRegime, entryStrategy); } catch (e) {}
+                }
+
+                // Order book confidence adjustment (moved earlier to include in composite)
+                let obAdj = 0;
+                if (entryStrategy) {
+                    try {
+                        const obSignal = getOrderBookSignal(ticker);
+                        const obResult = getOrderBookConfidenceAdjustment(obSignal, 'BUY');
+                        obAdj = obResult.adjustment;
+                    } catch (e) { /* fail open */ }
+                }
+
+                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj + volumeBurstAdj + velocityAdj + regimeTransitionAdj + leadLagAdj + journalAdj + candlestickAdj + onChainAdj + macroCompositeAdj + scannerAdj + derivativesAdj + fearGreedAdj + sweepAdj + mtfConfidenceAdj + obAdj + vwapAdj + stochRSIAdj + deltaVolAdj + adversarialAdj;
                 if (entryStrategy && adjustedComposite < optParams.compositeScoreFloor) {
                     logThought({
                         type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
                         confidence: adjustedComposite,
-                        reason: `adjustedComposite ${adjustedComposite} (raw=${score.compositeScore}, htf=${htfAdj}, funding=${fundingAdj}, sentiment=${sentimentAdj}) < ${optParams.compositeScoreFloor} floor`,
+                        reason: `adjustedComposite ${adjustedComposite} (raw=${score.compositeScore}, htf=${htfAdj}, funding=${fundingAdj}, sent=${sentimentAdj}, candle=${candlestickAdj}, onchain=${onChainAdj}, deriv=${derivativesAdj}, fg=${fearGreedAdj}, sweep=${sweepAdj}, mtf=${mtfConfidenceAdj}, ob=${obAdj}) < ${optParams.compositeScoreFloor} floor`,
                         regime: currentRegime,
-                        indicators: { compositeScore: score.compositeScore, adjustedComposite, htfAdj, fundingAdj, sentimentAdj, entryStrategy },
+                        indicators: { compositeScore: score.compositeScore, adjustedComposite, htfAdj, fundingAdj, sentimentAdj, candlestickAdj, onChainAdj, entryStrategy },
                     });
                     entryStrategy = null;
                 }
@@ -2357,11 +3827,18 @@ async function tradingBotLoop() {
                         ? Math.min(0.25, kellySize.fraction)
                         : 0.10; // Fall back to 10% if < 20 trades
 
-                    // Tier 2: CVaR-adjusted Kelly — accounts for tail risk
+                    // Tier 2: Per-strategy CVaR-adjusted Kelly — accounts for tail risk + strategy performance
                     let adjustedKelly = kellyFraction;
+                    // Use per-strategy Kelly if enough trades for this strategy
+                    const stratKelly = getStrategyKelly(entryStrategy, totalValue);
+                    if (stratKelly?.kelly?.stats?.trades >= 20) {
+                        adjustedKelly = Math.min(0.25, stratKelly.fraction);
+                    }
                     if (cvarKelly) {
                         try {
-                            const cvarResult = cvarKelly.getCVaRAdjustedSize(kellyFraction, currentRegime);
+                            const cvarResult = cvarKelly.getStrategyCVaRAdjustedSize
+                                ? cvarKelly.getStrategyCVaRAdjustedSize(adjustedKelly, currentRegime, entryStrategy)
+                                : cvarKelly.getCVaRAdjustedSize(adjustedKelly, currentRegime);
                             adjustedKelly = cvarResult.fraction;
                         } catch (e) {}
                     }
@@ -2395,6 +3872,9 @@ async function tradingBotLoop() {
                     else confidenceSizeMultiplier = 0.70;
                     investmentAmount *= confidenceSizeMultiplier;
 
+                    // Asset volatility-based sizing: high-vol assets get smaller positions
+                    investmentAmount *= assetVolatilitySizeMultiplier;
+
                     // Fix #15 (Tier 2): Drawdown-graduated position sizing
                     // Instead of binary halt at max drawdown, gradually reduce sizes as drawdown grows.
                     // 0-3% drawdown: 100% size, 3-5%: 85%, 5-8%: 65%, 8-12%: 45%, 12%+: 25%
@@ -2407,6 +3887,20 @@ async function tradingBotLoop() {
                         else if (drawdown >= 3) drawdownMultiplier = 0.85;
                         investmentAmount *= drawdownMultiplier;
                     }
+
+                    // Correlation-aware sizing: reduce size when portfolio is highly correlated
+                    // If all open positions are BTC-correlated crypto, adding more correlated exposure increases tail risk
+                    try {
+                        if (getFlag('CORRELATION_ENGINE_ENABLED') && Object.keys(portfolio.positions).length >= 2) {
+                            const corrStatus = portfolioCorrelationEngine.getCorrelationStatus();
+                            const avgCorrelation = corrStatus?.averageCorrelation || 0;
+                            // High correlation (>0.7) = concentrated risk → reduce size
+                            // avgCorr > 0.8 → 0.6x, > 0.7 → 0.8x, > 0.6 → 0.9x
+                            if (avgCorrelation > 0.8) investmentAmount *= 0.6;
+                            else if (avgCorrelation > 0.7) investmentAmount *= 0.8;
+                            else if (avgCorrelation > 0.6) investmentAmount *= 0.9;
+                        }
+                    } catch {}
 
                     // Apply beast mode compound multiplier (cold streak 0.5x, hot streak 1.5x)
                     const compMult = getCompoundMultiplier();
@@ -2438,6 +3932,25 @@ async function tradingBotLoop() {
                     if (fearGreedSizeMultiplier !== 1.0) {
                         investmentAmount *= fearGreedSizeMultiplier;
                         investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
+                    }
+
+                    // OI surge breakout confirmation — 15% size boost when OI surges >10% alongside entry signal
+                    if (oiSurgeBreakout) {
+                        investmentAmount *= 1.15;
+                        investmentAmount = CapitalTierManager.getRecommendedPositionSize(totalValue, investmentAmount);
+                    }
+
+                    // High win-rate ticker+strategy combo → boost position size
+                    try {
+                        const tickerScore = getTickerStrategyScore(ticker, entryStrategy);
+                        if (tickerScore && tickerScore.winRate > 65 && tickerScore.total >= 8) {
+                            investmentAmount *= 1.20; // +20% for historically winning combos
+                        }
+                    } catch (e) {}
+
+                    // Regime transition acceleration → scale size on breakouts
+                    if (_boostEntryMultipliers[ticker]) {
+                        investmentAmount *= _boostEntryMultipliers[ticker];
                     }
 
                     // Layer 4: Portfolio Correlation Engine — size based on portfolio-level risk
@@ -2484,16 +3997,6 @@ async function tradingBotLoop() {
                         } catch (e) { /* fail open */ }
                     }
 
-                    // Order book confidence adjustment
-                    let obAdj = 0;
-                    if (entryStrategy) {
-                        try {
-                            const obSignal = getOrderBookSignal(ticker);
-                            const obResult = getOrderBookConfidenceAdjustment(obSignal, 'BUY');
-                            obAdj = obResult.adjustment;
-                        } catch (e) { /* fail open */ }
-                    }
-
                     if (entryStrategy && investmentAmount > CONFIG.MIN_TRADE_SIZE) {
                         const pipelineTier = pipelineResult?.tier || 'N/A';
                         const pipelineMult = pipelineResult?.sizeMultiplier?.toFixed(2) || '1.00';
@@ -2515,6 +4018,7 @@ async function tradingBotLoop() {
                             mlDirection: mlAdvice.direction,
                             pipelineTier,
                             pipelineSizeMultiplier: pipelineResult?.sizeMultiplier || 1,
+                            metaRLActions: metaRLParams ? { positionSizeMult: metaRLParams.positionSizeMult, slMult: metaRLParams.slMult, tpMult: metaRLParams.tpMult, entryThreshMult: metaRLParams.entryThreshMult } : null,
                         });
                     }
                 }
@@ -2522,7 +4026,7 @@ async function tradingBotLoop() {
         }
 
         // --- PROFIT METHOD ENTRIES ---
-        if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
+        if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && !flashCrashBlocking && !maxDrawdownBlocking && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
             const qualityForPM = availableTickers.filter(t => QUALITY_TICKERS.includes(t));
             const pmTickers = qualityForPM.length > 0 ? qualityForPM : availableTickers.slice(0, 50);
             const pmEntries = runProfitMethods(marketDataMap, portfolio, pmTickers, CONFIG.MIN_TRADE_SIZE);
@@ -2550,17 +4054,34 @@ async function tradingBotLoop() {
         // Only evaluate shorts in bearish regimes for sim mode learning
         try {
             const overallRegime = getMarketRegime();
-            if (shortSellingEngine && (overallRegime === 'DOWN' || overallRegime === 'STRONG_DOWN')) {
+            if (shortSellingEngine && (overallRegime === 'DOWNTREND' || overallRegime === 'DOWN' || overallRegime === 'STRONG_DOWN')) {
                 const exchangeId = getActiveExchangeId();
                 for (const [ticker, candles] of marketDataMap) {
                     if (!candles || candles.length < 21) continue;
                     const latestPrice = candles[candles.length - 1]?.c || 0;
                     if (latestPrice <= 0) continue;
 
-                    // Get TC score and ML confidence for short evaluation
+                    // Get TC score, RSI, and price momentum for short evaluation
                     const closes = candles.map(c => c.c);
                     const tcSeries = calculateTCSeries(closes, 14);
                     const tcValue = tcSeries?.[tcSeries.length - 1] || 50;
+
+                    // RSI calculation for overbought detection (inline 14-period)
+                    let rsiValue = 50;
+                    if (closes.length >= 15) {
+                        let avgGain = 0, avgLoss = 0;
+                        for (let i = closes.length - 14; i < closes.length; i++) {
+                            const diff = closes[i] - closes[i - 1];
+                            if (diff > 0) avgGain += diff; else avgLoss -= diff;
+                        }
+                        avgGain /= 14; avgLoss /= 14;
+                        rsiValue = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+                    }
+
+                    // 5-bar price change for momentum
+                    const priceChange5 = closes.length >= 6
+                        ? ((closes[closes.length - 1] - closes[closes.length - 6]) / closes[closes.length - 6]) * 100
+                        : 0;
 
                     // Evaluate via derivatives intelligence for short signal
                     let derivShortFavor = false;
@@ -2572,7 +4093,7 @@ async function tradingBotLoop() {
                     const shortEval = shortSellingEngine.evaluateShortEntry(
                         ticker, exchangeId, latestPrice, overallRegime,
                         derivShortFavor ? 0.75 : 0.5, // Use derivatives as confidence proxy
-                        tcValue
+                        tcValue, rsiValue, priceChange5
                     );
 
                     if (shortEval.shouldShort && shortEval.size) {
@@ -2581,8 +4102,13 @@ async function tradingBotLoop() {
                     }
                 }
 
-                // Check exits on existing short positions
-                shortSellingEngine.checkExits(getLatestPrice);
+                // Check exits on existing short positions — build price Map from live WS prices
+                const shortPriceMap = new Map();
+                for (const [, pos] of shortSellingEngine.positions || []) {
+                    const p = getLatestPrice(pos.ticker);
+                    if (p) shortPriceMap.set(`${pos.exchange}:${pos.ticker}`, p);
+                }
+                if (shortPriceMap.size > 0) shortSellingEngine.checkExits(shortPriceMap);
             }
         } catch (e) {
             // Fail silently — short engine is supplementary
@@ -2720,8 +4246,17 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                     const estQty = notional / price;
                     estimatedSlippage = optimizeEntryExit(orderBook, 'BUY', estQty);
 
-                    if (estimatedSlippage && estimatedSlippage.slippagePercent > 1.0) {
-                        addLog(`[ORDER-BOOK] Skipping ${ticker}: estimated slippage ${estimatedSlippage.slippagePercent.toFixed(3)}% exceeds 1% threshold`, 'WARN');
+                    // Adaptive slippage threshold: base 1.0%, widen if execution engine historically shows estimates were too conservative
+                    let slippageThreshold = 1.0;
+                    try {
+                        const execStats = executionEngine?.getExecutionStats?.();
+                        if (execStats?.totalExecutions >= 10 && execStats.slippageSavings > 0.1) {
+                            // Estimates run ~X% higher than actual — widen threshold by half the savings
+                            slippageThreshold = Math.min(1.5, 1.0 + execStats.slippageSavings * 0.5);
+                        }
+                    } catch {}
+                    if (estimatedSlippage && estimatedSlippage.slippagePercent > slippageThreshold) {
+                        addLog(`[ORDER-BOOK] Skipping ${ticker}: estimated slippage ${estimatedSlippage.slippagePercent.toFixed(3)}% exceeds ${slippageThreshold.toFixed(2)}% threshold`, 'WARN');
                         return { success: false, slippageRejected: true };
                     }
                     if (!estimatedSlippage?.isLiquiditySufficient) {
@@ -2881,9 +4416,11 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 compositeScore: entryMeta.compositeScore || 0,
                 triggerValue: entryMeta.triggerValue || 0,
                 regime: entryMeta.regime || 'NORMAL',
+                entryRegime: entryMeta.regime || 'NORMAL', // Snapshot for mid-trade regime switching
                 mlInfluenced: entryMeta.mlInfluenced || false,
                 mlConfidence: entryMeta.mlConfidence || 0,
                 mlDirection: entryMeta.mlDirection || null,
+                metaRLActions: entryMeta.metaRLActions || null,
             };
         }
         portfolio.cash -= (actualCost + buyFee);
@@ -3058,25 +4595,77 @@ const handleSell = async (position, price, reason) => {
         recordStrategyResult(position.entryStrategy, pnl);
         beastRecordTrade(pnl, position.ticker, position.entryStrategy);
         recordTradeForJournal({ ticker: position.ticker, strategy: position.entryStrategy, pnl, price: avgPrice, quantity: position.quantity, type: 'SELL' });
+        recordTradeDetail({
+            ticker: position.ticker, strategy: position.entryStrategy,
+            regime: position.entryRegime || position.regime || 'UNKNOWN',
+            entryPrice: position.openPrice, exitPrice: avgPrice,
+            pnlPercent: ((avgPrice - position.openPrice) / position.openPrice) * 100,
+            pnlUsd: pnl, entryTime: position.entryTime, exitTime: Date.now(),
+        });
         autoJournal();
         recordSessionTrade(pnl);
 
+        // Time-of-day tracker: record trade outcome for time-based gating
+        timeOfDayTracker.recordTrade(position.entryTime || Date.now(), pnl);
+        tickerLossCooldown.recordTrade(position.ticker, pnl);
+
         // Feed trade outcome to ML self-teaching loop
+        // Use fee-adjusted pnlPercent so thin-margin trades aren't mislabeled
+        const feeAdjustedPnlPct = ((pnl) / (position.openPrice * position.quantity)) * 100;
+
+        // Capture exit context for richer ML feedback
+        let exitRegime = 'UNKNOWN';
+        try { exitRegime = getMarketRegime(position.ticker)?.regime || 'UNKNOWN'; } catch (e) {}
+        const exitVelocity = priceVelocityTracker.getMetrics(position.ticker);
+        let exitOrderBookImbalance = 0;
         try {
-          recordTradeForLearning({
+            if (orderBookMicro?.analyze) {
+                const obAnalysis = orderBookMicro.analyze(position.ticker);
+                exitOrderBookImbalance = obAnalysis?.imbalance || 0;
+            }
+        } catch (e) {}
+        const exitHourUTC = new Date().getUTCHours();
+        const exitDayOfWeek = new Date().getUTCDay();
+
+        const tradeOutcomeData = {
             ticker: position.ticker,
             strategy: position.entryStrategy,
             outcome: pnl >= 0 ? 'WIN' : 'LOSS',
             pnl,
-            pnlPercent: ((avgPrice - position.openPrice) / position.openPrice) * 100,
+            pnlPercent: feeAdjustedPnlPct,
             entryPrice: position.openPrice,
             exitPrice: avgPrice,
             entryTime: position.entryTime,
             exitTime: Date.now(),
             holdDuration: Date.now() - position.entryTime,
-          });
+            pipelineTier: position.pipelineTier || 'UNKNOWN',
+            // Exit context (new)
+            exitReason: reason,
+            entryRegime: position.entryRegime || position.regime || 'UNKNOWN',
+            exitRegime,
+            exitVelocity: exitVelocity.velocity,
+            exitAcceleration: exitVelocity.acceleration,
+            exitOrderBookImbalance,
+            exitHourUTC,
+            exitDayOfWeek,
+            entryCompositeScore: position.compositeScore || 0,
+            entryMLConfidence: position.mlConfidence || 0,
+            peakPnlPct: position.highestPrice ? ((position.highestPrice - position.openPrice) / position.openPrice) * 100 : 0,
+            troughPnlPct: position.lowestPrice ? ((position.lowestPrice - position.openPrice) / position.openPrice) * 100 : 0,
+        };
+        try {
+          recordTradeForLearning(tradeOutcomeData);
         } catch (mlErr) {
           console.warn('[ML Feedback] Error recording trade for learning:', mlErr.message);
+        }
+
+        // Feed to self-teaching loop (online learner, gatekeeper, adaptive thresholds)
+        if (selfTeachingLoop?.onTradeComplete) {
+          try {
+            selfTeachingLoop.onTradeComplete(tradeOutcomeData);
+          } catch (stErr) {
+            console.warn('[SelfTeach] onTradeComplete error:', stErr.message);
+          }
         }
 
         // Log the thought
@@ -3144,19 +4733,26 @@ const handleSell = async (position, price, reason) => {
             mlInfluenced: position.mlInfluenced || false,
             mlConfidence: position.mlConfidence || 0,
             mlDirection: position.mlDirection || null,
+            // Exit context
+            exitReason: reason,
+            exitRegime,
+            exitVelocity: exitVelocity.velocity,
+            exitHourUTC,
+            exitDayOfWeek,
+            peakPnlPct: position.highestPrice ? ((position.highestPrice - position.openPrice) / position.openPrice) * 100 : 0,
         });
         if (portfolio.tradeLog.length > 500) portfolio.tradeLog.splice(0, portfolio.tradeLog.length - 500);
 
         // Tier 2: Record return for CVaR-adjusted Kelly sizing
         if (cvarKelly) {
-            try { cvarKelly.recordReturn(pnlPercent, position.regime || 'NORMAL'); } catch (e) {}
+            try { cvarKelly.recordReturn(pnlPercent, position.regime || 'NORMAL', position.entryStrategy || ''); } catch (e) {}
         }
 
-        // Tier 3B: Update Meta-RL beliefs
+        // Tier 3B: Update Meta-RL beliefs using entry-time actions (not current actions)
         if (metaRL) {
             try {
                 const regime = position.regime || 'SIDEWAYS';
-                const actions = metaRL.selectActions(regime); // Get current actions for this regime
+                const actions = position.metaRLActions || metaRL.selectActions(regime);
                 metaRL.updateBeliefs(regime, actions, pnlPercent);
             } catch (e) {}
         }
@@ -3298,6 +4894,8 @@ const ctx = {
     logPublicIp,
     getActiveFees,
     getLatestPrice,
+    priceVelocityTracker,
+    timeOfDayTracker,
 
     // Exchange adapter
     getExchangeAdapter,
@@ -3550,6 +5148,50 @@ app.get('/api/fear-greed/status', (req, res) => {
     res.json(fearGreedGate.getFearGreedStatus());
 });
 
+// Social Sentiment Dashboard API
+app.get('/api/sentiment/dashboard', async (req, res) => {
+    try {
+        const [fearGreed, news, trending] = await Promise.all([
+            fetchFearGreedIndex(),
+            fetchCryptoNews(),
+            fetchCoinGeckoTrending(),
+        ]);
+
+        // Per-ticker sentiment for active positions
+        const positionSentiments = {};
+        for (const ticker of Object.keys(portfolio.positions)) {
+            const tickerSent = getTickerNewsSentiment(ticker, news);
+            positionSentiments[ticker] = tickerSent;
+        }
+
+        // Check which trending coins have Kraken USD pairs
+        const trendingWithKraken = trending.map(c => ({
+            ...c,
+            krakenTicker: `${c.symbol}USD`,
+            onKraken: QUALITY_TICKERS.includes(`${c.symbol}USD`) ||
+                      (isNewListing && isNewListing(`${c.symbol}USD`)),
+        }));
+
+        res.json({
+            fearGreed: {
+                value: fearGreed.value,
+                classification: fearGreed.classification,
+            },
+            topHeadlines: news.slice(0, 5).map(n => ({
+                title: n.title,
+                source: n.source,
+                sentiment: n.sentiment,
+                publishedAt: n.publishedAt,
+            })),
+            trendingCoins: trendingWithKraken,
+            positionSentiments,
+            lastUpdated: Date.now(),
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Tier 2: Order Book Microstructure API
 app.get('/api/microstructure/status', (req, res) => {
     if (!orderBookMicro) return res.json({ enabled: false });
@@ -3628,6 +5270,16 @@ app.get('/api/meta-rl/status', (req, res) => {
 app.get('/api/meta-rl/recommend/:regime', (req, res) => {
     if (!metaRL) return res.json({ error: 'Service unavailable' });
     res.json(metaRL.getRecommendedParams(req.params.regime));
+});
+
+// Time-of-day win rate tracker
+app.get('/api/time-of-day/status', (req, res) => {
+    res.json(timeOfDayTracker.getStatus());
+});
+
+// Per-ticker loss cooldown status
+app.get('/api/ticker-cooldown/status', (req, res) => {
+    res.json(tickerLossCooldown.getStatus());
 });
 
 // Native exchange stop-loss status
@@ -3945,6 +5597,8 @@ const startServer = async () => {
             portfolio.positions = restoredState.portfolio.positions ?? {};
             portfolio.holdings = restoredState.portfolio.holdings ?? {};
             portfolio.tradeLog = restoredState.portfolio.tradeLog ?? [];
+            // Bootstrap time-of-day tracker from restored trade history
+            timeOfDayTracker.bootstrapFromTradeLog(portfolio.tradeLog);
             // Ensure restored positions have currentPrice initialized
             for (const pos of Object.values(portfolio.positions)) {
                 if (!pos.currentPrice) pos.currentPrice = pos.openPrice;
@@ -3996,7 +5650,44 @@ const startServer = async () => {
                     pnlUsd: equity - initialBudget,
                     pnlPct: initialBudget > 0 ? ((equity - initialBudget) / initialBudget) * 100 : 0,
                     positions: posEntries.length,
-                    positionDetails: portfolio.positions,
+                    positionDetails: Object.entries(portfolio.positions).map(([ticker, p]) => ({
+                        ticker,
+                        entryPrice: p.openPrice,
+                        currentPrice: p.currentPrice || p.openPrice,
+                        quantity: p.quantity,
+                        pnlPct: p.openPrice > 0 ? ((p.currentPrice || p.openPrice) - p.openPrice) / p.openPrice * 100 : 0,
+                        strategy: p.entryStrategy || 'UNKNOWN',
+                        holdTime: p.entryTime ? Date.now() - p.entryTime : 0,
+                        regime: p.regime || 'UNKNOWN',
+                    })),
+                    portfolio: {
+                        equity,
+                        cash: portfolio.cash,
+                        pnl: equity - initialBudget,
+                        pnlPct: initialBudget > 0 ? ((equity - initialBudget) / initialBudget) * 100 : 0,
+                        positions: posEntries.length,
+                        exposurePct: equity > 0 ? (holdingsValue / equity * 100) : 0,
+                    },
+                    circuitBreaker: {
+                        consecutiveLosses: botState.consecutiveLosses || 0,
+                        dailyPnl: botState.dailyPnl || 0,
+                        drawdownPct: botState.peakEquity > 0 ? ((botState.peakEquity - equity) / botState.peakEquity * 100) : 0,
+                        isPaused: botState.circuitBreakerPaused || false,
+                    },
+                    trades: {
+                        total: portfolio.tradeLog?.length || 0,
+                        winRate: (() => {
+                            const sells = (portfolio.tradeLog || []).filter(t => t.type === 'SELL');
+                            if (sells.length === 0) return 0;
+                            const wins = sells.filter(t => (t.pnl || 0) > 0).length;
+                            return (wins / sells.length) * 100;
+                        })(),
+                        avgPnl: (() => {
+                            const sells = (portfolio.tradeLog || []).filter(t => t.type === 'SELL');
+                            if (sells.length === 0) return 0;
+                            return sells.reduce((s, t) => s + (t.pnl || 0), 0) / sells.length;
+                        })(),
+                    },
                 };
             },
             getPortfolio: () => ({
@@ -4028,15 +5719,67 @@ const startServer = async () => {
         console.log(`[Server] Fee synced: ${(startupFees.roundTrip * 100).toFixed(2)}% round-trip (${getActiveExchangeId()})`);
     } catch(e) {}
 
-    // Load best seed exit targets (mod_1772200892500_11a80bd5: +16.68% OOS, 50.5% WR)
-    // Only apply if optimizer hasn't already loaded saved overrides
+    // Load best seed exit targets — try to read regime-specific overrides from learned state
+    // Best seed: mod_1772200892500_11a80bd5 (+16.68% OOS, 50.5% WR)
+    // Maps 5-state regime overrides → 3-bucket format (HIGH_VOL/NORMAL/LOW_VOL)
     if (!restoredState?.optimizer) {
-        setTargetOverrides({
-            HIGH_VOL: { tp: 12.0, sl: 3.5 },  // Best seed: TP=12%, SL=3.5% (2-week max hold)
-            NORMAL:   { tp: 8.0,  sl: 3.5 },   // Conservative in normal vol
-            LOW_VOL:  { tp: 5.0,  sl: 3.0 },   // Tighter in low vol, still well above fees
-        });
-        console.log('[Server] Best seed exit targets loaded (TREND strategy, proven +16.68% OOS)');
+        let appliedFromSeed = false;
+        try {
+            // Try to load the best seed's learned state for regime-specific exits
+            const db = getDb();
+            const bestSeed = db.prepare(
+                "SELECT learned_state_json FROM training_runs WHERE run_id LIKE 'mod_1772200892500%' ORDER BY created_at DESC LIMIT 1"
+            ).get();
+            if (bestSeed?.learned_state_json) {
+                const learned = JSON.parse(bestSeed.learned_state_json);
+                if (learned.tradeMemory?.regimeExitOverrides) {
+                    const ro = learned.tradeMemory.regimeExitOverrides;
+                    // Map 5-state regimes → 3 vol buckets
+                    // STRONG_UP/UP → HIGH_VOL (wide targets, let runners run)
+                    // SIDEWAYS → NORMAL
+                    // DOWN/STRONG_DOWN → LOW_VOL (tight targets, quick exits)
+                    setTargetOverrides({
+                        HIGH_VOL: {
+                            tp: ro.STRONG_UP?.tp || ro.UP?.tp || 20.0,
+                            sl: ro.STRONG_UP?.sl || ro.UP?.sl || 3.5,
+                        },
+                        NORMAL: {
+                            tp: ro.UP?.tp || ro.SIDEWAYS?.tp || 12.0,
+                            sl: ro.SIDEWAYS?.sl || ro.UP?.sl || 3.5,
+                        },
+                        LOW_VOL: {
+                            tp: ro.DOWN?.tp || ro.STRONG_DOWN?.tp || 8.0,
+                            sl: ro.DOWN?.sl || ro.STRONG_DOWN?.sl || 3.0,
+                        },
+                    });
+                    console.log('[Server] Best seed regime exit overrides applied from training DB');
+                    appliedFromSeed = true;
+
+                    // Apply max hold from seed exit params (168h for best seed)
+                    if (learned.tradeMemory?.exitParams?.maxHold) {
+                        botState._seedMaxHoldHours = learned.tradeMemory.exitParams.maxHold;
+                        console.log(`[Server] Best seed maxHold applied: ${botState._seedMaxHoldHours}h`);
+                    }
+
+                    // Also apply blocked hours if present
+                    if (learned.tradeMemory?.blockedHours?.length > 0) {
+                        botState._blockedHours = learned.tradeMemory.blockedHours;
+                        console.log(`[Server] Best seed blocked hours applied: ${learned.tradeMemory.blockedHours.join(', ')} UTC`);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[Server] Could not load best seed regime overrides:', e.message);
+        }
+
+        if (!appliedFromSeed) {
+            setTargetOverrides({
+                HIGH_VOL: { tp: 12.0, sl: 3.5 },
+                NORMAL:   { tp: 8.0,  sl: 3.5 },
+                LOW_VOL:  { tp: 5.0,  sl: 3.0 },
+            });
+            console.log('[Server] Default exit targets loaded (TREND strategy, +16.68% OOS fallback)');
+        }
     }
 
     await logPublicIp();
@@ -4193,10 +5936,17 @@ const startServer = async () => {
 
     // Start staking evaluation on interval (every hour)
     try {
+        // Register exchange adapter so staking engine can execute real staking calls
+        stakingEngine.registerAdapter(getActiveExchangeId(), getExchangeAdapter());
+        // Wire active trading assets so staking engine avoids assets we're trading
         setInterval(() => {
-            try { stakingEngine.evaluate(); } catch (e) {}
+            try {
+                const tradingAssets = Object.keys(portfolio.positions || {});
+                stakingEngine.setActiveTradingAssets(tradingAssets);
+                stakingEngine.evaluate();
+            } catch (e) {}
         }, 60 * 60 * 1000);
-        console.log('[Server] Staking engine evaluation scheduled (hourly)');
+        console.log('[Server] Staking engine evaluation scheduled (hourly, adapter registered)');
     } catch (e) {
         console.warn('[Server] Staking engine init failed:', e.message);
     }
@@ -4210,6 +5960,43 @@ const startServer = async () => {
     } catch (e) {
         console.warn('[Server] Health monitor init failed:', e.message);
     }
+
+    // ML degradation monitor — check every 15 minutes, alert if accuracy drops
+    let _lastMLAccuracy = null;
+    setInterval(() => {
+        try {
+            const mlStatus = mlPredictionService?.getMLStatus?.();
+            if (!mlStatus?.accuracy || mlStatus.accuracy <= 0) return;
+            const accuracy = mlStatus.accuracy;
+            const MIN_ML_ACCURACY = 60; // Alert if below 60%
+            if (accuracy < MIN_ML_ACCURACY && telegramEnabled()) {
+                alertMLDegradation(accuracy, MIN_ML_ACCURACY,
+                    `Samples: ${mlStatus.sampleCount || '?'}, Predictions: ${mlStatus.predictionCount || '?'}`);
+            }
+            // Alert on significant drop (>10 percentage points)
+            if (_lastMLAccuracy !== null && _lastMLAccuracy - accuracy > 10 && telegramEnabled()) {
+                alertMLDegradation(accuracy, _lastMLAccuracy,
+                    `Dropped from ${_lastMLAccuracy.toFixed(1)}% → ${accuracy.toFixed(1)}% (${(_lastMLAccuracy - accuracy).toFixed(1)}pp decline)`);
+            }
+            _lastMLAccuracy = accuracy;
+        } catch (e) {}
+    }, 15 * 60 * 1000);
+
+    // Concentration risk monitor — alert if any single position > 35% of portfolio
+    setInterval(() => {
+        try {
+            const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
+                (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0);
+            if (totalValue <= 0) return;
+            for (const [ticker, pos] of Object.entries(portfolio.positions)) {
+                const posValue = pos.quantity * (pos.currentPrice || pos.openPrice);
+                const pct = (posValue / totalValue) * 100;
+                if (pct > 35 && telegramEnabled()) {
+                    alertConcentrationRisk(ticker, pct);
+                }
+            }
+        } catch (e) {}
+    }, 10 * 60 * 1000);
 
     // Start Derivatives Intelligence polling (Tier 1A)
     if (derivativesIntel) {
@@ -4339,16 +6126,15 @@ const startServer = async () => {
         try { cleanupOldData(90); } catch (e) { console.warn('[DB Cleanup] Error:', e.message); }
     }, 7 * 24 * 60 * 60 * 1000);
 
-    // Start continuous backtester (Batch 4C) — DISABLED: blocks event loop synchronously
-    // if (continuousBacktester) {
-    //     try {
-    //         continuousBacktester.start();
-    //         console.log('[Server] Continuous backtester started');
-    //     } catch (e) {
-    //         console.warn('[Server] Continuous backtester start failed:', e.message);
-    //     }
-    // }
-    console.log('[Server] Continuous backtester disabled (event loop blocking)');
+    // Start continuous backtester (non-blocking: yields between strategies via setImmediate)
+    if (continuousBacktester) {
+        try {
+            continuousBacktester.start();
+            console.log('[Server] Continuous backtester started (non-blocking)');
+        } catch (e) {
+            console.warn('[Server] Continuous backtester start failed:', e.message);
+        }
+    }
 
     const scanner = new SignalScanner(
         async (ticker, timeframe) => await getMarketData(ticker, timeframe, 100),
@@ -4356,6 +6142,7 @@ const startServer = async () => {
         injectSignal
     );
     scanner.start();
+    _signalScannerRef = scanner;
 
     // Restore ML thought logger session
     if (restoredState?.botState?.sessionId) {

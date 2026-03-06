@@ -395,7 +395,7 @@ class OnlineLearner {
 
       if (driftResult.driftDetected) {
         console.log(`[Online Learner] Drift detected! ${driftResult.details}`);
-        // Trigger early retrain (handled by caller)
+        this.lastDriftDetectedAt = Date.now();
       }
     }
 
@@ -432,6 +432,8 @@ class OnlineLearner {
     if (this.recentPredictions.length > 200) {
       this.recentPredictions.shift();
     }
+
+    return { driftDetected: !!(this.lastDriftDetectedAt && (Date.now() - this.lastDriftDetectedAt) < 10000) };
   }
 
   /**

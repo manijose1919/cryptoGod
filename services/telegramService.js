@@ -128,6 +128,28 @@ export function alertCircuitBreaker(reason) {
 }
 
 /**
+ * Alert when market regime transitions (e.g., UP → DOWN).
+ */
+export function alertRegimeTransition(from, to, ticker) {
+  const arrows = { STRONG_UP: '🟢🟢', UP: '🟢', SIDEWAYS: '🟡', DOWN: '🔴', STRONG_DOWN: '🔴🔴' };
+  queueMessage(`${arrows[to] || '⚪'} <b>Regime Shift</b>\n${ticker || 'Global'}: ${from} → ${to}\n${arrows[from] || ''} → ${arrows[to] || ''}`);
+}
+
+/**
+ * Alert when ML model accuracy degrades below threshold.
+ */
+export function alertMLDegradation(accuracy, threshold, details) {
+  queueMessage(`⚠️ <b>ML Degradation</b>\nAccuracy: ${accuracy.toFixed(1)}% (threshold: ${threshold}%)\n${details || ''}`);
+}
+
+/**
+ * Alert for concentration risk (single ticker exceeds % of portfolio).
+ */
+export function alertConcentrationRisk(ticker, pct) {
+  queueMessage(`⚠️ <b>Concentration Risk</b>\n${ticker}: ${pct.toFixed(1)}% of portfolio`);
+}
+
+/**
  * Send a test message to verify configuration.
  */
 export async function sendTestMessage() {
@@ -154,4 +176,5 @@ export async function sendTestMessage() {
 export default {
   initTelegram, isEnabled, getStatus, alertTradeExecution, alertDrawdown,
   alertSessionSummary, alertWhaleMovement, alertCircuitBreaker, sendTestMessage,
+  alertRegimeTransition, alertMLDegradation, alertConcentrationRisk,
 };

@@ -95,6 +95,13 @@ try {
   getFlag = () => true; // Default: all flags enabled
 }
 
+let mlABTest = null;
+try {
+  mlABTest = await import('./mlModelABTest.js');
+} catch (err) {
+  console.warn('[ML Prediction] mlModelABTest not available:', err.message);
+}
+
 // Phase 1-8 imports (all optional — fail gracefully)
 let tfEngine;
 try {
@@ -210,6 +217,11 @@ export async function initializeML() {
           console.log('[ML Prediction] Loaded saved model from database (id=' + savedModel.id + ')');
           console.log(`[ML Prediction] Model metrics: accuracy=${savedModel.accuracy?.toFixed(2)}%, precision=${savedModel.precision_score?.toFixed(2)}%`);
           lastTrainTime = new Date(savedModel.created_at).getTime();
+
+          // Set as A/B test champion (baseline model)
+          if (mlABTest) {
+            try { mlABTest.setChampion(`ensemble_${savedModel.id}`, 0); } catch {}
+          }
         }
       }
     } catch (err) {
@@ -720,16 +732,21 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
       console.warn('[ML Prediction] Failed to resolve predictions:', err.message);
     }
 
-    // Phase 6: Online learning update
+    // Phase 6: Online learning update + drift-triggered retraining
     try {
       if (onlineLearner && getFlag('ONLINE_LEARNING_ENABLED')) {
         const actualDirection = outcome === 'WIN' ? 'UP' : 'DOWN';
         const parsedFeatures = matchingFeature ? JSON.parse(matchingFeature.features_json) : null;
-        onlineLearner.update(
+        const olResult = onlineLearner.update(
           { ticker, predicted: label, actual: actualDirection },
           mlEngine,
           parsedFeatures
         );
+        // If drift detected, trigger early retrain (don't wait for sample/time threshold)
+        if (olResult?.driftDetected && samplesSinceLastTrain >= 10) {
+          console.log('[ML Prediction] Drift-triggered early retrain — accuracy degradation detected');
+          trainModel().catch(e => console.warn('[ML Prediction] Drift retrain failed:', e.message));
+        }
       }
     } catch (olErr) {
       // Non-critical — online learning update error
@@ -1135,6 +1152,16 @@ export async function trainModel() {
           configJson: JSON.stringify(mlEngine.config || {})
         });
         console.log('[ML Prediction] Model saved to database');
+
+        // Register newly trained model as A/B test challenger
+        if (mlABTest) {
+          try {
+            const modelId = `ensemble_${Date.now()}`;
+            mlABTest.registerChallenger(modelId, (mlEngine.version || 0) + 1);
+          } catch (e) {
+            console.warn('[ML Prediction] A/B test registration failed:', e.message);
+          }
+        }
       }
     } catch (err) {
       console.warn('[ML Prediction] Failed to save model:', err.message);
@@ -1184,6 +1211,11 @@ export function checkRetrainNeeded() {
     // Or if enough time has passed AND we have some new samples
     const timeSinceLastTrain = Date.now() - lastTrainTime;
     if (timeSinceLastTrain >= RETRAIN_INTERVAL && samplesSinceLastTrain > 20) {
+      return true;
+    }
+
+    // Drift-triggered: if online learner detects accuracy degradation
+    if (onlineLearner?.isDriftActive?.() && samplesSinceLastTrain >= 10) {
       return true;
     }
 

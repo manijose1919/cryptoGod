@@ -287,7 +287,7 @@ export const MLTrainingPanel: React.FC<MLTrainingPanelProps> = ({ addLog }) => {
             {pipelineStatus?.tfEngine?.available && (
               <span className="flex items-center gap-1.5 text-xs text-gray-400">
                 <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 animate-ping" />
+                  <span className="absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 animate-ping motion-reduce:animate-none" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
                 </span>
                 Pipeline Active

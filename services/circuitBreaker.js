@@ -35,6 +35,16 @@ const CIRCUIT_BREAKER_CONFIG = {
 let pauseCount = 0;  // For escalating pauses
 let peakBalance = 0;  // Track peak balance for drawdown-adaptive Kelly
 let currentBalance = 0;  // Current portfolio value
+let currentRegime = 'SIDEWAYS'; // Updated by setCurrentRegime(), used for adaptive thresholds
+
+// Regime-aware consecutive loss thresholds: bearish markets get tighter limits
+const REGIME_LOSS_THRESHOLDS = {
+  STRONG_UP: 4,   // Bull market: more forgiving (4 losses)
+  UP: 3,          // Normal: default threshold
+  SIDEWAYS: 3,    // Choppy: default threshold
+  DOWN: 2,        // Bear: tighter (2 losses triggers pause)
+  STRONG_DOWN: 2, // Deep bear: tightest
+};
 
 // ============================================
 // CIRCUIT BREAKER
@@ -82,9 +92,10 @@ export function setDailyBalance(balance) {
 }
 
 function checkTriggers() {
-  // Trigger 1: Consecutive losses
-  if (consecutiveLosses >= CIRCUIT_BREAKER_CONFIG.MAX_CONSECUTIVE_LOSSES) {
-    triggerPause(`${consecutiveLosses} consecutive losses`);
+  // Trigger 1: Consecutive losses (regime-aware threshold)
+  const regimeThreshold = REGIME_LOSS_THRESHOLDS[currentRegime] ?? CIRCUIT_BREAKER_CONFIG.MAX_CONSECUTIVE_LOSSES;
+  if (consecutiveLosses >= regimeThreshold) {
+    triggerPause(`${consecutiveLosses} consecutive losses (${currentRegime} regime, threshold=${regimeThreshold})`);
     return;
   }
 
@@ -102,6 +113,32 @@ function checkTriggers() {
   const hourlyLosses = tradeHistory.filter(t => t.time > oneHourAgo && t.pnl < 0).length;
   if (hourlyLosses >= CIRCUIT_BREAKER_CONFIG.MAX_HOURLY_LOSSES) {
     triggerPause(`${hourlyLosses} losses in last hour`);
+    return;
+  }
+
+  // Trigger 4: PREDICTIVE — trajectory-based pause
+  // If the loss rate over last 30 min extrapolates to breaching daily limit within 1 hour, pause early
+  if (dailyStartBalance > 0) {
+    const thirtyMinAgo = Date.now() - 1800000;
+    const recentTrades = tradeHistory.filter(t => t.time > thirtyMinAgo);
+    if (recentTrades.length >= 3) { // Need at least 3 trades for trajectory
+      const recentPnl = recentTrades.reduce((s, t) => s + t.pnl, 0);
+      const recentLosses = recentTrades.filter(t => t.pnl < 0).length;
+      const lossRate = recentLosses / recentTrades.length;
+
+      // Extrapolate: if losing at >60% rate AND projected 1h PnL would breach 80% of daily limit
+      if (lossRate > 0.6 && recentPnl < 0) {
+        const projectedHourlyLoss = recentPnl * 2; // extrapolate 30min → 60min
+        const projectedDrawdown = (-(dailyPnl + projectedHourlyLoss) / dailyStartBalance) * 100;
+        const limit = CIRCUIT_BREAKER_CONFIG.MAX_DAILY_DRAWDOWN_PERCENT;
+
+        if (projectedDrawdown >= limit * 0.8) {
+          triggerPause(
+            `PREDICTIVE: ${lossRate * 100 | 0}% loss rate, projected ${projectedDrawdown.toFixed(1)}% drawdown in 1h (limit: ${limit}%)`
+          );
+        }
+      }
+    }
   }
 }
 
@@ -175,6 +212,16 @@ export function setCurrentBalance(balance) {
   currentBalance = balance;
   if (balance > peakBalance) {
     peakBalance = balance;
+  }
+}
+
+/**
+ * Update the current market regime for adaptive circuit breaker thresholds.
+ * @param {string} regime - STRONG_UP, UP, SIDEWAYS, DOWN, STRONG_DOWN
+ */
+export function setCurrentRegime(regime) {
+  if (REGIME_LOSS_THRESHOLDS[regime] !== undefined) {
+    currentRegime = regime;
   }
 }
 
@@ -416,5 +463,7 @@ export function getCircuitBreakerStatus() {
     totalTrades: tradeHistory.length,
     pauseCount,
     kelly,
+    regime: currentRegime,
+    regimeLossThreshold: REGIME_LOSS_THRESHOLDS[currentRegime] ?? CIRCUIT_BREAKER_CONFIG.MAX_CONSECUTIVE_LOSSES,
   };
 }

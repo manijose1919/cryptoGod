@@ -86,16 +86,26 @@ class StakingEngine {
     }
   }
 
+  // Track active trading tickers so we don't stake assets we're trading
+  private activeTradingAssets: Set<string> = new Set();
+
+  setActiveTradingAssets(assets: string[]): void {
+    this.activeTradingAssets = new Set(assets);
+  }
+
   /**
    * Evaluate staking opportunities for all idle assets.
-   * Only stakes assets not needed for active trading.
+   * Auto-stakes assets not needed for trading. Tracks rewards in simulation.
    */
   async evaluate(): Promise<void> {
     if (!this.enabled) return;
 
+    // Update reward accrual for existing staked positions
+    this.accrueRewards();
+
     for (const [exchangeId, adapter] of this.adapters) {
       try {
-        const balance = await (adapter as { getBalance: () => Promise<{ holdings: Record<string, { quantity: number }> }> }).getBalance();
+        const balance = await (adapter as { getBalance: () => Promise<{ holdings: Record<string, { quantity: number; usdValue?: number }> }> }).getBalance();
         const holdings = balance.holdings || {};
 
         for (const [asset, holding] of Object.entries(holdings)) {
@@ -108,9 +118,14 @@ class StakingEngine {
           if (holding.quantity < product.minStake) continue;
 
           // Don't stake if asset is in an active trading position
-          // (TradingEngine manages positions — check via EventBus or direct query)
-          const isTrading = this.isAssetInTradingPosition(exchangeId, asset);
-          if (isTrading) continue;
+          const ticker = `${asset}USD`;
+          if (this.activeTradingAssets.has(ticker)) continue;
+
+          // Don't double-stake — check if we already have a position for this asset
+          const existingStake = this.stakedPositions.find(
+            p => p.exchange === exchangeId && p.asset === asset && p.status === 'staking'
+          );
+          if (existingStake) continue;
 
           // Stake up to 80% of idle holdings (keep 20% for liquidity)
           const stakeAmount = holding.quantity * 0.80;
@@ -119,23 +134,53 @@ class StakingEngine {
           // Calculate estimated annual reward
           const annualReward = stakeAmount * (product.apy / 100);
 
+          // Execute staking — try real API first, fall back to simulation tracking
+          let staked = false;
+          try {
+            const adapterAny = adapter as Record<string, unknown>;
+            if (typeof adapterAny.stakeAsset === 'function') {
+              // Real staking via exchange API
+              await adapterAny.stakeAsset(asset, stakeAmount);
+              staked = true;
+              console.log(
+                `[StakingEngine] STAKED ${stakeAmount.toFixed(4)} ${asset} on ${exchangeId}`,
+                `at ${product.apy}% APY = ~${annualReward.toFixed(4)} ${asset}/year`
+              );
+            }
+          } catch (err) {
+            console.warn(`[StakingEngine] Real stake failed for ${asset} on ${exchangeId}: ${(err as Error).message}`);
+          }
+
+          // Track position regardless (sim tracking for P&L)
+          const posId = `${exchangeId}:${asset}:${Date.now()}`;
+          this.stakedPositions.push({
+            id: posId,
+            exchange: exchangeId as 'kraken' | 'crypto.com',
+            asset,
+            quantity: stakeAmount,
+            stakedAt: Date.now(),
+            apy: product.apy,
+            lockUntil: product.lockPeriod > 0 ? Date.now() + product.lockPeriod * 86400000 : 0,
+            earnedReward: 0,
+            status: 'staking',
+          });
+
           console.log(
-            `[StakingEngine] Opportunity: ${asset} on ${exchangeId}`,
-            `— Stake ${stakeAmount.toFixed(4)} at ${product.apy}% APY`,
-            `= ~${annualReward.toFixed(4)} ${asset}/year`
+            `[StakingEngine] ${staked ? 'REAL' : 'SIM'} stake: ${stakeAmount.toFixed(4)} ${asset} on ${exchangeId}`,
+            `@ ${product.apy}% APY = ~${annualReward.toFixed(4)} ${asset}/year`,
+            `(total staked positions: ${this.stakedPositions.length})`
           );
 
-          // For now, log opportunity. Actual staking API calls will be added
-          // when we verify the exchange API endpoints are correct.
           tradingBus.emit('ml:event', {
             type: 'prediction',
             exchange: exchangeId as 'kraken' | 'crypto.com',
             data: {
-              subtype: 'staking_opportunity',
+              subtype: 'staking_executed',
               asset,
               quantity: stakeAmount,
               apy: product.apy,
               annualReward,
+              realExecution: staked,
             },
             timestamp: Date.now(),
           });
@@ -146,10 +191,57 @@ class StakingEngine {
     }
   }
 
-  private isAssetInTradingPosition(exchange: string, asset: string): boolean {
-    // Will be wired to TradingEngine instances
-    // For now, return false (conservative — always eligible for staking)
-    return false;
+  /**
+   * Accrue rewards on all staked positions based on elapsed time and APY.
+   */
+  private accrueRewards(): void {
+    const now = Date.now();
+    for (const pos of this.stakedPositions) {
+      if (pos.status !== 'staking') continue;
+      // Calculate reward since last check (hourly interval)
+      const hoursElapsed = Math.min(1.0, (now - pos.stakedAt) / (1000 * 60 * 60));
+      const hourlyRate = pos.apy / 100 / 8760; // APY to hourly
+      const reward = pos.quantity * hourlyRate * hoursElapsed;
+      pos.earnedReward += reward;
+    }
+  }
+
+  /**
+   * Unstake an asset when capital is needed for trading.
+   */
+  async unstake(exchange: string, asset: string): Promise<boolean> {
+    const pos = this.stakedPositions.find(
+      p => p.exchange === exchange && p.asset === asset && p.status === 'staking'
+    );
+    if (!pos) return false;
+
+    // Check lock period
+    if (pos.lockUntil > 0 && Date.now() < pos.lockUntil) {
+      console.log(`[StakingEngine] Cannot unstake ${asset} on ${exchange} — locked until ${new Date(pos.lockUntil).toISOString()}`);
+      return false;
+    }
+
+    pos.status = 'unstaking';
+
+    // Try real unstaking
+    try {
+      const adapter = this.adapters.get(exchange) as Record<string, unknown> | undefined;
+      if (adapter && typeof adapter.unstakeAsset === 'function') {
+        await adapter.unstakeAsset(asset, pos.quantity);
+        console.log(`[StakingEngine] UNSTAKED ${pos.quantity.toFixed(4)} ${asset} on ${exchange} (earned: ${pos.earnedReward.toFixed(6)} ${asset})`);
+      }
+    } catch (err) {
+      console.warn(`[StakingEngine] Real unstake failed: ${(err as Error).message}`);
+    }
+
+    // Remove from active positions
+    const idx = this.stakedPositions.indexOf(pos);
+    if (idx >= 0) this.stakedPositions.splice(idx, 1);
+    return true;
+  }
+
+  private isAssetInTradingPosition(_exchange: string, asset: string): boolean {
+    return this.activeTradingAssets.has(`${asset}USD`);
   }
 
   // ─── Getters ─────────────────────────────────────────────
@@ -163,11 +255,26 @@ class StakingEngine {
   }
 
   getStatus() {
+    const totalEarned = this.stakedPositions.reduce((sum, p) => sum + p.earnedReward, 0);
+    const positionDetails = this.stakedPositions.map(p => ({
+      asset: p.asset,
+      exchange: p.exchange,
+      quantity: p.quantity,
+      apy: p.apy,
+      earnedReward: p.earnedReward,
+      stakedHours: ((Date.now() - p.stakedAt) / 3600000).toFixed(1),
+      status: p.status,
+    }));
+
     return {
       enabled: this.enabled,
       products: STAKING_PRODUCTS.filter(p => p.active).length,
       stakedPositions: this.stakedPositions.length,
-      totalStaked: this.stakedPositions.reduce((sum, p) => sum + p.earnedReward, 0),
+      totalEarnedRewards: totalEarned,
+      positions: positionDetails,
+      estimatedDailyReward: this.stakedPositions.reduce(
+        (sum, p) => sum + (p.quantity * p.apy / 100 / 365), 0
+      ),
     };
   }
 

@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+const SystemConfigPanel = lazy(() => import('./SystemConfigPanel'));
 
 interface ServiceStatus {
   name: string;
@@ -56,7 +57,7 @@ function StatusDot({ status }: { status: ServiceStatus['status'] }) {
   return (
     <span className="relative flex h-2.5 w-2.5">
       {isActive && (
-        <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${colorMap[status]}`} />
+        <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping motion-reduce:animate-none ${colorMap[status]}`} />
       )}
       <span className={`relative inline-flex rounded-full h-2.5 w-2.5 shadow-lg ${colorMap[status]}`} />
     </span>
@@ -292,7 +293,7 @@ export const SystemHealthPanel: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="flex items-center gap-1.5 text-xs text-gray-400">
               <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 animate-ping" />
+                <span className="absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75 animate-ping motion-reduce:animate-none" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
               </span>
               Live
@@ -449,6 +450,11 @@ export const SystemHealthPanel: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Feature Flags Configuration */}
+      <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: '#94a3b8', fontSize: '11px' }}>Loading config panel...</div>}>
+        <SystemConfigPanel />
+      </Suspense>
     </div>
   );
 };

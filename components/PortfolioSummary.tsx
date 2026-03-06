@@ -52,7 +52,7 @@ const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, wat
                 <div key={currency} className="flex justify-between text-xs bg-gray-900/50 p-2 rounded-md">
                   <span className="font-bold text-yellow-400">{currency}</span>
                   <span className="text-gray-300">
-                    {holding.quantity.toFixed(6)} {holding.price ? `@ ${formatCurrency(holding.price)}` : ''}
+                    {(holding.quantity || 0).toFixed(6)} {holding.price ? `@ ${formatCurrency(holding.price)}` : ''}
                   </span>
                   <span className="font-mono text-white">{formatCurrency(holding.usdValue)}</span>
                 </div>
@@ -77,7 +77,7 @@ const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, wat
                                     <span className={positionPnlColor}>{formatCurrency(positionPnl)}</span>
                                 </div>
                                 <div className="flex justify-between text-gray-400">
-                                    <span>Qty: {pos.quantity.toFixed(4)} @ {formatCurrency(pos.openPrice)}</span>
+                                    <span>Qty: {(pos.quantity || 0).toFixed(4)} @ {formatCurrency(pos.openPrice)}</span>
                                     <span>{pos.entryStrategy}</span>
                                 </div>
                             </div>

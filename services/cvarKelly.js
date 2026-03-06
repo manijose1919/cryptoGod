@@ -99,11 +99,13 @@ function calculateKurtosis(returns) {
  * Record a trade return for CVaR calculation.
  * @param {number} pnlPercent - Trade P&L as percentage (e.g., -2.5 for 2.5% loss)
  * @param {string} regime - Market regime at time of trade
+ * @param {string} strategy - Trading strategy used (e.g., 'TREND', 'ADAPTIVE')
  */
-export function recordReturn(pnlPercent, regime = 'NORMAL') {
+export function recordReturn(pnlPercent, regime = 'NORMAL', strategy = '') {
   returnHistory.push({
     pnlPercent,
     regime,
+    strategy,
     timestamp: Date.now(),
   });
 
@@ -230,9 +232,50 @@ export function getCVaRStatus() {
   };
 }
 
+/**
+ * Get CVaR-adjusted size filtered by strategy — uses only that strategy's return distribution.
+ * Falls back to global CVaR if strategy has <10 trades.
+ */
+export function getStrategyCVaRAdjustedSize(kellyFraction, regime = 'NORMAL', strategy = '') {
+  if (!strategy) return getCVaRAdjustedSize(kellyFraction, regime);
+
+  const stratReturns = returnHistory
+    .filter(r => r.strategy === strategy)
+    .map(r => r.pnlPercent);
+
+  if (stratReturns.length < MIN_SAMPLES_FOR_CVAR) {
+    // Not enough strategy-specific data — fall back to global
+    return getCVaRAdjustedSize(kellyFraction, regime);
+  }
+
+  const cvar = calculateCVaR(stratReturns, CVaR_CONFIDENCE);
+  const var95 = calculateVaR(stratReturns, CVaR_CONFIDENCE);
+  const kurtosis = calculateKurtosis(stratReturns);
+
+  let penalty = Math.min(0.8, cvar / 100);
+  const excessKurtosis = Math.max(0, kurtosis - 3);
+  penalty += Math.min(0.2, excessKurtosis * 0.02);
+
+  const regimeMultipliers = {
+    STRONG_DOWN: 0.4, DOWN: 0.6, SIDEWAYS: 0.85,
+    NORMAL: 1.0, UP: 1.1, STRONG_UP: 1.15,
+  };
+  const regimeMult = regimeMultipliers[regime] || 1.0;
+
+  let adjustedFraction = kellyFraction * (1 - penalty) * regimeMult;
+  adjustedFraction = Math.min(MAX_POSITION_PCT, Math.max(MIN_POSITION_PCT, adjustedFraction));
+
+  return {
+    fraction: adjustedFraction,
+    cvar, var95, kurtosis, penalty, regimeMultiplier: regimeMult,
+    reason: `Strategy=${strategy} (${stratReturns.length} trades), CVaR=${cvar.toFixed(2)}%, penalty=${(penalty * 100).toFixed(1)}%, regime=${regime}×${regimeMult}`,
+  };
+}
+
 export default {
   recordReturn,
   getCVaRAdjustedSize,
+  getStrategyCVaRAdjustedSize,
   getCVaRPositionDollars,
   getCVaRStatus,
 };

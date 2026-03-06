@@ -655,11 +655,15 @@ export function calculateOpportunityScore(candles, ticker) {
     // Factor 2: Momentum Strength
     const momentumStrength = momentumValue;
 
-    // Factor 3: Volume Confirmation (rescaled: avg volume ratio=1.0 → 65, ratio=2.0 → 100)
+    // Factor 3: Volume Confirmation
+    // Tightened: ratio=1.0 → 45 (below-avg penalized), ratio=1.5 → 65 (minimum useful), ratio=2.5 → 100
+    // This prevents entries on below-average volume which historically produce losing trades
     const avgVolume = candles.slice(-20).reduce((sum, c) => sum + c.v, 0) / 20;
     const currentVolume = candles[candles.length - 1].v;
     const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
-    const volumeConfirmation = Math.min(100, 30 + volumeRatio * 35);
+    const volumeConfirmation = volumeRatio < 0.5 ? 10 :
+        volumeRatio < 1.0 ? Math.min(45, 10 + volumeRatio * 35) :
+        Math.min(100, 10 + volumeRatio * 36);
 
     // Factor 4: Gap Opportunity
     let gapOpportunity = 0;
@@ -702,6 +706,8 @@ export function calculateOpportunityScore(candles, ticker) {
         compositeScore,
         urgency,
         confidence: regime.trendStrength,
+        regime: regime.trend,
+        volumeRatio,
         factors: {
             trendAlignment,
             momentumStrength,

@@ -36,6 +36,7 @@ const ToastItem: React.FC<{ toast: Toast; onDismiss: (id: number) => void }> = (
   const style = typeStyles[toast.type];
   return (
     <div
+      role="alert"
       className={`toast-item ${toast.exiting ? 'toast-exit' : 'toast-enter'} flex items-start gap-2 p-3 rounded-lg border-l-4 ${style.border} bg-gray-900/90 backdrop-blur-md shadow-lg max-w-xs cursor-pointer`}
       onClick={() => onDismiss(toast.id)}
     >
@@ -67,7 +68,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <ToastContext.Provider value={{ addToast }}>
       {children}
       {createPortal(
-        <div className="fixed top-3 right-3 z-[100] flex flex-col gap-2 pointer-events-none">
+        <div className="fixed top-3 right-3 z-[100] flex flex-col gap-2 pointer-events-none" aria-live="polite" aria-atomic="false">
           {toasts.map(t => (
             <div key={t.id} className="pointer-events-auto">
               <ToastItem toast={t} onDismiss={dismiss} />

@@ -18,7 +18,7 @@ export function RightPanel() {
     const { ticker, setTicker } = useSettingsContext();
     const { activeWatchlistData, watchlistDataRef, mtfData, isMtfLoading, scannerInsights } = useMarketDataContext();
 
-    // Derive current prices from watchlist candle data (last close for each ticker)
+    // Derive current prices from active watchlist data (state-driven, re-computes on data updates)
     const currentPrices = useMemo(() => {
         const prices: Record<string, number> = {};
         const wd = watchlistDataRef.current;
@@ -29,7 +29,7 @@ export function RightPanel() {
             }
         }
         return prices;
-    }, [watchlistDataRef]);
+    }, [activeWatchlistData]); // Use state as dependency, not ref
 
     return (
         <div className="lg:col-span-3 space-y-4">
