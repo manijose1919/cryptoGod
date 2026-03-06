@@ -53,7 +53,7 @@ export function useTradingContext() {
 }
 
 export function TradingProvider({ children }: { children: React.ReactNode }) {
-    const [portfolio, setPortfolio] = useState<PortfolioState>({ cash: 10000, initialBudget: 10000, positions: {} });
+    const [portfolio, setPortfolio] = useState<PortfolioState>({ cash: 10000, initialBudget: 10000, positions: {}, holdings: {} });
     const [trades, setTrades] = useState<Trade[]>([]);
     const [systemLog, setSystemLog] = useState<SystemEvent[]>([]);
     const [isBotActive, setIsBotActive] = useState(false);
