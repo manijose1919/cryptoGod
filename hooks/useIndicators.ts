@@ -101,8 +101,8 @@ export function useIndicators() {
 
         if (Math.random() < 0.1) {
             const allSentiments: SentimentSignal[] = [];
-            for (const t of Object.keys(watchlistDataRef.current)) {
-                const data = watchlistDataRef.current[t];
+            for (const t of Object.keys(watchlistDataRef.current || {})) {
+                const data = watchlistDataRef.current?.[t];
                 if (data && data.candles.length > 20) {
                     allSentiments.push(calculateSentimentFromMarketData(data.candles, t));
                 }
@@ -172,7 +172,7 @@ export function useIndicators() {
         if (!isTradingActive) return;
         const calculateAnalysis = () => {
             const watchlistData = watchlistDataRef.current;
-            if (Object.keys(watchlistData).length > 0) {
+            if (watchlistData && Object.keys(watchlistData).length > 0) {
                 const analysis = calculateMultiAssetAnalysis(watchlistData);
                 setMultiAssetAnalysis(analysis);
             }

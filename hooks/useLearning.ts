@@ -45,7 +45,7 @@ export function useLearning() {
     // Asset intelligence: ranking
     useEffect(() => {
         if (!assetIntelligenceEnabled || !isTradingActive || !marketRegime) return;
-        const availableAssets = Object.keys(watchlistDataRef.current);
+        const availableAssets = Object.keys(watchlistDataRef.current || {});
         const volatilityLevel = marketRegime.volatility as 'LOW' | 'MEDIUM' | 'HIGH' | 'EXTREME';
         const ranking = getBestAssetsForMarket(volatilityLevel, availableAssets);
         setAssetRanking(ranking);

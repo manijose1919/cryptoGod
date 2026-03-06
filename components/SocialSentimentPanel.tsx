@@ -72,7 +72,7 @@ export default function SocialSentimentPanel() {
   if (!data) return <div className="glass-card-sm p-4 text-slate-500 text-sm">Sentiment data unavailable</div>;
 
   const fgColor = FG_COLORS[data.fearGreed.classification] || 'text-slate-300';
-  const positionTickers = Object.keys(data.positionSentiments);
+  const positionTickers = Object.keys(data?.positionSentiments || {});
 
   return (
     <div className="glass-card p-4 space-y-4">

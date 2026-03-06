@@ -51,7 +51,7 @@ export const AILearningPanel: React.FC<AILearningPanelProps> = ({
       <div className="mb-4">
         <div className="text-xs text-gray-400 mb-2">Strategy Performance:</div>
         <div className="grid grid-cols-2 gap-1 text-xs">
-          {Object.entries(learningState.strategyStats)
+          {Object.entries(learningState?.strategyStats || {})
             .filter(([_, stats]) => stats.trades > 0)
             .sort((a, b) => b[1].winRate - a[1].winRate)
             .slice(0, 4)

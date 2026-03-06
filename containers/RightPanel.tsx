@@ -22,6 +22,7 @@ export function RightPanel() {
     const currentPrices = useMemo(() => {
         const prices: Record<string, number> = {};
         const wd = watchlistDataRef.current;
+        if (!wd) return prices;
         for (const t of Object.keys(wd)) {
             const candles = wd[t]?.candles;
             if (candles && candles.length > 0) {

@@ -82,7 +82,7 @@ export const NewsDashboard: React.FC<NewsDashboardProps> = ({ ticker }) => {
                 <div>
                     <h5 className="text-xs text-gray-400 uppercase font-bold mb-3 tracking-wider">Trending Platforms</h5>
                     <div className="space-y-3">
-                        {Object.entries(trendingPlatforms).map(([platform, count], idx) => (
+                        {Object.entries(trendingPlatforms || {}).map(([platform, count], idx) => (
                             <div key={platform} className="bg-gray-900/50 p-2 rounded-lg border border-gray-800 flex items-center justify-between">
                                 <div className="flex items-center gap-2">
                                     <div className={`w-2 h-2 rounded-full ${idx === 0 ? 'bg-cyan-500' : 'bg-gray-600'}`}></div>

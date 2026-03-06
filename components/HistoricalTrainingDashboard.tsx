@@ -554,7 +554,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
 
               {/* Per-pair grid (1h candles for simplicity) */}
               <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
-                {Object.entries(dataSummary.pairs).map(([pair, info]: [string, any]) => (
+                {Object.entries(dataSummary?.pairs || {}).map(([pair, info]: [string, any]) => (
                   <div key={pair} className="glass-card p-2 text-center">
                     <div className="text-xs font-mono text-cyan-300">{pair}</div>
                     <div className="text-sm font-bold">{(info.totalCount || info.count || 0).toLocaleString()}</div>

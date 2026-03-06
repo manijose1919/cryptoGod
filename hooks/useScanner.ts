@@ -37,7 +37,7 @@ export function useScanner() {
                 TREND: [], BREAKOUT: [], WHALE: [], CONFLUENCE: [], MOMENTUM: [], DIVERGENCE: [], ADAPTIVE: [],
             };
 
-            for (const asset of Object.keys(watchlistDataRef.current)) {
+            for (const asset of Object.keys(watchlistDataRef.current || {})) {
                 const data = watchlistDataRef.current[asset];
                 if (data && data.indicatorData.length > 0) {
                     const tcValue = data.indicatorData.at(-1)?.value ?? 50;
