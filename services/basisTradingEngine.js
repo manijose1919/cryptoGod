@@ -28,14 +28,14 @@ import { getDerivativesSignal } from './derivativesIntelligence.js';
 
 // ─── Configuration ───────────────────────────────────────────
 
-const MIN_FUNDING_APR = 15;      // Minimum annualized funding rate to open (%)
-const EXIT_FUNDING_APR = 5;      // Close when funding drops below this (%)
+const MIN_FUNDING_APR = 8;       // Lowered from 15% — 8% APR still exceeds fees, captures more opportunities
+const EXIT_FUNDING_APR = 3;      // Close when funding drops below this (%)
 const MAX_POSITION_USD = 500;    // Max USD per basis trade
 const MIN_POSITION_USD = 20;     // Min USD per basis trade
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // Check every 30 minutes
 
 // Supported tickers for basis trades
-const BASIS_TICKERS = ['BTC', 'ETH', 'SOL', 'XRP'];
+const BASIS_TICKERS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'LINK', 'DOT'];
 
 // ─── State ───────────────────────────────────────────────────
 

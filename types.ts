@@ -603,3 +603,201 @@ export interface WalkForwardStatus {
   elapsed?: number;
   error?: string;
 }
+
+// ============================================
+// MONTE CARLO TYPES
+// ============================================
+
+export interface MonteCarloStatus {
+  running: boolean;
+  runId: string | null;
+  iterations: number;
+  completed: number;
+  pct: number;
+  error: string | null;
+}
+
+export interface MonteCarloResults {
+  runId: string;
+  iterations: number;
+  tradeCount: number;
+  medianPnl: number;
+  meanPnl: number;
+  p5Pnl: number;
+  p25Pnl: number;
+  p75Pnl: number;
+  p95Pnl: number;
+  probabilityOfProfit: number;
+  histogram: number[];
+  histogramMin: number;
+  histogramMax: number;
+  bucketWidth: number;
+}
+
+// ============================================
+// SENSITIVITY ANALYSIS TYPES
+// ============================================
+
+export interface SensitivityStatus {
+  running: boolean;
+  runId: string | null;
+  totalEvals: number;
+  completedEvals: number;
+  pct: number;
+  currentParam: string | null;
+  currentVariation: string | null;
+  error: string | null;
+}
+
+export interface SensitivityVariation {
+  value: number;
+  pnl: number;
+  pnlDelta: number;
+  error?: string;
+}
+
+export interface SensitivityParamResult {
+  baseValue: number;
+  variations: Record<string, SensitivityVariation>;
+}
+
+export interface SensitivityResults {
+  runId: string;
+  baselinePnl: number;
+  paramResults: Record<string, SensitivityParamResult>;
+  fragileParams: string[];
+  totalEvals: number;
+}
+
+// ============================================
+// CROSS-PAIR VALIDATION TYPES
+// ============================================
+
+export interface CrossPairStatus {
+  running: boolean;
+  phase: 'training' | 'testing' | null;
+  trainPairs: string[];
+  testPairs: string[];
+  trainRunId: string | null;
+  testRunId: string | null;
+  trainPnl: number | null;
+  testPnl: number | null;
+  generalizationRatio: number | null;
+  error: string | null;
+}
+
+export interface CrossPairResults {
+  trainPairs: string[];
+  testPairs: string[];
+  trainRunId: string;
+  testRunId: string;
+  trainPnl: number;
+  testPnl: number;
+  trainTrades: number;
+  testTrades: number;
+  trainWinRate: number;
+  testWinRate: number;
+  generalizationRatio: number;
+  verdict: 'GOOD' | 'MODERATE' | 'OVERFITTING';
+}
+
+// ============================================
+// REGIME-SPECIFIC TRAINING TYPES
+// ============================================
+
+export interface RegimeResult {
+  runId: string | null;
+  pnl: number;
+  trades: number;
+  winRate: number;
+  status: 'completed' | 'error' | 'pending';
+  error?: string;
+}
+
+export interface RegimeTrainingStatus {
+  running: boolean;
+  currentRegime: string | null;
+  completedRegimes: number;
+  totalRegimes: number;
+  pct: number;
+  regimeResults: Record<string, RegimeResult>;
+  compositeRunId: string | null;
+  error: string | null;
+}
+
+// ============================================
+// SHORT SELLING TRAINING TYPES
+// ============================================
+
+export interface ShortComboResult {
+  sl: number;
+  tp: number;
+  confidence: number;
+  totalPnl: number;
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  avgPnl: number;
+}
+
+export interface ShortTrainingStatus {
+  running: boolean;
+  totalCombos: number;
+  completedCombos: number;
+  pct: number;
+  currentCombo: { sl: number; tp: number; confidence: number } | null;
+  error: string | null;
+}
+
+export interface ShortTrainingResults {
+  combos: ShortComboResult[];
+  bestCombo: ShortComboResult | null;
+  tickers: string[];
+  totalCombos: number;
+}
+
+// ============================================
+// GRID TRADING TRAINING TYPES
+// ============================================
+
+export interface GridComboResult {
+  gridCount: number;
+  gridWidth: number;
+  totalPnl: number;
+  totalFills: number;
+  profitableFills: number;
+  avgPnlPerFill: number;
+  fillRate: number;
+}
+
+export interface GridTrainingStatus {
+  running: boolean;
+  totalCombos: number;
+  completedCombos: number;
+  pct: number;
+  currentCombo: { gridCount: number; gridWidth: number } | null;
+  error: string | null;
+}
+
+export interface GridTrainingResults {
+  combos: GridComboResult[];
+  bestCombo: GridComboResult | null;
+  tickers: string[];
+  totalCombos: number;
+}
+
+// ============================================
+// STAKING CALCULATOR TYPES
+// ============================================
+
+export interface StakingYieldResult {
+  ticker: string;
+  apy: number;
+  initialAmount: number;
+  days: number;
+  stakeAndHold: { yield: number; total: number; returnPct: number };
+  activeTrading: { yield: number; total: number; returnPct: number; sourceRunId: string | null };
+  hybrid: { yield: number; total: number; returnPct: number; stakedPortion: number; tradedPortion: number };
+  defaultApys: Record<string, number>;
+}

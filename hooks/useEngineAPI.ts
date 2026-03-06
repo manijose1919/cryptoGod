@@ -10,11 +10,23 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 
 // ─── Types ───────────────────────────────────────────────────
 
+export interface PositionDetail {
+  ticker: string;
+  entryPrice: number;
+  currentPrice: number;
+  quantity: number;
+  pnlPct: number;
+  strategy: string;
+  holdTime: number;
+  regime: string;
+}
+
 export interface EngineStatus {
   state: string;
   mode: string;
   exchange: string;
   uptime: number;
+  positionDetails?: PositionDetail[];
   portfolio: {
     cash: number;
     equity: number;
@@ -111,6 +123,7 @@ export function useAllEnginesStatus() {
     queryKey: ['engines', 'status'],
     queryFn: () => fetchJSON('/api/engines/status'),
     refetchInterval: 2000,
+    refetchIntervalInBackground: false,
     staleTime: 1000,
   });
 }
@@ -122,6 +135,7 @@ export function useEngineStatus(exchange: 'kraken' | 'crypto.com') {
     queryKey: ['engines', exchange, 'status'],
     queryFn: () => fetchJSON(`/api/engines/${apiExchange}/status`),
     refetchInterval: 2000,
+    refetchIntervalInBackground: false,
     staleTime: 1000,
   });
 }
@@ -132,6 +146,7 @@ export function useGlobalPortfolio() {
     queryKey: ['portfolio', 'global'],
     queryFn: () => fetchJSON('/api/portfolio/global'),
     refetchInterval: 3000,
+    refetchIntervalInBackground: false,
     staleTime: 2000,
   });
 }
@@ -142,6 +157,7 @@ export function usePerformanceMetrics(days = 30) {
     queryKey: ['portfolio', 'performance', days],
     queryFn: () => fetchJSON(`/api/portfolio/performance?days=${days}`),
     refetchInterval: 10000,
+    refetchIntervalInBackground: false,
     staleTime: 5000,
   });
 }
@@ -152,6 +168,7 @@ export function useStakingStatus() {
     queryKey: ['staking', 'status'],
     queryFn: () => fetchJSON('/api/staking/status'),
     refetchInterval: 30000,
+    refetchIntervalInBackground: false,
     staleTime: 15000,
   });
 }
@@ -162,6 +179,7 @@ export function useArbitrageStatus() {
     queryKey: ['arbitrage', 'status'],
     queryFn: () => fetchJSON('/api/arbitrage/status'),
     refetchInterval: 5000,
+    refetchIntervalInBackground: false,
     staleTime: 2000,
   });
 }
@@ -172,6 +190,7 @@ export function useShortStatus() {
     queryKey: ['shorts', 'status'],
     queryFn: () => fetchJSON('/api/shorts/status'),
     refetchInterval: 3000,
+    refetchIntervalInBackground: false,
     staleTime: 2000,
   });
 }
@@ -182,6 +201,7 @@ export function useShortPositions() {
     queryKey: ['shorts', 'positions'],
     queryFn: () => fetchJSON('/api/shorts/positions'),
     refetchInterval: 3000,
+    refetchIntervalInBackground: false,
     staleTime: 2000,
   });
 }
@@ -192,6 +212,7 @@ export function useArbitrageOpportunities() {
     queryKey: ['arbitrage', 'opportunities'],
     queryFn: () => fetchJSON('/api/arbitrage/opportunities'),
     refetchInterval: 5000,
+    refetchIntervalInBackground: false,
     staleTime: 2000,
   });
 }
@@ -202,6 +223,7 @@ export function useStakingProducts() {
     queryKey: ['staking', 'products'],
     queryFn: () => fetchJSON('/api/staking/products'),
     refetchInterval: 60000,
+    refetchIntervalInBackground: false,
     staleTime: 30000,
   });
 }

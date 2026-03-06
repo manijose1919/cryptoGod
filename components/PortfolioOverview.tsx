@@ -16,6 +16,11 @@ import {
 const RegimeDashboard = lazy(() => import('./RegimeDashboard'));
 const StakingPanel = lazy(() => import('./StakingPanel'));
 const FundingRatePanel = lazy(() => import('./FundingRatePanel'));
+const SocialSentimentPanel = lazy(() => import('./SocialSentimentPanel'));
+const ShortPositionsPanel = lazy(() => import('./ShortPositionsPanel'));
+const ArbitragePanel = lazy(() => import('./ArbitragePanel'));
+const PortfolioRiskPanel = lazy(() => import('./PortfolioRiskPanel'));
+const TradingIntelligencePanel = lazy(() => import('./TradingIntelligencePanel'));
 
 interface EquityPoint {
   time: string;
@@ -87,7 +92,7 @@ export function PortfolioOverview() {
                   axisLine={{ stroke: '#e2e8f0' }} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fill: '#94a3b8', fontFamily: 'var(--font-mono)' }}
                   axisLine={false} tickLine={false} width={60}
-                  tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
+                  tickFormatter={(v: number) => `$${(v || 0).toFixed(0)}`} />
                 <Tooltip
                   contentStyle={{
                     background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(12px)',
@@ -95,7 +100,7 @@ export function PortfolioOverview() {
                     fontSize: '12px', fontFamily: 'var(--font-mono)', color: '#1e293b',
                     boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
                   }}
-                  formatter={(v: number) => [`$${v.toFixed(2)}`, 'Equity']}
+                  formatter={(v: number) => [`$${(v || 0).toFixed(2)}`, 'Equity']}
                 />
                 <Area type="monotone" dataKey="equity" stroke="#6366f1" strokeWidth={2}
                   fill="url(#eqGrad)" dot={false} />
@@ -143,9 +148,14 @@ export function PortfolioOverview() {
           LOADING INTELLIGENCE...
         </div>
       }>
+        <div className="po-section"><PortfolioRiskPanel /></div>
+        <div className="po-section"><ShortPositionsPanel /></div>
+        <div className="po-section"><ArbitragePanel /></div>
         <div className="po-section"><RegimeDashboard /></div>
         <div className="po-section"><FundingRatePanel /></div>
         <div className="po-section"><StakingPanel /></div>
+        <div className="po-section"><SocialSentimentPanel /></div>
+        <div className="po-section"><TradingIntelligencePanel /></div>
       </Suspense>
     </div>
   );

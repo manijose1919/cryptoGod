@@ -15,6 +15,7 @@ import {
   useStopEngine,
   useSwitchMode,
 } from '../hooks/useEngineAPI';
+import { useToast } from './ToastNotification';
 
 interface Props {
   exchange: 'kraken' | 'crypto.com';
@@ -28,6 +29,7 @@ export function ExchangeDashboard({ exchange }: Props) {
   const stopEngine = useStopEngine();
   const switchMode = useSwitchMode();
   const [budget, setBudget] = useState(50);
+  const { addToast } = useToast();
 
   const displayName = exchange === 'crypto.com' ? 'Crypto.com' : 'Kraken';
   const accentColor = exchange === 'crypto.com' ? '#6366f1' : '#3b82f6';
@@ -46,6 +48,7 @@ export function ExchangeDashboard({ exchange }: Props) {
   const portfolio = status?.portfolio;
   const cb = status?.circuitBreaker;
   const trades = status?.trades;
+  const positions = status?.positionDetails || [];
 
   return (
     <div className="exchange-dashboard" style={{ '--accent': accentColor } as React.CSSProperties}>
@@ -76,7 +79,10 @@ export function ExchangeDashboard({ exchange }: Props) {
               />
               <button
                 className="ed-btn ed-btn-start"
-                onClick={() => startEngine.mutate({ exchange, mode, budget })}
+                onClick={() => startEngine.mutate({ exchange, mode, budget }, {
+                  onSuccess: () => addToast('success', `${displayName} Started`, `${mode} mode with $${budget} budget`),
+                  onError: (err: Error) => addToast('error', `${displayName} Start Failed`, err.message),
+                })}
                 disabled={startEngine.isPending}
               >
                 {startEngine.isPending ? 'Starting...' : 'Start'}
@@ -86,7 +92,10 @@ export function ExchangeDashboard({ exchange }: Props) {
           {engineState === 'RUNNING' && (
             <button
               className="ed-btn ed-btn-pause"
-              onClick={() => pauseEngine.mutate(exchange)}
+              onClick={() => pauseEngine.mutate(exchange, {
+                onSuccess: () => addToast('warning', `${displayName} Paused`, 'Engine paused — no new trades'),
+                onError: (err: Error) => addToast('error', 'Pause Failed', err.message),
+              })}
               disabled={pauseEngine.isPending}
             >
               Pause
@@ -95,7 +104,10 @@ export function ExchangeDashboard({ exchange }: Props) {
           {engineState === 'PAUSED' && (
             <button
               className="ed-btn ed-btn-resume"
-              onClick={() => resumeEngine.mutate(exchange)}
+              onClick={() => resumeEngine.mutate(exchange, {
+                onSuccess: () => addToast('success', `${displayName} Resumed`, 'Trading engine active again'),
+                onError: (err: Error) => addToast('error', 'Resume Failed', err.message),
+              })}
               disabled={resumeEngine.isPending}
             >
               Resume
@@ -104,7 +116,14 @@ export function ExchangeDashboard({ exchange }: Props) {
           {(engineState === 'RUNNING' || engineState === 'PAUSED') && (
             <button
               className="ed-btn ed-btn-stop"
-              onClick={() => stopEngine.mutate(exchange)}
+              onClick={() => {
+                if (window.confirm(`Stop ${exchange} engine? Open positions will no longer be managed automatically.`)) {
+                  stopEngine.mutate(exchange, {
+                    onSuccess: () => addToast('warning', `${displayName} Stopped`, 'Engine stopped — positions unmanaged'),
+                    onError: (err: Error) => addToast('error', 'Stop Failed', err.message),
+                  });
+                }
+              }}
               disabled={stopEngine.isPending}
             >
               Stop
@@ -112,10 +131,16 @@ export function ExchangeDashboard({ exchange }: Props) {
           )}
           <button
             className={`ed-btn ed-btn-mode ${mode === 'REAL' ? 'ed-btn-mode-real' : ''}`}
-            onClick={() => switchMode.mutate({
-              exchange,
-              mode: mode === 'SIMULATION' ? 'REAL' : 'SIMULATION',
-            })}
+            onClick={() => {
+              const newMode = mode === 'SIMULATION' ? 'REAL' : 'SIMULATION';
+              if (newMode === 'REAL') {
+                if (!window.confirm('Switch to REAL trading mode? This will execute actual trades with real money.')) return;
+              }
+              switchMode.mutate({ exchange, mode: newMode }, {
+                onSuccess: () => addToast(newMode === 'REAL' ? 'warning' : 'info', `Mode: ${newMode}`, `${displayName} now in ${newMode} mode`),
+                onError: (err: Error) => addToast('error', 'Mode Switch Failed', err.message),
+              });
+            }}
             disabled={switchMode.isPending || engineState === 'RUNNING'}
             title={engineState === 'RUNNING' ? 'Stop engine to switch mode' : ''}
           >
@@ -128,16 +153,16 @@ export function ExchangeDashboard({ exchange }: Props) {
       <div className="ed-portfolio-grid">
         <div className="ed-stat">
           <span className="ed-stat-label">Equity</span>
-          <span className="ed-stat-value">${portfolio?.equity?.toFixed(2) || '0.00'}</span>
+          <span className="ed-stat-value">${(portfolio?.equity || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
         <div className="ed-stat">
           <span className="ed-stat-label">Cash</span>
-          <span className="ed-stat-value">${portfolio?.cash?.toFixed(2) || '0.00'}</span>
+          <span className="ed-stat-value">${(portfolio?.cash || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
         <div className="ed-stat">
           <span className="ed-stat-label">P&L</span>
           <span className={`ed-stat-value ${(portfolio?.pnl || 0) >= 0 ? 'positive' : 'negative'}`}>
-            {(portfolio?.pnl || 0) >= 0 ? '+' : ''}${portfolio?.pnl?.toFixed(2) || '0.00'}
+            {(portfolio?.pnl || 0) >= 0 ? '+' : ''}${(portfolio?.pnl || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             <small> ({portfolio?.pnlPct?.toFixed(1) || '0.0'}%)</small>
           </span>
         </div>
@@ -154,6 +179,44 @@ export function ExchangeDashboard({ exchange }: Props) {
           <span className="ed-stat-value">{trades?.winRate?.toFixed(1) || '0.0'}%</span>
         </div>
       </div>
+
+      {/* Open Positions */}
+      {positions.length > 0 && (
+        <div className="ed-positions">
+          <table className="trade-table" style={{ width: '100%', fontSize: '12px' }}>
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Strategy</th>
+                <th>Entry</th>
+                <th>Current</th>
+                <th>P&L</th>
+                <th>Hold Time</th>
+                <th>Regime</th>
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((pos) => {
+                const holdHrs = pos.holdTime ? Math.floor(pos.holdTime / 3600000) : 0;
+                const holdMin = pos.holdTime ? Math.floor((pos.holdTime % 3600000) / 60000) : 0;
+                return (
+                  <tr key={pos.ticker}>
+                    <td style={{ fontWeight: 600 }}>{pos.ticker.replace('USD', '')}</td>
+                    <td><span className="badge badge-blue" style={{ fontSize: '10px' }}>{pos.strategy}</span></td>
+                    <td>${pos.entryPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td>${pos.currentPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td style={{ color: pos.pnlPct >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                      {pos.pnlPct >= 0 ? '+' : ''}{pos.pnlPct?.toFixed(2)}%
+                    </td>
+                    <td style={{ color: 'var(--text-muted)' }}>{holdHrs}h {holdMin}m</td>
+                    <td><span className={`badge ${pos.regime?.includes('UP') ? 'badge-green' : pos.regime?.includes('DOWN') ? 'badge-red' : 'badge-blue'}`} style={{ fontSize: '10px' }}>{pos.regime}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Circuit Breaker */}
       {cb && (cb.isPaused || cb.consecutiveLosses >= 2) && (

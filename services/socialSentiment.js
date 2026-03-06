@@ -415,3 +415,107 @@ export function shouldTradeBasedOnSentiment(sentimentData) {
     modifier: 0.5,
   };
 }
+
+// ============================================
+// 6. PER-TICKER NEWS SENTIMENT
+// ============================================
+
+/**
+ * Mapping from ticker symbols to searchable names/aliases.
+ * Used to match CryptoPanic headlines to specific coins.
+ */
+const TICKER_NAME_MAP = {
+  BTCUSD: ['bitcoin', 'btc'],
+  ETHUSD: ['ethereum', 'eth'],
+  XRPUSD: ['xrp', 'ripple'],
+  SOLUSD: ['solana', 'sol'],
+  BNBUSD: ['bnb', 'binance coin'],
+  ADAUSD: ['cardano', 'ada'],
+  DOGEUSD: ['dogecoin', 'doge'],
+  LINKUSD: ['chainlink', 'link'],
+  DOTUSD: ['polkadot', 'dot'],
+  AVAXUSD: ['avalanche', 'avax'],
+  LTCUSD: ['litecoin', 'ltc'],
+  UNIUSD: ['uniswap', 'uni'],
+  ATOMUSD: ['cosmos', 'atom'],
+  NEARUSD: ['near protocol', 'near'],
+  APTUSD: ['aptos', 'apt'],
+  ARBUSD: ['arbitrum', 'arb'],
+  OPUSD: ['optimism', 'op'],
+  SUIUSD: ['sui'],
+  AAVEUSD: ['aave'],
+  INJUSD: ['injective', 'inj'],
+  RENDERUSD: ['render', 'rndr'],
+  FETUSD: ['fetch.ai', 'fet'],
+  GRTUSD: ['the graph', 'grt'],
+};
+
+/**
+ * Extract per-ticker sentiment from a pre-fetched news array.
+ *
+ * Scans article titles for mentions of the coin's name or symbol.
+ * Returns a sentiment score (-1 to +1) based on the ratio of
+ * positive/negative headlines mentioning this coin.
+ *
+ * @param {string} ticker - e.g. 'BTCUSD'
+ * @param {Array<{ title: string, sentiment: string }>} allNews - from fetchCryptoNews()
+ * @returns {{ sentiment: number, mentionCount: number, headlines: string[] }}
+ */
+export function getTickerNewsSentiment(ticker, allNews) {
+  if (!allNews || allNews.length === 0) {
+    return { sentiment: 0, mentionCount: 0, headlines: [] };
+  }
+
+  // Get search terms for this ticker
+  let searchTerms = TICKER_NAME_MAP[ticker];
+  if (!searchTerms) {
+    // Fallback: extract base symbol (e.g. 'BTCUSD' → 'btc')
+    const base = ticker.replace(/USD$/, '').toLowerCase();
+    if (base.length >= 2) {
+      searchTerms = [base];
+    } else {
+      return { sentiment: 0, mentionCount: 0, headlines: [] };
+    }
+  }
+
+  // Filter news that mentions this coin
+  const matching = allNews.filter((article) => {
+    const titleLower = (article.title || '').toLowerCase();
+    return searchTerms.some((term) => titleLower.includes(term));
+  });
+
+  if (matching.length === 0) {
+    return { sentiment: 0, mentionCount: 0, headlines: [] };
+  }
+
+  // Calculate sentiment from matching articles
+  let positive = 0;
+  let negative = 0;
+  for (const article of matching) {
+    if (article.sentiment === 'positive') positive++;
+    else if (article.sentiment === 'negative') negative++;
+  }
+
+  const total = matching.length;
+  // Score: (positive - negative) / total → range [-1, +1]
+  const sentiment = total > 0 ? (positive - negative) / total : 0;
+
+  return {
+    sentiment: Math.round(sentiment * 1000) / 1000,
+    mentionCount: total,
+    headlines: matching.slice(0, 5).map((a) => a.title),
+  };
+}
+
+/**
+ * Check if a ticker's base symbol appears in CoinGecko trending list.
+ *
+ * @param {string} ticker - e.g. 'BTCUSD'
+ * @param {Array<{ symbol: string }>} trendingCoins - from fetchCoinGeckoTrending()
+ * @returns {boolean}
+ */
+export function isTrendingCoin(ticker, trendingCoins) {
+  if (!trendingCoins || trendingCoins.length === 0) return false;
+  const base = ticker.replace(/USD$/, '').toUpperCase();
+  return trendingCoins.some((c) => (c.symbol || c).toUpperCase() === base);
+}

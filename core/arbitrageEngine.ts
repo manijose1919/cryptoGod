@@ -51,7 +51,8 @@ class ArbitrageEngine {
   private timer: ReturnType<typeof setInterval> | null = null;
   private opportunities: ArbOpportunity[] = [];
   private maxOpportunityAge = 30000; // 30 seconds max
-  private minTradeUsd = 20; // Minimum $20 per arb trade
+  private minTradeUsd = 50; // Minimum $50 per arb trade
+  private simTradeSize = 200; // $200 per simulated arb
 
   // Adapters for execution
   private adapters: Map<string, unknown> = new Map();
@@ -60,6 +61,22 @@ class ArbitrageEngine {
 
   // Tracked tickers (must be available on BOTH exchanges)
   private commonTickers: string[] = [];
+
+  // Execution tracking
+  private executedArbs: Array<{
+    ticker: string;
+    buyExchange: string;
+    sellExchange: string;
+    profitPct: number;
+    profitUsd: number;
+    timestamp: number;
+    simulated: boolean;
+  }> = [];
+  private totalArbProfitUsd = 0;
+  private maxConcurrentArbs = 3;
+  private activeArbs = 0;
+  private arbCooldownMs = 30000; // 30s cooldown per ticker after execution
+  private lastArbTime: Map<string, number> = new Map();
 
   constructor() {
     console.log('[ArbitrageEngine] Initialized');
@@ -191,6 +208,9 @@ class ArbitrageEngine {
       `Profit: ${opp.estimatedProfitPct.toFixed(3)}%`
     );
 
+    // Execute (simulated) arb trade if conditions met
+    this.executeArb(opp);
+
     // Emit as signal for TradingEngine or Telegram
     tradingBus.emit('signal:detected', {
       exchange: opp.buyExchange,
@@ -203,6 +223,79 @@ class ArbitrageEngine {
     });
   }
 
+  /**
+   * Execute an arbitrage trade (simulated with P&L tracking).
+   * Real execution requires both exchange adapters active with funds on each.
+   */
+  private async executeArb(opp: ArbOpportunity): Promise<void> {
+    // Throttle: max concurrent arbs, cooldown per ticker
+    if (this.activeArbs >= this.maxConcurrentArbs) return;
+    const lastTime = this.lastArbTime.get(opp.ticker) || 0;
+    if (Date.now() - lastTime < this.arbCooldownMs) return;
+
+    // Only execute if profit exceeds 0.1% after fees (high-confidence only)
+    if (opp.estimatedProfitPct < 0.1) return;
+
+    this.activeArbs++;
+    this.lastArbTime.set(opp.ticker, Date.now());
+
+    const tradeSize = this.simTradeSize;
+    const profitUsd = tradeSize * (opp.estimatedProfitPct / 100);
+
+    // Try real execution if both adapters are available
+    let realExecution = false;
+    const buyAdapter = this.adapters.get(opp.buyExchange) as Record<string, unknown> | undefined;
+    const sellAdapter = this.adapters.get(opp.sellExchange) as Record<string, unknown> | undefined;
+
+    if (buyAdapter && sellAdapter && typeof buyAdapter.placeBuy === 'function' && typeof sellAdapter.placeSell === 'function') {
+      try {
+        // Simultaneous buy+sell for true arb
+        const qty = tradeSize / opp.buyPrice;
+        const [buyResult, sellResult] = await Promise.all([
+          (buyAdapter.placeBuy as (t: string, q: number, p: number) => Promise<unknown>)(opp.ticker, qty, opp.buyPrice),
+          (sellAdapter.placeSell as (t: string, q: number, p: number) => Promise<unknown>)(opp.ticker, qty, opp.sellPrice),
+        ]);
+        if (buyResult && sellResult) {
+          realExecution = true;
+          console.log(`[ArbitrageEngine] REAL ARB EXECUTED: ${opp.ticker} buy@${opp.buyExchange} sell@${opp.sellExchange} profit=$${profitUsd.toFixed(2)}`);
+        }
+      } catch (err) {
+        console.warn(`[ArbitrageEngine] Real execution failed: ${(err as Error).message}`);
+      }
+    }
+
+    // Track as simulated if real execution wasn't possible
+    this.executedArbs.push({
+      ticker: opp.ticker,
+      buyExchange: opp.buyExchange,
+      sellExchange: opp.sellExchange,
+      profitPct: opp.estimatedProfitPct,
+      profitUsd,
+      timestamp: Date.now(),
+      simulated: !realExecution,
+    });
+    this.totalArbProfitUsd += profitUsd;
+
+    if (!realExecution) {
+      console.log(`[ArbitrageEngine] SIM ARB: ${opp.ticker} spread=${opp.spreadPct.toFixed(3)}% profit=$${profitUsd.toFixed(2)} (total: $${this.totalArbProfitUsd.toFixed(2)})`);
+    }
+
+    tradingBus.emit('ml:event', {
+      type: 'prediction',
+      exchange: opp.buyExchange,
+      data: {
+        subtype: 'arb_executed',
+        ticker: opp.ticker,
+        profitUsd,
+        profitPct: opp.estimatedProfitPct,
+        real: realExecution,
+      },
+      timestamp: Date.now(),
+    });
+
+    this.activeArbs--;
+  }
+
   // ─── Getters ─────────────────────────────────────────────
 
   getOpportunities(): ArbOpportunity[] {
@@ -211,12 +304,24 @@ class ArbitrageEngine {
 
   getStatus() {
     const recent = this.getOpportunities();
+    const last24h = this.executedArbs.filter(a => Date.now() - a.timestamp < 86400000);
     return {
       enabled: this.enabled,
       commonTickers: this.commonTickers.length,
       recentOpportunities: recent.length,
       bestSpread: recent.length > 0 ? Math.max(...recent.map(o => o.spreadPct)) : 0,
       avgProfit: recent.length > 0 ? recent.reduce((s, o) => s + o.estimatedProfitPct, 0) / recent.length : 0,
+      totalExecuted: this.executedArbs.length,
+      totalProfitUsd: this.totalArbProfitUsd,
+      last24hTrades: last24h.length,
+      last24hProfitUsd: last24h.reduce((s, a) => s + a.profitUsd, 0),
+      recentTrades: this.executedArbs.slice(-10).map(a => ({
+        ticker: a.ticker,
+        profit: `$${a.profitUsd.toFixed(2)}`,
+        spread: `${a.profitPct.toFixed(3)}%`,
+        simulated: a.simulated,
+        time: new Date(a.timestamp).toISOString(),
+      })),
     };
   }
 

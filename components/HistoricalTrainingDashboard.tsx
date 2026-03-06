@@ -12,6 +12,13 @@ import type {
 } from '../types';
 import * as api from '../services/historicalTrainingService';
 import { TrainingComparison } from './TrainingComparison';
+import { MonteCarloResults } from './MonteCarloResults';
+import { SensitivityHeatmap } from './SensitivityHeatmap';
+import { CrossPairValidation } from './CrossPairValidation';
+import { RegimeTraining } from './RegimeTraining';
+import { ShortTraining } from './ShortTraining';
+import { GridTraining } from './GridTraining';
+import { StakingCalculator } from './StakingCalculator';
 
 const NAV_LINKS = [
   { to: '/', label: 'Crypto' },
@@ -51,6 +58,11 @@ export const HistoricalTrainingDashboard: React.FC = () => {
   const [applyResult, setApplyResult] = useState<string | null>(null);
   const [distilling, setDistilling] = useState(false);
   const [distillResult, setDistillResult] = useState<string | null>(null);
+  const [breedMode, setBreedMode] = useState(false);
+  const [breedSelected, setBreedSelected] = useState<Set<string>>(new Set());
+  const [breedThreshold, setBreedThreshold] = useState(0.6);
+  const [breeding, setBreeding] = useState(false);
+  const [breedResult, setBreedResult] = useState<string | null>(null);
 
   // Walk-forward state
   const [wfStatus, setWfStatus] = useState<WalkForwardStatus | null>(null);
@@ -231,6 +243,29 @@ export const HistoricalTrainingDashboard: React.FC = () => {
     }
   };
 
+  const toggleBreedSelect = (runId: string) => {
+    setBreedSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(runId)) next.delete(runId); else next.add(runId);
+      return next;
+    });
+  };
+
+  const handleBreed = async () => {
+    if (breedSelected.size < 2) return;
+    setBreeding(true);
+    setBreedResult(null);
+    try {
+      const result = await api.breedSeeds([...breedSelected], { consensusThreshold: breedThreshold });
+      setBreedResult(`Bred → ${result.runId.slice(0, 20)}...`);
+      loadRuns();
+    } catch (e: any) {
+      setBreedResult(`Error: ${e.message}`);
+    } finally {
+      setBreeding(false);
+    }
+  };
+
   const loadWfRuns = useCallback(async () => {
     try {
       const r = await api.getWalkForwardRuns();
@@ -321,7 +356,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
               key={i}
               className={`flex-1 min-w-[1px] rounded-t-sm ${isGain ? 'bg-green-500/60' : 'bg-red-500/60'}`}
               style={{ height: `${Math.max(2, pct)}%` }}
-              title={`$${d.total_value.toFixed(2)} - ${new Date(d.time).toLocaleDateString()}`}
+              title={`$${(d.total_value || 0).toFixed(2)} - ${new Date(d.time).toLocaleDateString()}`}
             />
           );
         })}
@@ -661,7 +696,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
               {/* Progress bar */}
               <div>
                 <div className="flex justify-between text-xs text-gray-400 mb-1">
-                  <span>Progress: {trainingStatus.progress.pct.toFixed(1)}%</span>
+                  <span>Progress: {(trainingStatus.progress?.pct || 0).toFixed(1)}%</span>
                   <span>Date: {trainingStatus.progress.currentDate}</span>
                   <span>Elapsed: {formatDuration(trainingStatus.elapsed || 0)}</span>
                 </div>
@@ -960,6 +995,10 @@ export const HistoricalTrainingDashboard: React.FC = () => {
                   </span>
                 )}
               </div>
+
+              {/* Monte Carlo + Sensitivity for this run */}
+              <MonteCarloResults runId={selectedRun} />
+              <SensitivityHeatmap runId={selectedRun} />
             </div>
             );
           })()}
@@ -1179,6 +1218,102 @@ export const HistoricalTrainingDashboard: React.FC = () => {
               No walk-forward runs yet. Configure windows and start above.
             </div>
           )}
+        </section>
+
+        {/* Section 5: Breed Seeds */}
+        {completedRuns.length >= 2 && (
+          <section className="glass-card p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-cyan-300 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-pink-500" />
+                Breed Seeds
+              </h2>
+              <button
+                onClick={() => { setBreedMode(!breedMode); setBreedSelected(new Set()); }}
+                className={`text-xs px-3 py-1 rounded transition-colors ${breedMode ? 'bg-pink-600 hover:bg-pink-700' : 'bg-gray-600 hover:bg-gray-500'}`}
+              >
+                {breedMode ? 'Cancel Breed' : 'Select Seeds to Breed'}
+              </button>
+            </div>
+
+            {breedMode && (
+              <div className="space-y-3">
+                <div className="text-xs text-gray-400">Select 2+ completed runs to breed together (consensus-based genetic crossover)</div>
+                <div className="max-h-40 overflow-y-auto space-y-1 custom-scrollbar">
+                  {completedRuns.map(run => (
+                    <label key={run.run_id} className="flex items-center gap-2 p-2 bg-gray-900/30 rounded cursor-pointer hover:bg-gray-800/50">
+                      <input
+                        type="checkbox"
+                        checked={breedSelected.has(run.run_id)}
+                        onChange={() => toggleBreedSelect(run.run_id)}
+                        className="rounded"
+                      />
+                      <span className="text-xs font-mono text-gray-300">{run.run_id.slice(0, 25)}...</span>
+                      <span className={`text-xs ${run.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        ${run.total_pnl.toFixed(0)}
+                      </span>
+                      <span className="text-[10px] text-gray-500">{run.total_trades} trades | {run.win_rate.toFixed(0)}% WR</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs text-gray-400">
+                    Consensus: {(breedThreshold * 100).toFixed(0)}%
+                    <input
+                      type="range"
+                      min="0.3"
+                      max="1.0"
+                      step="0.05"
+                      value={breedThreshold}
+                      onChange={e => setBreedThreshold(parseFloat(e.target.value))}
+                      className="ml-2 w-32"
+                    />
+                  </label>
+                  <button
+                    onClick={handleBreed}
+                    disabled={breedSelected.size < 2 || breeding}
+                    className="text-xs px-4 py-1.5 bg-pink-600 hover:bg-pink-700 rounded disabled:bg-gray-700 disabled:text-gray-500 transition-colors"
+                  >
+                    {breeding ? 'Breeding...' : `Breed ${breedSelected.size} Seeds`}
+                  </button>
+                  {breedResult && (
+                    <span className={`text-xs ${breedResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                      {breedResult}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Section 6: Cross-Pair Validation */}
+        <section className="glass-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold text-cyan-300 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-cyan-500" />
+            Advanced Validation
+          </h2>
+          <CrossPairValidation />
+        </section>
+
+        {/* Section 7: Alternative Training Modes */}
+        <section className="glass-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold text-cyan-300 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
+            Alternative Training Modes
+          </h2>
+          <RegimeTraining />
+          <ShortTraining />
+          <GridTraining />
+        </section>
+
+        {/* Section 8: Staking Calculator */}
+        <section className="glass-card p-5 space-y-4">
+          <h2 className="text-lg font-semibold text-cyan-300 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-indigo-500" />
+            Yield Comparison
+          </h2>
+          <StakingCalculator />
         </section>
       </main>
     </div>

@@ -40,7 +40,16 @@ export default function createEngineRouter(ctx) {
    */
   router.get('/engines/:exchange/status', (req, res) => {
     const engine = getEngine(ctx, req.params.exchange);
-    if (!engine) return res.status(404).json({ error: 'Engine not found' });
+    if (!engine) {
+      // Return a "not ready" status instead of 404 to prevent frontend error loops
+      return res.json({
+        initialized: false,
+        running: false,
+        mode: 'SIMULATION',
+        exchange: req.params.exchange,
+        message: 'Engine not yet initialized',
+      });
+    }
     res.json(engine.getStatus());
   });
 
@@ -125,7 +134,7 @@ export default function createEngineRouter(ctx) {
    */
   router.get('/portfolio/global', (req, res) => {
     if (!ctx.portfolioManager) {
-      return res.status(503).json({ error: 'Portfolio manager not initialized' });
+      return res.json({ heatScore: 0, totalValue: 0, exchanges: {}, positions: [], riskAlerts: [] });
     }
     res.json(ctx.portfolioManager.getGlobalPortfolio());
   });

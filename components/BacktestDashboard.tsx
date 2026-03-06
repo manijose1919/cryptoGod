@@ -175,7 +175,7 @@ export const BacktestDashboard: React.FC = () => {
               {[
                 { label: 'Return', value: `${result.totalReturn}%`, color: result.totalReturn >= 0 ? 'text-green-400' : 'text-red-400' },
                 { label: 'Win Rate', value: `${result.winRate}%`, color: result.winRate >= 50 ? 'text-green-400' : 'text-yellow-400' },
-                { label: 'Sharpe', value: result.sharpeRatio.toFixed(2), color: result.sharpeRatio > 0 ? 'text-green-400' : 'text-red-400' },
+                { label: 'Sharpe', value: (result.sharpeRatio || 0).toFixed(2), color: (result.sharpeRatio || 0) > 0 ? 'text-green-400' : 'text-red-400' },
                 { label: 'Max DD', value: `${result.maxDrawdownPercent}%`, color: 'text-red-400' },
                 { label: 'Buy&Hold', value: `${result.buyAndHoldReturn}%`, color: result.buyAndHoldReturn >= 0 ? 'text-blue-400' : 'text-red-400' },
               ].map(m => (
@@ -205,9 +205,9 @@ export const BacktestDashboard: React.FC = () => {
                       {result.trades.slice(-50).map((t, i) => (
                         <tr key={i} className="border-t border-gray-800">
                           <td className={t.type === 'BUY' ? 'text-green-400' : 'text-red-400'}>{t.type}</td>
-                          <td className="text-right text-gray-300">${t.price.toFixed(2)}</td>
-                          <td className="text-right text-gray-400">{t.quantity.toFixed(4)}</td>
-                          <td className={`text-right ${t.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>${t.pnl.toFixed(2)}</td>
+                          <td className="text-right text-gray-300">${(t.price || 0).toFixed(2)}</td>
+                          <td className="text-right text-gray-400">{(t.quantity || 0).toFixed(4)}</td>
+                          <td className={`text-right ${(t.pnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>${(t.pnl || 0).toFixed(2)}</td>
                           <td className="text-right text-gray-500">{new Date(t.time).toLocaleString()}</td>
                         </tr>
                       ))}
@@ -284,7 +284,7 @@ export const BacktestDashboard: React.FC = () => {
               <div className="grid grid-cols-4 gap-3 mb-3">
                 <div className="text-center"><div className="text-[10px] text-gray-400">Avg Test Return</div><div className="text-sm font-bold text-white">{wfResult.summary.avgTestReturn?.toFixed(2)}%</div></div>
                 <div className="text-center"><div className="text-[10px] text-gray-400">Avg Win Rate</div><div className="text-sm font-bold text-white">{wfResult.summary.avgTestWinRate?.toFixed(1)}%</div></div>
-                <div className="text-center"><div className="text-[10px] text-gray-400">Consistency</div><div className="text-sm font-bold text-white">{(wfResult.summary.consistency * 100)?.toFixed(0)}%</div></div>
+                <div className="text-center"><div className="text-[10px] text-gray-400">Consistency</div><div className="text-sm font-bold text-white">{((wfResult.summary.consistency ?? 0) * 100).toFixed(0)}%</div></div>
                 <div className="text-center"><div className="text-[10px] text-gray-400">Avg Sharpe</div><div className="text-sm font-bold text-white">{wfResult.summary.avgTestSharpe?.toFixed(2)}</div></div>
               </div>
             )}

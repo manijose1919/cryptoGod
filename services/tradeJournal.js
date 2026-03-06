@@ -213,4 +213,198 @@ export function forceGenerateJournal(sessionId = 'default') {
   return entry;
 }
 
-export default { initJournalTable, recordTradeForJournal, generateJournalEntry, autoJournal, getJournalEntries, forceGenerateJournal };
+// ============================================
+// PATTERN MINING — learns from trade history
+// ============================================
+
+// In-memory pattern cache (rebuilt every 30 min or on demand)
+let patternCache = {
+  hourlyWinRates: {},       // hour (0-23) -> { wins, total, winRate }
+  tickerStrategyWR: {},     // "BTCUSD:TREND" -> { wins, total, winRate, avgPnl }
+  regimeStrategyWR: {},     // "UPTREND:TREND" -> { wins, total, winRate }
+  minedBlockedHours: [],    // hours with <30% win rate (min 5 trades)
+  lastMined: 0,
+};
+
+const MINE_INTERVAL_MS = 30 * 60 * 1000;
+const MIN_TRADES_FOR_PATTERN = 5;
+const BLOCK_HOUR_THRESHOLD = 0.30;
+
+let _patternTableReady = false;
+
+function ensurePatternTable() {
+  if (_patternTableReady) return;
+  try {
+    getDb().exec(`
+      CREATE TABLE IF NOT EXISTS trade_journal_detail (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT NOT NULL,
+        strategy TEXT,
+        regime TEXT,
+        entry_hour INTEGER,
+        exit_hour INTEGER,
+        entry_price REAL,
+        exit_price REAL,
+        pnl_percent REAL DEFAULT 0,
+        pnl_usd REAL DEFAULT 0,
+        hold_minutes REAL DEFAULT 0,
+        is_win INTEGER DEFAULT 0,
+        entry_time INTEGER,
+        exit_time INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_jd_ticker ON trade_journal_detail(ticker, strategy);
+      CREATE INDEX IF NOT EXISTS idx_jd_hour ON trade_journal_detail(entry_hour, is_win);
+      CREATE INDEX IF NOT EXISTS idx_jd_regime ON trade_journal_detail(regime, strategy);
+    `);
+    _patternTableReady = true;
+  } catch (e) {
+    _patternTableReady = true;
+  }
+}
+
+/**
+ * Record a completed trade with full context for pattern mining.
+ * @param {Object} trade - { ticker, strategy, regime, entryPrice, exitPrice, pnlPercent, pnlUsd, entryTime, exitTime }
+ */
+export function recordTradeDetail(trade) {
+  try {
+    ensurePatternTable();
+    const entryDate = new Date(trade.entryTime || Date.now());
+    const exitDate = new Date(trade.exitTime || Date.now());
+    const holdMinutes = (exitDate.getTime() - entryDate.getTime()) / 60000;
+
+    getDb().prepare(`
+      INSERT INTO trade_journal_detail (ticker, strategy, regime, entry_hour, exit_hour,
+        entry_price, exit_price, pnl_percent, pnl_usd, hold_minutes, is_win,
+        entry_time, exit_time)
+      VALUES (@ticker, @strategy, @regime, @entryHour, @exitHour,
+        @entryPrice, @exitPrice, @pnlPercent, @pnlUsd, @holdMinutes, @isWin,
+        @entryTime, @exitTime)
+    `).run({
+      ticker: trade.ticker,
+      strategy: trade.strategy || 'UNKNOWN',
+      regime: trade.regime || 'UNKNOWN',
+      entryHour: entryDate.getUTCHours(),
+      exitHour: exitDate.getUTCHours(),
+      entryPrice: trade.entryPrice || 0,
+      exitPrice: trade.exitPrice || 0,
+      pnlPercent: trade.pnlPercent || 0,
+      pnlUsd: trade.pnlUsd || 0,
+      holdMinutes,
+      isWin: (trade.pnlPercent || 0) > 0 ? 1 : 0,
+      entryTime: trade.entryTime || Date.now(),
+      exitTime: trade.exitTime || Date.now(),
+    });
+  } catch (e) {
+    // Non-critical
+  }
+}
+
+/**
+ * Mine patterns from trade history.
+ */
+export function minePatterns() {
+  try {
+    ensurePatternTable();
+    const d = getDb();
+
+    // Hourly win rates
+    const hourlyRows = d.prepare(`
+      SELECT entry_hour, COUNT(*) as total, SUM(is_win) as wins,
+        AVG(pnl_percent) as avgPnl
+      FROM trade_journal_detail GROUP BY entry_hour
+    `).all();
+
+    const hourlyWinRates = {};
+    const minedBlockedHours = [];
+    for (const row of hourlyRows) {
+      const wr = row.total > 0 ? row.wins / row.total : 0;
+      hourlyWinRates[row.entry_hour] = {
+        wins: row.wins, total: row.total,
+        winRate: parseFloat((wr * 100).toFixed(1)),
+        avgPnl: parseFloat((row.avgPnl || 0).toFixed(3)),
+      };
+      if (row.total >= MIN_TRADES_FOR_PATTERN && wr < BLOCK_HOUR_THRESHOLD) {
+        minedBlockedHours.push(row.entry_hour);
+      }
+    }
+
+    // Per-ticker strategy win rates
+    const tickerStratRows = d.prepare(`
+      SELECT ticker, strategy, COUNT(*) as total, SUM(is_win) as wins,
+        AVG(pnl_percent) as avgPnl
+      FROM trade_journal_detail GROUP BY ticker, strategy
+    `).all();
+
+    const tickerStrategyWR = {};
+    for (const row of tickerStratRows) {
+      const key = `${row.ticker}:${row.strategy}`;
+      const wr = row.total > 0 ? row.wins / row.total : 0;
+      tickerStrategyWR[key] = {
+        wins: row.wins, total: row.total,
+        winRate: parseFloat((wr * 100).toFixed(1)),
+        avgPnl: parseFloat((row.avgPnl || 0).toFixed(3)),
+      };
+    }
+
+    // Regime + strategy win rates
+    const regimeStratRows = d.prepare(`
+      SELECT regime, strategy, COUNT(*) as total, SUM(is_win) as wins,
+        AVG(pnl_percent) as avgPnl
+      FROM trade_journal_detail GROUP BY regime, strategy
+    `).all();
+
+    const regimeStrategyWR = {};
+    for (const row of regimeStratRows) {
+      const key = `${row.regime}:${row.strategy}`;
+      const wr = row.total > 0 ? row.wins / row.total : 0;
+      regimeStrategyWR[key] = {
+        wins: row.wins, total: row.total,
+        winRate: parseFloat((wr * 100).toFixed(1)),
+        avgPnl: parseFloat((row.avgPnl || 0).toFixed(3)),
+      };
+    }
+
+    patternCache = { hourlyWinRates, tickerStrategyWR, regimeStrategyWR, minedBlockedHours, lastMined: Date.now() };
+
+    if (minedBlockedHours.length > 0) {
+      console.log(`[TradeJournal] Mined: ${minedBlockedHours.length} blocked hours [${minedBlockedHours.join(',')}], ${Object.keys(tickerStrategyWR).length} ticker-strategy combos`);
+    }
+    return patternCache;
+  } catch (e) {
+    return patternCache;
+  }
+}
+
+/** Get mined blocked hours (auto-mines if stale) */
+export function getMinedBlockedHours() {
+  if (Date.now() - patternCache.lastMined > MINE_INTERVAL_MS) minePatterns();
+  return patternCache.minedBlockedHours;
+}
+
+/** Get ticker+strategy score. Returns null if not enough data. */
+export function getTickerStrategyScore(ticker, strategy) {
+  if (Date.now() - patternCache.lastMined > MINE_INTERVAL_MS) minePatterns();
+  const data = patternCache.tickerStrategyWR[`${ticker}:${strategy}`];
+  if (!data || data.total < MIN_TRADES_FOR_PATTERN) return null;
+  return { ...data, shouldAvoid: data.winRate < 30 && data.avgPnl < 0 };
+}
+
+/** Regime+strategy confidence adjustment (-10 to +5). */
+export function getRegimeStrategyAdj(regime, strategy) {
+  if (Date.now() - patternCache.lastMined > MINE_INTERVAL_MS) minePatterns();
+  const data = patternCache.regimeStrategyWR[`${regime}:${strategy}`];
+  if (!data || data.total < MIN_TRADES_FOR_PATTERN) return 0;
+  if (data.winRate < 25) return -10;
+  if (data.winRate < 35) return -5;
+  if (data.winRate > 60 && data.avgPnl > 0.5) return 5;
+  return 0;
+}
+
+/** Get pattern cache for API */
+export function getPatternStats() {
+  if (Date.now() - patternCache.lastMined > MINE_INTERVAL_MS) minePatterns();
+  return patternCache;
+}
+
+export default { initJournalTable, recordTradeForJournal, generateJournalEntry, autoJournal, getJournalEntries, forceGenerateJournal, recordTradeDetail, minePatterns, getMinedBlockedHours, getTickerStrategyScore, getRegimeStrategyAdj, getPatternStats };

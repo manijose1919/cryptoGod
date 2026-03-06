@@ -1387,7 +1387,60 @@ export function initializeTrainingTables() {
     );
     CREATE INDEX IF NOT EXISTS idx_wf_folds_run
       ON walk_forward_folds(wf_run_id, fold_number);
+    -- Monte Carlo stress test results
+    CREATE TABLE IF NOT EXISTS monte_carlo_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      iterations INTEGER NOT NULL,
+      median_pnl REAL,
+      p5_pnl REAL,
+      p95_pnl REAL,
+      probability_of_profit REAL,
+      histogram_json TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mc_run ON monte_carlo_results(run_id);
+
+    -- Sensitivity analysis results
+    CREATE TABLE IF NOT EXISTS sensitivity_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id TEXT NOT NULL,
+      results_json TEXT,
+      fragile_params TEXT,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_sens_run ON sensitivity_results(run_id);
+
+    -- Cross-pair validation results
+    CREATE TABLE IF NOT EXISTS cross_pair_results (
+      result_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      train_pairs TEXT,
+      test_pairs TEXT,
+      train_run_id TEXT,
+      test_run_id TEXT,
+      train_pnl REAL,
+      test_pnl REAL,
+      generalization_ratio REAL,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
+
+    -- Regime-specific training results
+    CREATE TABLE IF NOT EXISTS regime_training_results (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      regime TEXT NOT NULL,
+      run_id TEXT,
+      pnl REAL,
+      win_rate REAL,
+      trades INTEGER,
+      created_at INTEGER DEFAULT (unixepoch() * 1000)
+    );
   `);
+
+  // Add training_type column to training_runs (safe migration)
+  try {
+    d.exec(`ALTER TABLE training_runs ADD COLUMN training_type TEXT DEFAULT 'standard'`);
+  } catch { /* column already exists */ }
+
   console.log('[Database] Historical training tables initialized');
 }
 

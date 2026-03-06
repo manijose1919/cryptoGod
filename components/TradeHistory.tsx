@@ -17,6 +17,8 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
     const [filterStrategy, setFilterStrategy] = useState<FilterStrategy>('ALL');
     const [filterType, setFilterType] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
     const [tickerSearch, setTickerSearch] = useState('');
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
 
     const formatCurrency = (value: number) =>
         new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
@@ -102,6 +104,14 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
             const search = tickerSearch.toUpperCase();
             result = result.filter(t => t.ticker.includes(search));
         }
+        if (dateFrom) {
+            const fromTs = new Date(dateFrom).getTime();
+            result = result.filter(t => t.time >= fromTs);
+        }
+        if (dateTo) {
+            const toTs = new Date(dateTo).getTime() + 86400000; // Include full day
+            result = result.filter(t => t.time < toTs);
+        }
 
         // Apply sorting
         result.sort((a, b) => {
@@ -124,7 +134,7 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
         });
 
         return result;
-    }, [trades, filterStrategy, filterType, tickerSearch, sortField, sortDirection]);
+    }, [trades, filterStrategy, filterType, tickerSearch, dateFrom, dateTo, sortField, sortDirection]);
 
     const handleSort = (field: SortField) => {
         if (sortField === field) {
@@ -136,8 +146,8 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
     };
 
     const SortIcon: React.FC<{ field: SortField }> = ({ field }) => {
-        if (sortField !== field) return <span className="text-gray-600 ml-1">&#8645;</span>;
-        return <span className="text-cyan-400 ml-1">{sortDirection === 'asc' ? '&#8593;' : '&#8595;'}</span>;
+        if (sortField !== field) return <span className="text-gray-600 ml-1">{'\u21C5'}</span>;
+        return <span className="text-cyan-400 ml-1">{sortDirection === 'asc' ? '\u2191' : '\u2193'}</span>;
     };
 
     const strategies: FilterStrategy[] = ['ALL', 'TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE'];
@@ -191,6 +201,25 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
                         onChange={e => setTickerSearch(e.target.value)}
                         className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500 w-28"
                     />
+                </div>
+                <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-400">From:</label>
+                    <input
+                        type="date"
+                        value={dateFrom}
+                        onChange={e => setDateFrom(e.target.value)}
+                        className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500"
+                    />
+                    <label className="text-xs text-gray-400">To:</label>
+                    <input
+                        type="date"
+                        value={dateTo}
+                        onChange={e => setDateTo(e.target.value)}
+                        className="bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-cyan-500"
+                    />
+                    {(dateFrom || dateTo) && (
+                        <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs text-gray-500 hover:text-gray-300">Clear</button>
+                    )}
                 </div>
                 <div className="flex items-center gap-2">
                     <label className="text-xs text-gray-400">Strategy:</label>

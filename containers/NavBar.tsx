@@ -47,21 +47,25 @@ export function NavBar({ onOpenHistory }: NavBarProps) {
         <nav className="flex items-center justify-between px-4 py-2" style={{ background: 'var(--bg-secondary)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--border-primary)' }}>
             <div className="flex items-center gap-3">
                 {[
-                    { href: '/', label: 'Crypto', active: true },
-                    { href: '/stocks', label: 'Stocks' },
+                    { href: '/', label: 'Dashboard' },
                     { href: '/performance', label: 'Performance' },
                     { href: '/backtest', label: 'Backtest' },
                     { href: '/replay', label: 'Replay' },
+                    { href: '/risk', label: 'Risk' },
                     { href: '/training', label: 'Training' },
-                ].map(link => (
+                    { href: '/system', label: 'System' },
+                ].map(link => {
+                    const isActive = window.location.pathname === link.href;
+                    return (
                     <a key={link.href} href={link.href}
                         className="text-xs px-3 py-1 rounded-lg transition-colors"
-                        style={link.active
+                        style={isActive
                             ? { background: 'rgba(99,102,241,0.1)', color: 'var(--text-header)', fontWeight: 600 }
                             : { color: 'var(--text-secondary)' }}>
                         {link.label}
                     </a>
-                ))}
+                    );
+                })}
                 <button
                     onClick={onOpenHistory}
                     className="text-xs px-3 py-1 rounded-lg transition-colors"

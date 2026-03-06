@@ -80,7 +80,7 @@ export const ExchangeSelector: React.FC<ExchangeSelectorProps> = ({ currentExcha
             >
                 {exchanges.map(ex => (
                     <option key={ex.id} value={ex.id}>
-                        {ex.name} ({ex.feePercent.toFixed(3)}%)
+                        {ex.name} ({(ex.feePercent || 0).toFixed(3)}%)
                     </option>
                 ))}
             </select>

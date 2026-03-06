@@ -4,7 +4,6 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import App from './App';
-// QuestradeDashboard removed
 import { PerformanceDashboard } from './components/PerformanceDashboard';
 import { BacktestDashboard } from './components/BacktestDashboard';
 import { ReplayDashboard } from './components/ReplayDashboard';
@@ -12,6 +11,7 @@ import { RiskDashboard } from './components/RiskDashboard';
 import { SystemHealthPanel } from './components/SystemHealthPanel';
 import { HistoricalTrainingDashboard } from './components/HistoricalTrainingDashboard';
 import { ComponentErrorBoundary } from './components/ErrorBoundary';
+import { PageLayout } from './containers/PageLayout';
 import './index.css';
 import './ui-theme.css';
 
@@ -59,13 +59,12 @@ root.render(
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<ComponentErrorBoundary componentName="App"><App /></ComponentErrorBoundary>} />
-{/* Questrade /stocks route removed */}
-          <Route path="/performance" element={<ComponentErrorBoundary componentName="PerformanceDashboard"><PerformanceDashboard /></ComponentErrorBoundary>} />
-          <Route path="/backtest" element={<ComponentErrorBoundary componentName="BacktestDashboard"><BacktestDashboard /></ComponentErrorBoundary>} />
-          <Route path="/replay" element={<ComponentErrorBoundary componentName="ReplayDashboard"><ReplayDashboard /></ComponentErrorBoundary>} />
-          <Route path="/risk" element={<ComponentErrorBoundary componentName="RiskDashboard"><RiskDashboard /></ComponentErrorBoundary>} />
-          <Route path="/system" element={<ComponentErrorBoundary componentName="SystemHealthPanel"><SystemHealthPanel /></ComponentErrorBoundary>} />
-          <Route path="/training" element={<ComponentErrorBoundary componentName="HistoricalTrainingDashboard"><HistoricalTrainingDashboard /></ComponentErrorBoundary>} />
+          <Route path="/performance" element={<PageLayout><ComponentErrorBoundary componentName="PerformanceDashboard"><PerformanceDashboard /></ComponentErrorBoundary></PageLayout>} />
+          <Route path="/backtest" element={<PageLayout><ComponentErrorBoundary componentName="BacktestDashboard"><BacktestDashboard /></ComponentErrorBoundary></PageLayout>} />
+          <Route path="/replay" element={<PageLayout><ComponentErrorBoundary componentName="ReplayDashboard"><ReplayDashboard /></ComponentErrorBoundary></PageLayout>} />
+          <Route path="/risk" element={<PageLayout><ComponentErrorBoundary componentName="RiskDashboard"><RiskDashboard /></ComponentErrorBoundary></PageLayout>} />
+          <Route path="/system" element={<PageLayout><ComponentErrorBoundary componentName="SystemHealthPanel"><SystemHealthPanel /></ComponentErrorBoundary></PageLayout>} />
+          <Route path="/training" element={<PageLayout><ComponentErrorBoundary componentName="HistoricalTrainingDashboard"><HistoricalTrainingDashboard /></ComponentErrorBoundary></PageLayout>} />
         </Routes>
       </BrowserRouter>
     </ErrorBoundary>
