@@ -92,6 +92,17 @@ const DEFAULT_FLAGS = {
 
   // Execution: prefer post-only maker orders (0.16% vs 0.26% per side on Kraken)
   PREFER_MAKER_ORDERS: true,
+
+  // Simulation Accuracy: make SIM mode behave like real trading
+  // When enabled: order-book slippage, simulated native SL, fill latency, partial fills
+  SIMULATION_ACCURACY: true,
+
+  // Phase 1-5: Surge Sniper Mode
+  SNIPER_MODE_ENABLED: true,         // Master switch for all surge sniper features
+  SNIPER_TP: 0.025,                  // 2.5% take-profit for SNIPER entries
+  SNIPER_SL: 0.015,                  // 1.5% stop-loss for SNIPER entries
+  SNIPER_MAX_HOLD: 2,                // Max hold time in hours for SNIPER positions
+  MICRO_BURST_THRESHOLD: 5,          // Volume burst detection: current 5s vol > Nx avg
 };
 
 // In-memory cache of current flags (seeded from defaults, overwritten by DB on init)

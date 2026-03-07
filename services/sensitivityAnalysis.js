@@ -12,7 +12,7 @@ import {
   getTrainingStatus,
   getLearnedState,
 } from './historicalTrainingEngine.js';
-import { getDb } from './database.js';
+import { getDb, getTrainingRun } from './database.js';
 
 // 12 tunable parameters
 const TUNABLE_PARAMS = [
@@ -120,6 +120,20 @@ function getNestedValue(obj, path, key) {
 async function runAnalysis(baseState, sourceRunId, variationMultipliers) {
   const paramResults = {};
 
+  // Read source run config so sub-runs use the same tickers/time range
+  let sourceConfig = {};
+  try {
+    const sourceRun = getTrainingRun(sourceRunId);
+    sourceConfig = JSON.parse(sourceRun?.config_json || '{}');
+  } catch (e) {
+    console.warn('[Sensitivity] Could not read source run config:', e.message);
+  }
+  const inheritedConfig = {
+    tickers: sourceConfig.tickers,
+    startTime: sourceConfig.startTime,
+    endTime: sourceConfig.endTime,
+  };
+
   // First run baseline
   state.currentParam = 'BASELINE';
   state.currentVariation = '1.0x';
@@ -128,6 +142,7 @@ async function runAnalysis(baseState, sourceRunId, variationMultipliers) {
   try {
     const frozen = cloneState(baseState);
     await startTraining({
+      ...inheritedConfig,
       evaluationOnly: true,
       frozenState: frozen,
       _isSubRun: true,
@@ -160,6 +175,7 @@ async function runAnalysis(baseState, sourceRunId, variationMultipliers) {
         setNestedValue(frozen, param.path, param.key, modifiedValue);
 
         await startTraining({
+          ...inheritedConfig,
           evaluationOnly: true,
           frozenState: frozen,
           _isSubRun: true,

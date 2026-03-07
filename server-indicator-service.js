@@ -623,9 +623,58 @@ export function detectGap(candles) {
 }
 
 /**
+ * Inline candlestick pattern scorer for opportunity scoring (Phase 1D).
+ * Returns a 0-100 score: bullish patterns push higher, bearish patterns push lower.
+ */
+function scoreCandlestickPatterns(candles) {
+    if (candles.length < 5) return 50; // neutral
+
+    const len = candles.length;
+    const cur = candles[len - 1];
+    const prev = candles[len - 2];
+    const pp = candles[len - 3];
+
+    const bodySize = Math.abs(cur.c - cur.o);
+    const totalRange = cur.h - cur.l || 0.0001;
+    const upperWick = cur.h - Math.max(cur.o, cur.c);
+    const lowerWick = Math.min(cur.o, cur.c) - cur.l;
+    const isBullish = cur.c > cur.o;
+    const pIsBearish = prev.c < prev.o;
+    const pBodySize = Math.abs(prev.c - prev.o);
+
+    let score = 50;
+
+    // HAMMER: long lower wick, small upper wick (bullish reversal)
+    if (lowerWick > bodySize * 2 && upperWick < bodySize * 0.5) score += 15;
+
+    // BULLISH ENGULFING: current bullish candle fully engulfs previous bearish
+    if (isBullish && pIsBearish && cur.c > prev.o && cur.o < prev.c && bodySize > pBodySize) score += 20;
+
+    // MORNING STAR: bearish → small body → bullish
+    if (len >= 3 && pp.c < pp.o && Math.abs(prev.c - prev.o) < bodySize * 0.3 && isBullish && cur.c > (pp.o + pp.c) / 2) score += 18;
+
+    // THREE WHITE SOLDIERS: 3 consecutive bullish candles with higher closes
+    if (len >= 3 && pp.c > pp.o && prev.c > prev.o && isBullish && cur.c > prev.c && prev.c > pp.c) score += 15;
+
+    // PIERCING LINE: bearish prev → bullish current that closes above prev midpoint
+    if (isBullish && pIsBearish && cur.o < prev.c && cur.c > (prev.o + prev.c) / 2) score += 12;
+
+    // SHOOTING STAR: long upper wick (bearish reversal)
+    if (upperWick > bodySize * 2 && lowerWick < bodySize * 0.5 && prev.c > prev.o) score -= 12;
+
+    // BEARISH ENGULFING
+    if (!isBullish && !pIsBearish && cur.o > prev.c && cur.c < prev.o && bodySize > pBodySize) score -= 15;
+
+    // EVENING STAR: bullish → small body → bearish
+    if (len >= 3 && pp.c > pp.o && Math.abs(prev.c - prev.o) < bodySize * 0.3 && !isBullish && cur.c < (pp.o + pp.c) / 2) score -= 15;
+
+    return Math.max(0, Math.min(100, score));
+}
+
+/**
  * Calculate Opportunity Score
  */
-export function calculateOpportunityScore(candles, ticker) {
+export function calculateOpportunityScore(candles, ticker, options = {}) {
     const defaultScore = {
         ticker,
         compositeScore: 0,
@@ -639,12 +688,12 @@ export function calculateOpportunityScore(candles, ticker) {
     // Get indicators
     const tcSeries = calculateTCSeries(candles);
     const tcValue = tcSeries[tcSeries.length - 1] || 50;
-    
+
     const momentumSeries = calculateMomentumSeries(candles);
     const momentumValue = momentumSeries[momentumSeries.length - 1] || 50;
-    
+
     const trendDashboard = calculateTrendDashboard(candles);
-    
+
     const regime = detectMarketRegime(candles);
     const gap = detectGap(candles);
 
@@ -656,14 +705,25 @@ export function calculateOpportunityScore(candles, ticker) {
     const momentumStrength = momentumValue;
 
     // Factor 3: Volume Confirmation
-    // Tightened: ratio=1.0 → 45 (below-avg penalized), ratio=1.5 → 65 (minimum useful), ratio=2.5 → 100
-    // This prevents entries on below-average volume which historically produce losing trades
+    // Phase 4A: Surge-aware volume scoring — reduce penalty during surges
     const avgVolume = candles.slice(-20).reduce((sum, c) => sum + c.v, 0) / 20;
     const currentVolume = candles[candles.length - 1].v;
     const volumeRatio = avgVolume > 0 ? currentVolume / avgVolume : 1;
-    const volumeConfirmation = volumeRatio < 0.5 ? 10 :
-        volumeRatio < 1.0 ? Math.min(45, 10 + volumeRatio * 35) :
-        Math.min(100, 10 + volumeRatio * 36);
+    let volumeConfirmation;
+    if (options.microBurstActive) {
+        // Micro burst IS the volume signal — skip ratio check, give full score
+        volumeConfirmation = 85;
+    } else if (options.surgeActive) {
+        // During surges: reduce below-avg penalty by 50% (volume often lags price)
+        volumeConfirmation = volumeRatio < 0.5 ? 30 :       // was 10
+            volumeRatio < 1.0 ? Math.min(65, 30 + volumeRatio * 35) :  // was max 45
+            Math.min(100, 10 + volumeRatio * 36);
+    } else {
+        // Standard: ratio=1.0 → 45 (below-avg penalized), ratio=1.5 → 65, ratio=2.5 → 100
+        volumeConfirmation = volumeRatio < 0.5 ? 10 :
+            volumeRatio < 1.0 ? Math.min(45, 10 + volumeRatio * 35) :
+            Math.min(100, 10 + volumeRatio * 36);
+    }
 
     // Factor 4: Gap Opportunity
     let gapOpportunity = 0;
@@ -678,13 +738,17 @@ export function calculateOpportunityScore(candles, ticker) {
     // Factor 5: Multi-indicator alignment
     const multiTimeframeAlignment = (trendDashboard.score / 6) * 100;
 
-    // Combine factors
+    // Factor 6 (Phase 1D): Candlestick pattern signal
+    const candlestickScore = scoreCandlestickPatterns(candles);
+
+    // Combine factors — 6 components with candlestick taking 10% (5% from trend + 5% from momentum)
     const weights = {
-        trendAlignment: 0.30,
-        momentumStrength: 0.25,
+        trendAlignment: 0.25,       // was 0.30
+        momentumStrength: 0.20,     // was 0.25
         volumeConfirmation: 0.20,
         gapOpportunity: 0.10,
-        multiTimeframeAlignment: 0.15
+        multiTimeframeAlignment: 0.15,
+        candlestickPattern: 0.10,   // new
     };
 
     const compositeScore =
@@ -692,7 +756,8 @@ export function calculateOpportunityScore(candles, ticker) {
         momentumStrength * weights.momentumStrength +
         volumeConfirmation * weights.volumeConfirmation +
         gapOpportunity * weights.gapOpportunity +
-        multiTimeframeAlignment * weights.multiTimeframeAlignment;
+        multiTimeframeAlignment * weights.multiTimeframeAlignment +
+        candlestickScore * weights.candlestickPattern;
 
     // Determine urgency
     let urgency;
@@ -713,7 +778,8 @@ export function calculateOpportunityScore(candles, ticker) {
             momentumStrength,
             volumeConfirmation,
             gapOpportunity,
-            multiTimeframeAlignment
+            multiTimeframeAlignment,
+            candlestickPattern: candlestickScore
         }
     };
 }

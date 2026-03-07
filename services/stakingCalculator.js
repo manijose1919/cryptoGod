@@ -49,11 +49,12 @@ export function calculateStakingYield({ ticker, apy, initialAmount = 10000, days
         const tickers = config.tickers || [];
         if (tickers.includes(ticker) || tickers.length === 0) {
           // Annualize: run covers some period, scale to requested days
-          const runDays = config.startTime && config.endTime
+          const rawDays = config.startTime && config.endTime
             ? (config.endTime - config.startTime) / (24 * 3600 * 1000)
             : 365;
+          const runDays = Math.max(1, rawDays); // Guard against division by zero
           const runPnlPct = (run.total_pnl / (config.initialCash || 10000)) * 100;
-          tradingPnlPct = runDays > 0 ? (runPnlPct / runDays) * days : runPnlPct;
+          tradingPnlPct = (runPnlPct / runDays) * days;
           tradingRunId = run.run_id;
           break;
         }

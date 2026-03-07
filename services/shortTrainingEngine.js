@@ -2,12 +2,13 @@
  * Short Selling Training Engine
  *
  * Backtests short positions with parameter sweep across SL, TP,
- * and confidence thresholds. Entry requires DOWN/STRONG_DOWN regime
- * with TC > 70 (bearish conditions). Short P&L is inverted from longs.
+ * and confidence thresholds. Entry requires bearish regime with
+ * LOW TC (bearish = price dropping). Short P&L is inverted from longs.
+ * Includes RSI overbought signal and trailing stop.
  */
 
 import { getDb } from './database.js';
-import { getHistoricalCandles } from './database.js';
+import { getHistoricalCandles, getHistoricalCandleRange } from './database.js';
 
 let state = {
   running: false,
@@ -24,15 +25,13 @@ function yield50() {
 }
 
 /**
- * Simple regime detection from candles (reuses the same logic as training engine).
+ * Simple regime detection from candles.
  * Returns one of: STRONG_UP, UP, SIDEWAYS, DOWN, STRONG_DOWN
  */
 function detectRegime(candles) {
   if (candles.length < 21) return 'SIDEWAYS';
   const closes = candles.slice(-21).map(c => c.close);
-  const sma20 = closes.reduce((s, c) => s + c, 0) / closes.length;
-  const current = closes[closes.length - 1];
-  const pctChange = ((current - closes[0]) / closes[0]) * 100;
+  const pctChange = ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100;
 
   if (pctChange > 10) return 'STRONG_UP';
   if (pctChange > 3) return 'UP';
@@ -42,7 +41,8 @@ function detectRegime(candles) {
 }
 
 /**
- * Simple TC (Trend Cipher) approximation for entry signal.
+ * Simple TC (Trend Cipher) approximation — RSI-like.
+ * HIGH TC = BULLISH (price rising), LOW TC = BEARISH (price dropping).
  */
 function calculateTC(candles) {
   if (candles.length < 14) return 50;
@@ -55,9 +55,29 @@ function calculateTC(candles) {
   }
   const avgGain = gains.reduce((s, g) => s + g, 0) / gains.length;
   const avgLoss = losses.reduce((s, l) => s + l, 0) / losses.length;
-  if (avgLoss === 0) return 0;
+  if (avgLoss === 0) return 100; // All gains = fully bullish
+  if (avgGain === 0) return 0;   // All losses = fully bearish
   const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs)); // RSI-like, high = bearish for shorts
+  return 100 - (100 / (1 + rs));
+}
+
+/**
+ * Calculate RSI for overbought detection.
+ */
+function calculateRSI(candles, period = 14) {
+  if (candles.length < period + 1) return 50;
+  const closes = candles.slice(-(period + 1)).map(c => c.close);
+  let gainSum = 0, lossSum = 0;
+  for (let i = 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) gainSum += diff;
+    else lossSum += -diff;
+  }
+  const avgGain = gainSum / period;
+  const avgLoss = lossSum / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
 }
 
 const FEE_PER_SIDE = 0.0026; // 0.26% Kraken taker
@@ -67,8 +87,9 @@ export async function startShortTraining({
   slRange = [2, 3, 4, 5],
   tpRange = [3, 5, 8, 10],
   confidenceRange = [50, 60, 70, 80],
-  regimeFilter = ['DOWN', 'STRONG_DOWN'],
+  regimeFilter = ['DOWN', 'STRONG_DOWN', 'SIDEWAYS'],
   maxHoldHours = 168,
+  trailingGiveBack = [0, 15, 25],
 }) {
   if (state.running) throw new Error('Short training already running');
 
@@ -77,7 +98,9 @@ export async function startShortTraining({
   for (const sl of slRange) {
     for (const tp of tpRange) {
       for (const conf of confidenceRange) {
-        combos.push({ sl: sl / 100, tp: tp / 100, confidence: conf });
+        for (const trail of trailingGiveBack) {
+          combos.push({ sl: sl / 100, tp: tp / 100, confidence: conf, trailingGiveBack: trail / 100 });
+        }
       }
     }
   }
@@ -101,16 +124,21 @@ export async function startShortTraining({
 }
 
 async function runSweep(tickers, combos, regimeFilter, maxHoldHours) {
-  // Load candle data for all tickers (1h timeframe, last 2 years)
-  const now = Date.now();
-  const twoYearsAgo = now - 2 * 365 * 24 * 3600 * 1000;
+  // Use full available data range instead of hardcoded 2 years
   const candlesByTicker = {};
-
   for (const ticker of tickers) {
     try {
-      candlesByTicker[ticker] = getHistoricalCandles(ticker, '1h', twoYearsAgo, now, 50000);
+      const range = getHistoricalCandleRange(ticker, '1h');
+      if (range && range.earliest) {
+        candlesByTicker[ticker] = getHistoricalCandles(ticker, '1h', range.earliest, range.latest, 100000);
+      } else {
+        candlesByTicker[ticker] = [];
+      }
     } catch { candlesByTicker[ticker] = []; }
   }
+
+  const totalCandlesLoaded = Object.values(candlesByTicker).reduce((s, arr) => s + arr.length, 0);
+  console.log(`[ShortTraining] Loaded ${totalCandlesLoaded} candles across ${tickers.length} tickers (full data range)`);
 
   const comboResults = [];
 
@@ -122,6 +150,9 @@ async function runSweep(tickers, combos, regimeFilter, maxHoldHours) {
     let totalTrades = 0;
     let wins = 0;
     let losses = 0;
+    let totalFees = 0;
+    let bestTrade = 0;
+    let worstTrade = 0;
 
     for (const ticker of tickers) {
       const candles = candlesByTicker[ticker];
@@ -131,6 +162,7 @@ async function runSweep(tickers, combos, regimeFilter, maxHoldHours) {
       let inPosition = false;
       let entryPrice = 0;
       let entryIndex = 0;
+      let lowestPrice = 0; // For trailing stop on shorts
 
       while (i < candles.length) {
         if (state.aborted) { state.running = false; return; }
@@ -138,13 +170,26 @@ async function runSweep(tickers, combos, regimeFilter, maxHoldHours) {
         const window = candles.slice(Math.max(0, i - 21), i + 1);
         const regime = detectRegime(window);
         const tc = calculateTC(window);
+        const rsi = calculateRSI(window);
 
         if (!inPosition) {
-          // Entry: regime is bearish, TC > confidence (bearish signal)
-          if (regimeFilter.includes(regime) && tc > combo.confidence) {
+          // ENTRY LOGIC (FIXED):
+          // TC is RSI-like: HIGH = bullish, LOW = bearish
+          // For shorts, we want LOW TC (bearish) = tc < (100 - combo.confidence)
+          // e.g., confidence=70 → enter when tc < 30 (very bearish)
+          const tcBearish = tc < (100 - combo.confidence);
+
+          // RSI overbought signal: enter short when RSI > 70 + bearish candle
+          const currentCandle = candles[i];
+          const bearishCandle = currentCandle.close < currentCandle.open;
+          const rsiOverbought = rsi > 70 && bearishCandle;
+
+          // Entry: regime is bearish + (TC bearish OR RSI overbought reversal)
+          if (regimeFilter.includes(regime) && (tcBearish || rsiOverbought)) {
             inPosition = true;
             entryPrice = candles[i].close;
             entryIndex = i;
+            lowestPrice = entryPrice; // Initialize trailing tracker
           }
         } else {
           // Check exits
@@ -153,17 +198,49 @@ async function runSweep(tickers, combos, regimeFilter, maxHoldHours) {
           const pnlPct = (entryPrice - currentPrice) / entryPrice;
           const holdHours = i - entryIndex;
 
+          // Track lowest price for trailing stop
+          if (currentPrice < lowestPrice) {
+            lowestPrice = currentPrice;
+          }
+
           let exit = false;
-          if (pnlPct <= -combo.sl) exit = true; // Stop loss (price rose)
-          else if (pnlPct >= combo.tp) exit = true; // Take profit (price dropped)
-          else if (holdHours >= maxHoldHours) exit = true; // Time exit
-          else if (!regimeFilter.includes(regime) && regime !== 'SIDEWAYS') exit = true; // Regime flipped bullish
+          let exitReason = '';
+
+          if (pnlPct <= -combo.sl) {
+            exit = true;
+            exitReason = 'stopLoss';
+          } else if (pnlPct >= combo.tp) {
+            exit = true;
+            exitReason = 'takeProfit';
+          } else if (holdHours >= maxHoldHours) {
+            exit = true;
+            exitReason = 'timeExit';
+          } else if (!regimeFilter.includes(regime) && regime !== 'SIDEWAYS') {
+            exit = true;
+            exitReason = 'regimeFlip';
+          }
+
+          // Trailing stop: if price bounced back from lowest by trailingGiveBack%
+          if (!exit && combo.trailingGiveBack > 0 && lowestPrice < entryPrice) {
+            const profitFromLowest = (entryPrice - lowestPrice) / entryPrice;
+            if (profitFromLowest > 0.01) { // Only trail after 1% profit achieved
+              const bounceFromLowest = (currentPrice - lowestPrice) / lowestPrice;
+              if (bounceFromLowest >= combo.trailingGiveBack) {
+                exit = true;
+                exitReason = 'trailing';
+              }
+            }
+          }
 
           if (exit) {
-            const netPnl = pnlPct - (FEE_PER_SIDE * 2); // Both sides
+            const fee = FEE_PER_SIDE * 2;
+            const netPnl = pnlPct - fee;
             totalPnl += netPnl * 100; // As percentage points
+            totalFees += fee * 100;
             totalTrades++;
             if (netPnl > 0) wins++; else losses++;
+            if (netPnl * 100 > bestTrade) bestTrade = netPnl * 100;
+            if (netPnl * 100 < worstTrade) worstTrade = netPnl * 100;
             inPosition = false;
           }
         }
@@ -175,12 +252,16 @@ async function runSweep(tickers, combos, regimeFilter, maxHoldHours) {
       sl: combo.sl * 100,
       tp: combo.tp * 100,
       confidence: combo.confidence,
+      trailingGiveBack: combo.trailingGiveBack * 100,
       totalPnl: Math.round(totalPnl * 100) / 100,
       totalTrades,
       wins,
       losses,
       winRate: totalTrades > 0 ? Math.round((wins / totalTrades) * 100) : 0,
       avgPnl: totalTrades > 0 ? Math.round((totalPnl / totalTrades) * 100) / 100 : 0,
+      totalFees: Math.round(totalFees * 100) / 100,
+      bestTrade: Math.round(bestTrade * 100) / 100,
+      worstTrade: Math.round(worstTrade * 100) / 100,
     });
 
     state.completedCombos++;
@@ -190,14 +271,18 @@ async function runSweep(tickers, combos, regimeFilter, maxHoldHours) {
   // Sort by total P&L descending
   comboResults.sort((a, b) => b.totalPnl - a.totalPnl);
 
+  const profitableCombos = comboResults.filter(c => c.totalPnl > 0).length;
+
   state.results = {
     combos: comboResults,
     bestCombo: comboResults[0] || null,
     tickers,
     totalCombos: combos.length,
+    profitableCombos,
+    regimeFilter,
   };
   state.running = false;
-  console.log(`[ShortTraining] Completed ${combos.length} combos. Best: SL=${comboResults[0]?.sl}% TP=${comboResults[0]?.tp}% Conf=${comboResults[0]?.confidence} PnL=${comboResults[0]?.totalPnl}%`);
+  console.log(`[ShortTraining] Completed ${combos.length} combos (${profitableCombos} profitable). Best: SL=${comboResults[0]?.sl}% TP=${comboResults[0]?.tp}% Conf=${comboResults[0]?.confidence} Trail=${comboResults[0]?.trailingGiveBack}% PnL=${comboResults[0]?.totalPnl}% (${comboResults[0]?.totalTrades} trades)`);
 }
 
 export function stopShortTraining() {
