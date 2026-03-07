@@ -12,7 +12,7 @@
  */
 
 import { getFlag, setFlag } from './systemConfig.js';
-import { buildFeatureVector, FEATURE_COUNT } from './featureEngineering.js';
+import { buildFeatureVector, FEATURE_COUNT, RELIABLE_FEATURE_COUNT, truncateToReliableFeatures } from './featureEngineering.js';
 import { insertGatekeeperDecision } from './database.js';
 
 // ML engine — dynamically loaded
@@ -107,8 +107,12 @@ export function evaluateEntry(ticker, candles, ruleStrategy, ruleStrength, optio
     // Appending extra features corrupts the scaler and produces NaN in tree predictions.
     const features = featureResult.features;
 
-    // Get ML prediction
-    const mlPrediction = mlEngine.predict(features);
+    // B2: Truncate to reliable features (0-81) to prevent median-imputed
+    // external-API features (82-102) from corrupting tree predictions.
+    const reliableFeatures = truncateToReliableFeatures(features);
+
+    // Get ML prediction — use reliable features to avoid NaN from imputed values
+    const mlPrediction = mlEngine.predict(reliableFeatures);
     const mlConfidence = mlPrediction.confidence * 100; // Convert to 0-100
 
     // Adversarial consensus (if enabled)

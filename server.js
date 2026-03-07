@@ -509,6 +509,111 @@ const priceVelocityTracker = (() => {
     return { recordTick, getMetrics };
 })();
 
+// ═══ MICRO VOLUME BURST DETECTOR (Phase 1B) ═══
+// Tracks 5-second volume snapshots per ticker (rolling 12-element buffer = 60s window).
+// Detects "micro bursts": current 5s volume > 5× rolling average.
+// Much faster than the existing 30s volume burst detector — catches the first seconds of a surge.
+const microBurstDetector = (() => {
+    const buffers = new Map(); // ticker → { snapshots: [{vol, ts}], lastSnapshotTs, accumulatedVol }
+    const SNAPSHOT_INTERVAL_MS = 5000; // 5-second buckets
+    const BUFFER_SIZE = 12; // 60s rolling window
+    const BURST_THRESHOLD = 5; // current 5s vol > 5× avg
+    const BURST_COOLDOWN_MS = 30000; // Don't re-trigger for 30s after a burst
+
+    function recordVolume(ticker, volume) {
+        if (!buffers.has(ticker)) {
+            buffers.set(ticker, { snapshots: [], lastSnapshotTs: Date.now(), accumulatedVol: 0, lastBurstTs: 0 });
+        }
+        const buf = buffers.get(ticker);
+        buf.accumulatedVol += volume;
+
+        const now = Date.now();
+        if (now - buf.lastSnapshotTs >= SNAPSHOT_INTERVAL_MS) {
+            buf.snapshots.push({ vol: buf.accumulatedVol, ts: now });
+            while (buf.snapshots.length > BUFFER_SIZE) buf.snapshots.shift();
+            buf.accumulatedVol = 0;
+            buf.lastSnapshotTs = now;
+        }
+    }
+
+    function isMicroBurst(ticker) {
+        const buf = buffers.get(ticker);
+        if (!buf || buf.snapshots.length < 4) return { burst: false, ratio: 0 };
+
+        // Cooldown check
+        if (Date.now() - buf.lastBurstTs < BURST_COOLDOWN_MS) return { burst: false, ratio: 0, cooldown: true };
+
+        const latest = buf.snapshots[buf.snapshots.length - 1];
+        // Average of previous snapshots (excluding latest)
+        const prevSnapshots = buf.snapshots.slice(0, -1);
+        const avgVol = prevSnapshots.reduce((s, snap) => s + snap.vol, 0) / prevSnapshots.length;
+        if (avgVol <= 0) return { burst: false, ratio: 0 };
+
+        const ratio = latest.vol / avgVol;
+        const burst = ratio >= BURST_THRESHOLD;
+        if (burst) buf.lastBurstTs = Date.now();
+        return { burst, ratio };
+    }
+
+    // Check if a burst was detected in the last N ms
+    function recentBurst(ticker, withinMs = 30000) {
+        const buf = buffers.get(ticker);
+        if (!buf) return false;
+        return buf.lastBurstTs > 0 && (Date.now() - buf.lastBurstTs) < withinMs;
+    }
+
+    return { recordVolume, isMicroBurst, recentBurst };
+})();
+
+// ═══ REGIME TRANSITION BOOST TRACKER (Phase 3C) ═══
+// Tracks previous regime per ticker; when regime transitions from SIDEWAYS/DOWN → UP/STRONG_UP:
+// apply +20 score boost that decays linearly over 5 minutes.
+const regimeTransitionBoost = (() => {
+    const boosts = new Map(); // ticker → { boostStart, boostAmount }
+    const BOOST_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+    const MAX_BOOST = 20;
+    const previousRegimes = new Map(); // ticker → last known regime
+
+    function checkTransition(ticker, currentRegime) {
+        const prev = previousRegimes.get(ticker);
+        previousRegimes.set(ticker, currentRegime);
+
+        if (!prev) return 0;
+        if (prev === currentRegime) {
+            // No transition — return existing decaying boost if any
+            return getBoost(ticker);
+        }
+
+        // Bullish transition: SIDEWAYS/DOWN/STRONG_DOWN → UP/STRONG_UP
+        const bearishRegimes = ['SIDEWAYS', 'DOWN', 'STRONG_DOWN'];
+        const bullishRegimes = ['UP', 'STRONG_UP'];
+        if (bearishRegimes.includes(prev) && bullishRegimes.includes(currentRegime)) {
+            boosts.set(ticker, { boostStart: Date.now(), boostAmount: MAX_BOOST });
+            return MAX_BOOST;
+        }
+
+        return getBoost(ticker);
+    }
+
+    function getBoost(ticker) {
+        const boost = boosts.get(ticker);
+        if (!boost) return 0;
+        const elapsed = Date.now() - boost.boostStart;
+        if (elapsed >= BOOST_DURATION_MS) {
+            boosts.delete(ticker);
+            return 0;
+        }
+        // Linear decay
+        return Math.round(boost.boostAmount * (1 - elapsed / BOOST_DURATION_MS));
+    }
+
+    return { checkTransition, getBoost };
+})();
+
+// ═══ HOT TICKERS SET (Phase 3A) ═══
+// Tickers with velocity > 0.2%/min or recent volume burst — scanned first every iteration
+const hotTickers = new Set();
+
 // ═══ TIME-OF-DAY WIN RATE TRACKER ═══
 // Tracks win rates by UTC hour (0-23) and day-of-week (0=Sun..6=Sat).
 // Self-learning: blocks entries during historically unprofitable time slots.
@@ -686,6 +791,21 @@ function initExchangeWebSocket(tickers, broadcastFn) {
             }
             // Track price velocity from tick stream
             priceVelocityTracker.recordTick(ticker, trade.price);
+
+            // Track micro volume bursts from tick stream (Phase 1B)
+            microBurstDetector.recordVolume(ticker, trade.quantity || trade.volume || 0);
+
+            // Update hot tickers set (Phase 3A)
+            const velMetrics = priceVelocityTracker.getMetrics(ticker);
+            if (velMetrics.velocity > 0.2 || microBurstDetector.recentBurst(ticker)) {
+                hotTickers.add(ticker);
+                // Phase 3B: Trigger fast-track scan for high-velocity non-held tickers
+                if (velMetrics.velocity > 0.5 && _signalScannerRef && !portfolio.positions[ticker]) {
+                    _signalScannerRef.fastScan(ticker).catch(() => {}); // fire-and-forget
+                }
+            } else {
+                hotTickers.delete(ticker);
+            }
 
             // Feed VPIN updates from real-time trade stream
             if (orderBookMicro?.updateVPIN) {
@@ -1774,6 +1894,14 @@ const exitLevelCache = new Map();
 // Map<ticker, { orderId, stopPrice, volume, placedAt }>
 const nativeStopOrders = new Map();
 
+// A3: Simulated native stop-loss for SIM mode — mirrors nativeStopOrders structure
+// Map<ticker, { stopPrice, volume, placedAt }>
+const simNativeStopOrders = new Map();
+
+// C7: Per-ticker flash crash detection — rolling price buffer for each ticker
+// Map<ticker, { prices: Array<{price, ts}>, tightenedSL: boolean }>
+const perTickerFlashCrash = new Map();
+
 function refreshExitLevels(marketDataMap) {
     const fees = getActiveFees();
     const { profitGoals } = botState.settings;
@@ -1837,31 +1965,112 @@ function refreshExitLevels(marketDataMap) {
         // Stage 3: trail remaining at 1.5× ATR below high-water mark
         const trailATRPct = adjustedATR * 1.5;
 
-        // TP price: use seed/optimizer TP if available (12-35%), otherwise fall back to ATR-based stage 2
-        // The seed trains optimal TP per regime (e.g., STRONG_UP=35%, UP=20%, DOWN=8%)
-        // ATR-based stage 2 (typically 0.6-1.0%) is far too tight when seed overrides are active
-        const tpPrice = targets.optimized
-            ? openPrice * (1 + targets.takeProfitPct / 100)
-            : stage2Price;
+        // C1: Apply Meta-RL SL/TP multipliers if available
+        let metaRLSlMult = 1.0;
+        let metaRLTpMult = 1.0;
+        if (metaRL && position.metaRLActions) {
+            // Use entry-time actions for consistency; clamp to 0.5-2.0 safety range
+            metaRLSlMult = Math.max(0.5, Math.min(2.0, position.metaRLActions.slMult || 1.0));
+            metaRLTpMult = Math.max(0.5, Math.min(2.0, position.metaRLActions.tpMult || 1.0));
+        } else if (metaRL) {
+            try {
+                const mrParams = metaRL.getRecommendedParams(targets.regime || 'SIDEWAYS');
+                if (mrParams && mrParams.confidence > 20) {
+                    metaRLSlMult = Math.max(0.5, Math.min(2.0, mrParams.slMult || 1.0));
+                    metaRLTpMult = Math.max(0.5, Math.min(2.0, mrParams.tpMult || 1.0));
+                }
+            } catch (e) {}
+        }
 
-        // SL price: use seed/optimizer SL if available, otherwise 2× ATR
-        const feeAdjustedSL = targets.optimized
-            ? targets.stopLossPct / 100
-            : adjustedATR * 2.0 + fees.roundTrip;
-        const slPrice = openPrice * (1 - feeAdjustedSL);
+        // Phase 2A: SNIPER positions get tighter scalp exits
+        const isSniper = position.entryType === 'SNIPER' && getFlag('SNIPER_MODE_ENABLED');
+        let tpPrice, slPrice, trailActivationPrice, trailPct;
 
-        // Trail activation: at stage 1 price
-        const trailActivationPrice = stage1Price;
+        if (isSniper) {
+            // SNIPER scalp targets: TP 2-3%, SL 1.5%, maxHold 2h, early trail activation
+            const sniperTP = getFlag('SNIPER_TP') || 0.025; // 2.5% default
+            const sniperSL = getFlag('SNIPER_SL') || 0.015; // 1.5% default
 
-        // Trail distance percentage
-        const trailPct = Math.max(1.0, trailATRPct * 100); // Floor 1.0% — 0.3% was noise on BTC
+            tpPrice = openPrice * (1 + sniperTP * metaRLTpMult + fees.roundTrip);
+            slPrice = openPrice * (1 - sniperSL * metaRLSlMult);
+            trailActivationPrice = openPrice * (1 + sniperTP * 0.40); // Trail activates at 40% of TP
+            trailPct = 15; // 15% giveback (tight)
+
+            // Phase 2B: Momentum-ride exit extension
+            // If position hit TP but velocity still strong, extend TP
+            const vel = priceVelocityTracker.getMetrics(ticker);
+            const currentPrice = position.currentPrice || openPrice;
+            const extensions = position.sniperExtensions || 0;
+            if (currentPrice >= tpPrice && vel.velocity > 0.3 && extensions < 3) {
+                // Extend TP by 1% per extension
+                tpPrice = openPrice * (1 + sniperTP + 0.01 * (extensions + 1) + fees.roundTrip);
+                position.sniperExtensions = extensions + 1;
+                trailPct = 10; // Tighten trail during extension
+                if (extensions === 0) {
+                    addLog(`[SNIPER] Momentum-ride extension for ${ticker}: TP extended to +${((tpPrice/openPrice - 1) * 100).toFixed(1)}%, vel=${vel.velocity.toFixed(2)}%/min`, 'INFO');
+                }
+            }
+            // Reset extension counter if velocity fizzles
+            if (vel.velocity < 0.1 && extensions > 0) {
+                position.sniperExtensions = 0;
+            }
+
+            // Phase 2C: Velocity-based emergency exit
+            // If velocity flips negative AND acceleration < -0.2%/min²: immediate exit
+            if (vel.velocity < -0.1 && vel.acceleration < -0.2 && vel.tickCount >= 5) {
+                const pnlPct = ((currentPrice - openPrice) / openPrice) * 100;
+                if (!position._exitPending) {
+                    addLog(`[SNIPER] Velocity emergency exit for ${ticker}: vel=${vel.velocity.toFixed(2)}%/min, accel=${vel.acceleration.toFixed(2)} — selling at ${pnlPct.toFixed(1)}%`, 'WARN');
+                    position._exitPending = true;
+                    // Fire-and-forget async sell
+                    const _pos = position;
+                    const _price = currentPrice;
+                    (async () => {
+                        try { await handleSell(_pos, _price, `SNIPER_VELOCITY_EXIT (vel=${vel.velocity.toFixed(2)}, accel=${vel.acceleration.toFixed(2)})`); }
+                        catch (e) { _pos._exitPending = false; }
+                    })();
+                }
+            }
+
+            // SNIPER max hold time: force exit after 2h
+            const sniperMaxHold = (getFlag('SNIPER_MAX_HOLD') || 2) * 60 * 60 * 1000;
+            if (Date.now() - (position.entryTime || 0) > sniperMaxHold && !position._exitPending) {
+                const _pos = position;
+                const _price = position.currentPrice || openPrice;
+                position._exitPending = true;
+                addLog(`[SNIPER] Max hold time reached for ${ticker} (${((Date.now() - position.entryTime) / 3600000).toFixed(1)}h) — forcing exit`, 'INFO');
+                (async () => {
+                    try { await handleSell(_pos, _price, 'SNIPER_MAX_HOLD_EXIT'); }
+                    catch (e) { _pos._exitPending = false; }
+                })();
+            }
+        } else {
+            // Standard exit calculation (unchanged)
+            // TP price: use seed/optimizer TP if available (12-35%), otherwise fall back to ATR-based stage 2
+            tpPrice = targets.optimized
+                ? openPrice * (1 + (targets.takeProfitPct / 100) * metaRLTpMult)
+                : stage2Price * (1 + (metaRLTpMult - 1) * (stage2Price - openPrice) / openPrice);
+
+            // SL price: use seed/optimizer SL if available, otherwise 2× ATR
+            const feeAdjustedSL = targets.optimized
+                ? (targets.stopLossPct / 100) * metaRLSlMult
+                : (adjustedATR * 2.0 + fees.roundTrip) * metaRLSlMult;
+            slPrice = openPrice * (1 - feeAdjustedSL);
+
+            // Trail activation: at stage 1 price
+            trailActivationPrice = stage1Price;
+
+            // Trail distance percentage
+            trailPct = Math.max(1.0, trailATRPct * 100); // Floor 1.0% — 0.3% was noise on BTC
+        }
 
         // Per-trade profit goal (dollar amount)
         const profitGoal = profitGoals?.[position.entryStrategy] || 0;
 
         exitLevelCache.set(ticker, {
             tpPrice, slPrice, trailActivationPrice, trailPct, profitGoal, regime: targets.regime,
-            stage1Price, stage2Price, atrPct: adjustedATR, regimeMultiplier, volRegimeMultiplier
+            stage1Price, stage2Price, atrPct: adjustedATR, regimeMultiplier, volRegimeMultiplier,
+            isSniper,
         });
 
         // Update native exchange SL if price moved significantly (>1% difference)
@@ -1896,6 +2105,80 @@ function refreshExitLevels(marketDataMap) {
             }
         }
     }
+    // A3: Check simulated SL triggers in SIM mode
+    if (botState.tradingMode === 'SIMULATION' && getFlag('SIMULATION_ACCURACY')) {
+        for (const [ticker, simSL] of simNativeStopOrders) {
+            const position = portfolio.positions[ticker];
+            if (!position) { simNativeStopOrders.delete(ticker); continue; }
+            const candles = marketDataMap.get(ticker);
+            if (!candles || candles.length === 0) continue;
+            const currentPrice = candles[candles.length - 1].c;
+            if (currentPrice <= simSL.stopPrice) {
+                addLog(`[SIM-SL] Stop-loss TRIGGERED for ${ticker}: price $${currentPrice.toFixed(2)} <= SL $${simSL.stopPrice.toFixed(2)}`, 'WARN');
+                handleSell(position, currentPrice, `SIM_NATIVE_SL (hit $${simSL.stopPrice.toFixed(2)})`);
+                simNativeStopOrders.delete(ticker);
+                continue;
+            }
+            // Update SIM SL when computed SL changes significantly (same logic as real mode)
+            const cached = exitLevelCache.get(ticker);
+            if (cached && Math.abs(simSL.stopPrice - cached.slPrice) / cached.slPrice > 0.01) {
+                simNativeStopOrders.set(ticker, {
+                    stopPrice: cached.slPrice,
+                    volume: position.quantity,
+                    placedAt: Date.now(),
+                });
+            }
+        }
+    }
+
+    // C7: Per-ticker flash crash detection — track last 5 prices per ticker
+    for (const [ticker, position] of Object.entries(portfolio.positions)) {
+        const candles = marketDataMap.get(ticker);
+        if (!candles || candles.length < 2) continue;
+        const currentPrice = candles[candles.length - 1].c;
+        const now = Date.now();
+
+        if (!perTickerFlashCrash.has(ticker)) {
+            perTickerFlashCrash.set(ticker, { prices: [], tightenedSL: false });
+        }
+        const state = perTickerFlashCrash.get(ticker);
+        state.prices.push({ price: currentPrice, ts: now });
+        // Keep only prices from last 5 minutes
+        state.prices = state.prices.filter(p => now - p.ts <= 5 * 60 * 1000);
+
+        if (state.prices.length >= 2) {
+            const oldestPrice = state.prices[0].price;
+            const dropPct = (currentPrice - oldestPrice) / oldestPrice;
+
+            // >5% drop in 5 min → emergency close (both SIM and REAL)
+            if (dropPct <= -0.05) {
+                addLog(`[FLASH-CRASH-TICKER] ${ticker} dropped ${(dropPct * 100).toFixed(2)}% in ${((now - state.prices[0].ts) / 1000).toFixed(0)}s — EMERGENCY CLOSE`, 'WARN');
+                handleSell(position, currentPrice, `PER_TICKER_FLASH_CRASH (${(dropPct * 100).toFixed(1)}% drop)`);
+                perTickerFlashCrash.delete(ticker);
+                continue;
+            }
+
+            // >3% drop → tighten SL to 1%
+            if (dropPct <= -0.03 && !state.tightenedSL) {
+                state.tightenedSL = true;
+                const tightSL = currentPrice * 0.99; // 1% SL
+                const cached = exitLevelCache.get(ticker);
+                if (cached && tightSL > cached.slPrice) {
+                    cached.slPrice = tightSL;
+                    exitLevelCache.set(ticker, cached);
+                    addLog(`[FLASH-CRASH-TICKER] ${ticker} down ${(dropPct * 100).toFixed(2)}% — tightened SL to $${tightSL.toFixed(2)} (1%)`, 'WARN');
+                    if (telegramEnabled()) {
+                        try { alertCircuitBreaker(`PER-TICKER FLASH: ${ticker} ${(dropPct*100).toFixed(2)}% — SL tightened to 1%`); } catch(e) {}
+                    }
+                }
+            }
+        }
+    }
+    // Clean up flash crash state for closed positions
+    for (const ticker of perTickerFlashCrash.keys()) {
+        if (!portfolio.positions[ticker]) perTickerFlashCrash.delete(ticker);
+    }
+
     // Clean stale entries for closed positions
     for (const ticker of exitLevelCache.keys()) {
         if (!portfolio.positions[ticker]) exitLevelCache.delete(ticker);
@@ -2319,8 +2602,12 @@ async function tradingBotLoop() {
         const tickerPool = [...QUALITY_TICKERS, ...newCoinTickers, ...trendingTickers].slice(0, 75);
         const BATCH_SIZE = 20;
         const cycleIndex = Math.floor(Date.now() / 1000) % Math.max(1, Math.ceil(tickerPool.length / BATCH_SIZE));
-        const scanBatch = tickerPool.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
-        
+        const regularBatch = tickerPool.slice(cycleIndex * BATCH_SIZE, (cycleIndex + 1) * BATCH_SIZE);
+
+        // Phase 3A: Hot tickers (velocity > 0.2%/min or recent volume burst) are scanned FIRST every iteration
+        const hotTickerArray = [...hotTickers].filter(t => !positionTickers.includes(t));
+        const scanBatch = [...new Set([...hotTickerArray, ...regularBatch])];
+
         const tickersToFetch = [...new Set([...positionTickers, ...scanBatch])];
 
         // Auto-subscribe scan batch to WebSocket so future loops use WS buffer
@@ -2351,6 +2638,44 @@ async function tradingBotLoop() {
 
         // --- FLASH CRASH PROTECTION ---
         const flashCrashBlocking = checkFlashCrash(marketDataMap);
+
+        // C5: Periodic position reconciliation (every 2 hours)
+        if (positionReconciler && botState.sessionId) {
+            if (!botState._lastReconcileTime) botState._lastReconcileTime = Date.now();
+            if (Date.now() - botState._lastReconcileTime > 2 * 60 * 60 * 1000) {
+                botState._lastReconcileTime = Date.now();
+                try {
+                    const recon = await positionReconciler.reconcilePositions(portfolio, botState.sessionId);
+                    if (recon.reconciled && recon.actionsRequired.length > 0) {
+                        if (botState.tradingMode === 'SIMULATION') {
+                            addLog(`[RECONCILE] Found ${recon.actionsRequired.length} issues (log-only in SIM)`, 'INFO');
+                        } else {
+                            const fixes = positionReconciler.autoFixReconciliation(portfolio, recon, addLog);
+                            addLog(`[RECONCILE] Applied ${fixes.actionsCount} fixes`, 'WARN');
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
+
+        // C8: Candle gap validation — skip tickers with stale data
+        for (const [ticker, candles] of marketDataMap) {
+            if (candles.length < 3) continue;
+            const lastCandle = candles[candles.length - 1];
+            const prevCandle = candles[candles.length - 2];
+            if (lastCandle.t && prevCandle.t) {
+                const expectedInterval = prevCandle.t && candles.length >= 3
+                    ? (candles[candles.length - 2].t - candles[candles.length - 3].t)
+                    : 60000; // default 1m
+                const actualGap = lastCandle.t - prevCandle.t;
+                if (actualGap > expectedInterval * 2 && expectedInterval > 0) {
+                    marketDataMap.delete(ticker);
+                    if (Math.random() < 0.1) {
+                        addLog(`[CANDLE-GAP] ${ticker}: gap ${(actualGap / 60000).toFixed(1)}min (expected ${(expectedInterval / 60000).toFixed(1)}min) — skipping stale data`, 'WARN');
+                    }
+                }
+            }
+        }
 
         // --- MAX DRAWDOWN CHECK (beastMode) ---
         let maxDrawdownBlocking = false;
@@ -2714,11 +3039,44 @@ async function tradingBotLoop() {
                     continue; // silently skip — too many low-vol tickers to log each one
                 }
 
-                const score = calculateOpportunityScore(candles, ticker);
+                // Phase 4A: Pass surge context to volume scoring
+                const _surgeOpts = {};
+                if (getFlag('SNIPER_MODE_ENABLED')) {
+                    const _vel = priceVelocityTracker.getMetrics(ticker);
+                    if (_vel.velocity > 0.3) _surgeOpts.surgeActive = true;
+                    if (microBurstDetector.recentBurst(ticker)) _surgeOpts.microBurstActive = true;
+                }
+                const score = calculateOpportunityScore(candles, ticker, _surgeOpts);
                 // Per-ticker cooldown raises threshold after consecutive losses
                 const tickerCooldownAdj = tickerLossCooldown.getScoreAdjustment(ticker);
-                const tickerMinScore = minOppScore + tickerCooldownAdj;
-                if (score.compositeScore > tickerMinScore) candidates.push({ ticker, score, candles });
+                let tickerMinScore = minOppScore + tickerCooldownAdj;
+
+                // Phase 1A: Velocity-triggered entry acceleration
+                // If velocity > 0.5%/min AND acceleration > 0: reduce minOppScore by 15-25 points
+                // Guard: only in non-bearish regimes
+                let sniperCandidate = false;
+                if (getFlag('SNIPER_MODE_ENABLED')) {
+                    const vel = priceVelocityTracker.getMetrics(ticker);
+                    const microBurst = microBurstDetector.isMicroBurst(ticker);
+                    const isBearish = currentRegime === 'DOWN' || currentRegime === 'STRONG_DOWN';
+
+                    if (!isBearish && vel.tickCount >= 5) {
+                        if (vel.velocity > 0.5 && vel.acceleration > 0) {
+                            tickerMinScore -= 20; // Strong surge — aggressive entry
+                            sniperCandidate = true;
+                        } else if (vel.velocity > 0.3 && vel.acceleration >= 0) {
+                            tickerMinScore -= 10; // Moderate surge
+                            sniperCandidate = true;
+                        }
+                    }
+                    if (!isBearish && microBurst.burst) {
+                        tickerMinScore -= 15; // Micro volume burst — fast entry
+                        sniperCandidate = true;
+                    }
+                    tickerMinScore = Math.max(25, tickerMinScore); // Floor: never go below 25
+                }
+
+                if (score.compositeScore > tickerMinScore) candidates.push({ ticker, score, candles, sniperCandidate });
 
                 // === SWING STRATEGY: 4h + 1D candle fetch and evaluation ===
                 const now4h = Date.now();
@@ -2903,11 +3261,48 @@ async function tradingBotLoop() {
                 }
             } catch (e) {}
 
+            // C4: Pre-fetch ML advice in parallel for top 10 candidates (reduces ~10s → ~2s)
+            const _mlAdviceCache = new Map();
+            if (mlPredictionService?.getMLAdvice && candidates.length > 0) {
+                try {
+                    const top10 = candidates.slice(0, 10);
+                    const mlPromises = top10.map(async (cand) => {
+                        try {
+                            const mlOpts = { marketRegime: currentRegime, lastTradeTime: botState.lastTradeTime || 0 };
+                            try {
+                                if (derivativesIntel) {
+                                    const sig = derivativesIntel.getDerivativesSignal(cand.ticker);
+                                    if (sig) mlOpts.derivativesData = sig;
+                                }
+                                if (fearGreedGate) {
+                                    const fgi = fearGreedGate.getFearGreedIndex?.();
+                                    mlOpts.sentimentData = { fearGreedIndex: fgi?.value || 50 };
+                                }
+                                if (orderBookMicro) {
+                                    const analysis = orderBookMicro.getAnalysis?.(cand.ticker);
+                                    if (analysis) mlOpts.exchangeSnapshot = { bidAskImbalance: analysis.bidAskImbalance || 0, spreadBps: analysis.spreadBps || 0 };
+                                }
+                            } catch (e) {}
+                            const advice = await mlPredictionService.getMLAdvice(cand.ticker, cand.candles, mlOpts);
+                            return { ticker: cand.ticker, advice };
+                        } catch (e) {
+                            return { ticker: cand.ticker, advice: { available: false, direction: null, confidence: 0 } };
+                        }
+                    });
+                    const results = await Promise.allSettled(mlPromises);
+                    for (const r of results) {
+                        if (r.status === 'fulfilled' && r.value) {
+                            _mlAdviceCache.set(r.value.ticker, r.value.advice);
+                        }
+                    }
+                } catch (e) {}
+            }
+
             for (const candidate of candidates) {
                 if (maxConcurrentTrades - Object.keys(portfolio.positions).length <= 0) break;
                 if (portfolio.cash < CONFIG.MIN_TRADE_SIZE) break;
 
-                const { ticker, score, candles } = candidate;
+                const { ticker, score, candles, sniperCandidate } = candidate;
                 const currentPrice = candles[candles.length - 1].c;
 
                 // ═══ PER-TICKER INDICATOR CACHE ═══
@@ -2938,10 +3333,23 @@ async function tradingBotLoop() {
                     // Signal strength = how far past threshold (normalized 0-1 range)
                     const stratCandidates = [];
 
-                    if (profileStrategies.includes('TREND') && tcValue < optParams.TREND_BULLISH_ENTRY) {
+                    // Phase 1C: Dynamic TC threshold relaxation during surges
+                    let trendEntryThreshold = optParams.TREND_BULLISH_ENTRY;
+                    if (sniperCandidate && getFlag('SNIPER_MODE_ENABLED')) {
+                        const vel = priceVelocityTracker.getMetrics(ticker);
+                        const microBurst = microBurstDetector.isMicroBurst(ticker);
+                        if (microBurst.burst) {
+                            trendEntryThreshold = 50; // Micro burst: relax to TC < 50
+                        } else if (vel.velocity > 0.3) {
+                            trendEntryThreshold = 40; // Active surge: relax to TC < 40
+                        }
+                        // Tighten back when velocity drops
+                        if (vel.velocity < 0.1) trendEntryThreshold = optParams.TREND_BULLISH_ENTRY;
+                    }
+                    if (profileStrategies.includes('TREND') && tcValue < trendEntryThreshold) {
                         // TREND: lower = more bullish, strength = how far below threshold
-                        const strength = (optParams.TREND_BULLISH_ENTRY - tcValue) / optParams.TREND_BULLISH_ENTRY;
-                        stratCandidates.push({ strategy: 'TREND', value: tcValue, strength });
+                        const strength = (trendEntryThreshold - tcValue) / trendEntryThreshold;
+                        stratCandidates.push({ strategy: 'TREND', value: tcValue, strength, sniperEntry: sniperCandidate && trendEntryThreshold > optParams.TREND_BULLISH_ENTRY });
                     }
                     if (profileStrategies.includes('MOMENTUM')) {
                         if (_cachedMom > optParams.MOMENTUM_BULLISH_ENTRY) {
@@ -3208,6 +3616,30 @@ async function tradingBotLoop() {
                     }
                 } catch (e) { /* non-critical */ }
 
+                // Phase 1B: Micro volume burst injection (+15 pts)
+                let microBurstAdj = 0;
+                if (getFlag('SNIPER_MODE_ENABLED')) {
+                    try {
+                        const microBurst = microBurstDetector.isMicroBurst(ticker);
+                        if (microBurst.burst) {
+                            microBurstAdj = 15;
+                            addLog(`[MICRO-BURST] ${ticker}: volume ratio ${microBurst.ratio.toFixed(1)}x — +15 confidence`, 'INFO');
+                        }
+                    } catch (e) { /* non-critical */ }
+                }
+
+                // Phase 3C: Regime transition boost (decaying +20 over 5 minutes)
+                let regimeBoostAdj = 0;
+                if (getFlag('SNIPER_MODE_ENABLED')) {
+                    try {
+                        const perTickerRegime = score.regime || currentRegime;
+                        regimeBoostAdj = regimeTransitionBoost.checkTransition(ticker, perTickerRegime);
+                        if (regimeBoostAdj >= 5) {
+                            addLog(`[REGIME-BOOST] ${ticker}: +${regimeBoostAdj} pts from bullish transition`, 'INFO');
+                        }
+                    } catch (e) { /* non-critical */ }
+                }
+
                 // Price velocity confirmation: positive velocity + acceleration = momentum entry
                 let velocityAdj = 0;
                 try {
@@ -3326,11 +3758,12 @@ async function tradingBotLoop() {
                 }
 
                 // ML Advisory — now active: scales position size and can block conflicting entries
-                let mlAdvice = { available: false, direction: null, confidence: 0 };
+                // C4: Use pre-fetched ML advice from parallel cache when available
+                let mlAdvice = _mlAdviceCache.get(ticker) || { available: false, direction: null, confidence: 0 };
                 let mlSizeMultiplier = 1.0;
-                if (entryStrategy && mlPredictionService?.getMLAdvice) {
+                if (entryStrategy && mlPredictionService?.getMLAdvice && !mlAdvice.available) {
                     try {
-                        // Build enriched options so ML features 28-103 are populated (not zero-filled)
+                        // Fallback: fetch inline if not in cache (e.g., candidate wasn't in top 10)
                         const mlOptions = {};
                         try {
                             if (derivativesIntel) {
@@ -3365,7 +3798,7 @@ async function tradingBotLoop() {
                             } catch (e) {}
                             mlOptions.marketRegime = currentRegime;
                             mlOptions.lastTradeTime = botState.lastTradeTime || 0;
-                        } catch (enrichErr) { /* fail open — ML works with whatever data is available */ }
+                        } catch (enrichErr) { /* fail open */ }
 
                         mlAdvice = await mlPredictionService.getMLAdvice(ticker, candles, mlOptions);
                         if (mlAdvice.available) {
@@ -3510,9 +3943,23 @@ async function tradingBotLoop() {
                             };
                         } catch (e) { /* fail open */ }
 
+                        // Phase 5A: Build surge data for ML features
+                        let _surgeMLData = {};
+                        try {
+                            const _sVel = priceVelocityTracker.getMetrics(ticker);
+                            _surgeMLData = {
+                                priceVelocity: _sVel.velocity || 0,
+                                priceAcceleration: _sVel.acceleration || 0,
+                                microBurstActive: microBurstDetector.recentBurst(ticker),
+                                candlestickSignal: ((score.factors?.candlestickPattern || 50) - 50) / 50, // normalize 0-100 → -1 to 1
+                                surgeType: null, // Populated if surgeTradingBackend detects one
+                                barsSinceSurge: 0,
+                            };
+                        } catch (e) {}
+
                         pipelineResult = mlGatekeeper.evaluateEntry(
                             ticker, candles, entryStrategy, bestStrength,
-                            { strategySignals, geneticSignals, onChainData, marketIntelligence }
+                            { strategySignals, geneticSignals, onChainData, marketIntelligence, surgeData: _surgeMLData }
                         );
 
                         // Record ML prediction for A/B testing (champion vs challenger)
@@ -3808,7 +4255,7 @@ async function tradingBotLoop() {
                     } catch (e) { /* fail open */ }
                 }
 
-                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj + volumeBurstAdj + velocityAdj + regimeTransitionAdj + leadLagAdj + journalAdj + candlestickAdj + onChainAdj + macroCompositeAdj + scannerAdj + derivativesAdj + fearGreedAdj + sweepAdj + mtfConfidenceAdj + obAdj + vwapAdj + stochRSIAdj + deltaVolAdj + adversarialAdj;
+                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj + volumeBurstAdj + velocityAdj + regimeTransitionAdj + leadLagAdj + journalAdj + candlestickAdj + onChainAdj + macroCompositeAdj + scannerAdj + derivativesAdj + fearGreedAdj + sweepAdj + mtfConfidenceAdj + obAdj + vwapAdj + stochRSIAdj + deltaVolAdj + adversarialAdj + microBurstAdj + regimeBoostAdj;
                 if (entryStrategy && adjustedComposite < optParams.compositeScoreFloor) {
                     logThought({
                         type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
@@ -3997,6 +4444,11 @@ async function tradingBotLoop() {
                         } catch (e) { /* fail open */ }
                     }
 
+                    // C2: Position size floor — prevent dust amounts after 13+ multiplicative stages
+                    if (entryStrategy && investmentAmount > 0 && investmentAmount < CONFIG.MIN_TRADE_SIZE * 1.1) {
+                        investmentAmount = CONFIG.MIN_TRADE_SIZE * 1.1;
+                    }
+
                     if (entryStrategy && investmentAmount > CONFIG.MIN_TRADE_SIZE) {
                         const pipelineTier = pipelineResult?.tier || 'N/A';
                         const pipelineMult = pipelineResult?.sizeMultiplier?.toFixed(2) || '1.00';
@@ -4019,6 +4471,7 @@ async function tradingBotLoop() {
                             pipelineTier,
                             pipelineSizeMultiplier: pipelineResult?.sizeMultiplier || 1,
                             metaRLActions: metaRLParams ? { positionSizeMult: metaRLParams.positionSizeMult, slMult: metaRLParams.slMult, tpMult: metaRLParams.tpMult, entryThreshMult: metaRLParams.entryThreshMult } : null,
+                            entryType: sniperCandidate ? 'SNIPER' : 'STANDARD',
                         });
                     }
                 }
@@ -4202,12 +4655,46 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         const fees = getActiveFees();
 
         if (botState.tradingMode === 'SIMULATION') {
-            // Simulation: synthetic slippage model (conservative estimate)
-            // Small orders on major pairs: ~0.01-0.05%, large orders on altcoins: up to 0.2%
-            const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(ticker);
-            const baseSlippageBps = isMajor ? 2 : 8; // 0.02% majors, 0.08% alts
-            const sizeMultiplier = Math.min(3, notional / 100); // scales up for larger orders
-            const slippagePct = (baseSlippageBps * Math.max(1, sizeMultiplier)) / 10000 * 100;
+            // A2: Order-book based slippage in SIM when SIMULATION_ACCURACY enabled
+            const simAccuracy = getFlag('SIMULATION_ACCURACY');
+            let slippagePct = 0;
+
+            if (simAccuracy && orderBookMicro?.analyze) {
+                try {
+                    const obAnalysis = orderBookMicro.analyze(ticker);
+                    if (obAnalysis && obAnalysis.spreadBps > 0) {
+                        const spreadPct = obAnalysis.spreadBps / 100; // bps → %
+                        // Slippage scales with order size relative to book depth
+                        const depthRatio = obAnalysis.askDepth > 0 ? (notional / obAnalysis.askDepth) : 0.1;
+                        const slippageFactor = Math.min(2.0, 0.3 + depthRatio * 1.5);
+                        slippagePct = spreadPct * slippageFactor;
+                    } else {
+                        slippagePct = 0.05; // Fallback: 0.05%
+                    }
+                } catch (e) {
+                    slippagePct = 0.05; // Fallback if order book unavailable
+                }
+            } else {
+                // Legacy synthetic slippage model
+                const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(ticker);
+                const baseSlippageBps = isMajor ? 2 : 8;
+                const sizeMult = Math.min(3, notional / 100);
+                slippagePct = (baseSlippageBps * Math.max(1, sizeMult)) / 10000 * 100;
+            }
+
+            // A4: Fill latency + partial fill simulation
+            if (simAccuracy) {
+                // 200-500ms random delay before fill confirmation
+                await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+
+                // 15% chance of partial fill (60-90% of requested qty)
+                if (Math.random() < 0.15) {
+                    const fillRatio = 0.60 + Math.random() * 0.30;
+                    notional *= fillRatio;
+                    addLog(`[SIM-FILL] Partial fill for ${ticker}: ${(fillRatio * 100).toFixed(0)}% of requested size ($${notional.toFixed(2)})`, 'INFO');
+                }
+            }
+
             avgPrice = price * (1 + slippagePct / 100);
             quantity = notional / avgPrice;
         } else {
@@ -4417,6 +4904,8 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 triggerValue: entryMeta.triggerValue || 0,
                 regime: entryMeta.regime || 'NORMAL',
                 entryRegime: entryMeta.regime || 'NORMAL', // Snapshot for mid-trade regime switching
+                entryType: entryMeta.entryType || 'STANDARD',
+                sniperExtensions: 0, // Phase 2B: momentum-ride extension count
                 mlInfluenced: entryMeta.mlInfluenced || false,
                 mlConfidence: entryMeta.mlConfidence || 0,
                 mlDirection: entryMeta.mlDirection || null,
@@ -4438,6 +4927,18 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 timestamp: Date.now(),
             });
         } catch (e) {}
+
+        // A3: Simulated native SL in SIM mode (mirrors real-mode SL behavior)
+        if (botState.tradingMode === 'SIMULATION' && getFlag('SIMULATION_ACCURACY')) {
+            const emergencySlPct = 0.05; // 5% emergency SL, same as real mode
+            const slPrice = parseFloat(avgPrice) * (1 - emergencySlPct);
+            simNativeStopOrders.set(ticker, {
+                stopPrice: slPrice,
+                volume: parseFloat(quantity),
+                placedAt: Date.now(),
+            });
+            addLog(`[SIM-SL] Placed simulated stop-loss for ${ticker} @ $${slPrice.toFixed(2)} (-${(emergencySlPct * 100).toFixed(1)}%)`, 'INFO');
+        }
 
         // Place native exchange stop-loss (survives bot crashes)
         if (botState.tradingMode !== 'SIMULATION' && getActiveExchangeId() === 'kraken') {
@@ -4477,8 +4978,37 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                     }
                 }
             } catch (slErr) {
-                addLog(`[NATIVE-SL] Failed to place stop-loss for ${ticker}: ${slErr.message}`, 'WARN');
-                // Non-fatal — software SL still active as fallback
+                // C3: Retry loop — never leave a position without SL protection
+                let retrySuccess = false;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        await new Promise(r => setTimeout(r, 2000));
+                        addLog(`[NATIVE-SL] Retry ${attempt}/3 for ${ticker}...`, 'WARN');
+                        const adapter = getExchangeAdapter();
+                        const slPrice = parseFloat(avgPrice) * (1 - 0.05);
+                        const retryResult = await adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId);
+                        if (retryResult.orderId) {
+                            nativeStopOrders.set(ticker, {
+                                orderId: retryResult.orderId,
+                                type: 'stop-loss',
+                                stopPrice: slPrice,
+                                volume: parseFloat(quantity),
+                                placedAt: Date.now(),
+                            });
+                            addLog(`[NATIVE-SL] Retry ${attempt} succeeded for ${ticker}: ${retryResult.orderId}`, 'INFO');
+                            retrySuccess = true;
+                            break;
+                        }
+                    } catch (retryErr) {
+                        addLog(`[NATIVE-SL] Retry ${attempt} failed for ${ticker}: ${retryErr.message}`, 'WARN');
+                    }
+                }
+                if (!retrySuccess) {
+                    addLog(`[NATIVE-SL] CRITICAL: All 3 retries failed for ${ticker} — NO exchange SL protection!`, 'ERROR');
+                    if (telegramEnabled()) {
+                        try { alertCircuitBreaker(`CRITICAL: Native SL failed for ${ticker} after 3 retries — software SL only`); } catch(e) {}
+                    }
+                }
             }
         }
 
@@ -4519,6 +5049,11 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
 const handleSell = async (position, price, reason) => {
     addLog(`Triggering SELL for ${position.ticker} @ ${price}. Reason: ${reason}`, 'SELL');
 
+    // A3: Remove simulated SL on SIM sell
+    if (botState.tradingMode === 'SIMULATION') {
+        simNativeStopOrders.delete(position.ticker);
+    }
+
     // Cancel native exchange stop-loss before selling (prevent double-sell)
     const nativeSL = nativeStopOrders.get(position.ticker);
     if (nativeSL && botState.tradingMode !== 'SIMULATION') {
@@ -4537,12 +5072,33 @@ const handleSell = async (position, price, reason) => {
         const fees = getActiveFees();
 
         if (botState.tradingMode === 'SIMULATION') {
-            // Simulation: synthetic sell-side slippage (selling into bids, slightly worse)
-            const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(position.ticker);
-            const sellNotional = position.quantity * price;
-            const baseSlippageBps = isMajor ? 3 : 10; // sell-side slightly worse than buy
-            const sizeMultiplier = Math.min(3, sellNotional / 100);
-            const slippagePct = (baseSlippageBps * Math.max(1, sizeMultiplier)) / 10000 * 100;
+            // A2: Order-book based sell slippage in SIM
+            const simAccuracy = getFlag('SIMULATION_ACCURACY');
+            let slippagePct = 0;
+
+            if (simAccuracy && orderBookMicro?.analyze) {
+                try {
+                    const obAnalysis = orderBookMicro.analyze(position.ticker);
+                    if (obAnalysis && obAnalysis.spreadBps > 0) {
+                        const spreadPct = obAnalysis.spreadBps / 100;
+                        const sellNotional = position.quantity * price;
+                        const depthRatio = obAnalysis.bidDepth > 0 ? (sellNotional / obAnalysis.bidDepth) : 0.1;
+                        const slippageFactor = Math.min(2.0, 0.35 + depthRatio * 1.5); // Sell slightly worse
+                        slippagePct = spreadPct * slippageFactor;
+                    } else {
+                        slippagePct = 0.06;
+                    }
+                } catch (e) {
+                    slippagePct = 0.06;
+                }
+            } else {
+                const isMajor = ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'BNBUSD'].includes(position.ticker);
+                const sellNotional = position.quantity * price;
+                const baseSlippageBps = isMajor ? 3 : 10;
+                const sizeMult = Math.min(3, sellNotional / 100);
+                slippagePct = (baseSlippageBps * Math.max(1, sizeMult)) / 10000 * 100;
+            }
+
             avgPrice = price * (1 - slippagePct / 100); // sells slip DOWN
         } else {
             // Real: route through exchange adapter
@@ -4757,6 +5313,13 @@ const handleSell = async (position, price, reason) => {
             } catch (e) {}
         }
 
+        // C6: Signal scanner feedback loop — record outcome for scanner weight adjustment
+        if (_signalScannerRef?.recordSignalOutcome) {
+            try {
+                _signalScannerRef.recordSignalOutcome(position.ticker, 'mixed', pnlPercent);
+            } catch (e) {}
+        }
+
         // Tier 3B: Record outcome for ML A/B Testing
         if (mlABTest) {
             try {
@@ -4895,6 +5458,9 @@ const ctx = {
     getActiveFees,
     getLatestPrice,
     priceVelocityTracker,
+    microBurstDetector,
+    regimeTransitionBoost,
+    hotTickers,
     timeOfDayTracker,
 
     // Exchange adapter

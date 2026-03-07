@@ -46,9 +46,14 @@ import { buildFeatureVector as sharedBuildFeatureVector, FEATURE_COUNT as SHARED
 // All timeframes for multi-TF training
 const ALL_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w'];
 
-// Fee constants (same as live system)
-const TRADING_FEE_PER_SIDE = 0.00075; // 0.075%
-const TRADING_FEE_ROUND_TRIP = 0.0015; // 0.15%
+// Fee constants — Kraken rates (primary exchange)
+const TRADING_FEE_PER_SIDE_TAKER = 0.0026;  // 0.26% taker
+const TRADING_FEE_PER_SIDE_MAKER = 0.0016;  // 0.16% maker
+const TRADING_FEE_ROUND_TRIP_TAKER = 0.0052; // 0.52% taker round-trip
+const TRADING_FEE_ROUND_TRIP_MAKER = 0.0032; // 0.32% maker round-trip
+// Default to taker fees (conservative) — override via config.useMakerFees
+let TRADING_FEE_PER_SIDE = TRADING_FEE_PER_SIDE_TAKER;
+let TRADING_FEE_ROUND_TRIP = TRADING_FEE_ROUND_TRIP_TAKER;
 
 // Slippage model: realistic spread cost per side
 const SLIPPAGE_PER_SIDE = 0.0005;  // 0.05% spread cost per side
@@ -616,9 +621,36 @@ function evaluateStrategies(candles, regime, state, minStrategiesRequired = 1, s
 }
 
 /**
+ * B1: Compute dynamic exit targets based on ATR volatility regime.
+ * Replicates beastMode's ATR-based exits for training engine parity.
+ *
+ * Volatility regimes:
+ *   HIGH_VOL (ATR/price > 3%): TP=6%, SL=3% — wide to capture big moves
+ *   NORMAL (1-3%):             TP=4%, SL=2% — standard crypto range
+ *   LOW_VOL (<1%):             TP=3%, SL=2% — tight in quiet markets
+ */
+function getDynamicExitTargets(candles) {
+  if (candles.length < 15) {
+    return { takeProfit: 0.04, stopLoss: -0.02, regime: 'NORMAL' };
+  }
+
+  const atr = calcATRFromCandles(candles, 14);
+  const price = candles[candles.length - 1].close || candles[candles.length - 1].c || 1;
+  const atrPct = (atr / price) * 100; // ATR as percentage of price
+
+  if (atrPct > 3) {
+    return { takeProfit: 0.06, stopLoss: -0.03, regime: 'HIGH_VOL' };
+  } else if (atrPct >= 1) {
+    return { takeProfit: 0.04, stopLoss: -0.02, regime: 'NORMAL' };
+  } else {
+    return { takeProfit: 0.03, stopLoss: -0.02, regime: 'LOW_VOL' };
+  }
+}
+
+/**
  * Check exit conditions for an open position (mirrors server.js exit logic).
  */
-function checkExitConditions(position, candles, exitParams = null) {
+function checkExitConditions(position, candles, exitParams = null, config = {}) {
   if (candles.length < MIN_CANDLES_REQUIRED) return null;
 
   const currentPrice = candles[candles.length - 1].close;
@@ -626,12 +658,22 @@ function checkExitConditions(position, candles, exitParams = null) {
   const holdHours = (candles[candles.length - 1].time - position.entryTime) / 3600000;
 
   // Use learned exit params if available, else defaults
-  const ep = exitParams || { stopLoss: -0.05, takeProfit: 0.04, maxHold: 48, trailingStart: 0.03, trailingGiveBack: 0.4 };
+  let ep = exitParams || { stopLoss: -0.05, takeProfit: 0.04, maxHold: 48, trailingStart: 0.03, trailingGiveBack: 0.4 };
 
-  // Stop loss (learned)
+  // B1: Override SL/TP with ATR-computed dynamic values when useDynamicExits is enabled
+  if (config.useDynamicExits) {
+    const dynTargets = getDynamicExitTargets(candles);
+    ep = {
+      ...ep,
+      stopLoss: dynTargets.stopLoss,
+      takeProfit: dynTargets.takeProfit,
+    };
+  }
+
+  // Stop loss (learned or dynamic)
   if (pnlPct <= ep.stopLoss) return `Stop loss: ${(ep.stopLoss * 100).toFixed(1)}%`;
 
-  // Take profit (learned)
+  // Take profit (learned or dynamic)
   if (pnlPct >= ep.takeProfit) return `Take profit: +${(ep.takeProfit * 100).toFixed(1)}%`;
 
   // Time exit (learned max hold hours)
@@ -1079,12 +1121,25 @@ export async function startTraining(config = {}) {
   const evaluationOnly = config.evaluationOnly || false;
   const frozenState = config.frozenState || null;
   const skipMTF = config.skipMTF || false;
-  const selectivity = { ...(SELECTIVITY_PRESETS[config.selectivity] || SELECTIVITY_PRESETS.normal) };
-  const strategyFilter = config.strategyFilter || null; // e.g. ['TREND'] for TREND-only
+  // Accept selectivity as string key OR object (regime training passes objects with regimeGate)
+  const selectivity = typeof config.selectivity === 'object' && config.selectivity !== null
+    ? { ...SELECTIVITY_PRESETS.normal, ...config.selectivity }
+    : { ...(SELECTIVITY_PRESETS[config.selectivity] || SELECTIVITY_PRESETS.normal) };
+  const DEFAULT_STRATEGY_FILTER = ['TREND', 'MOMENTUM'];
+  const strategyFilter = config.strategyFilter || DEFAULT_STRATEGY_FILTER;
   const targetWinRate = config.targetWinRate || 0;
   const aggressiveCompounding = config.aggressiveCompounding || false;
+  const useMakerFees = config.useMakerFees || false;
 
-  // When seeded, lower the quality gate threshold so trade memory filters take effect immediately
+  // Set fee tier based on config
+  if (useMakerFees) {
+    TRADING_FEE_PER_SIDE = TRADING_FEE_PER_SIDE_MAKER;
+    TRADING_FEE_ROUND_TRIP = TRADING_FEE_ROUND_TRIP_MAKER;
+  } else {
+    TRADING_FEE_PER_SIDE = TRADING_FEE_PER_SIDE_TAKER;
+    TRADING_FEE_ROUND_TRIP = TRADING_FEE_ROUND_TRIP_TAKER;
+  }
+
   // When seeded, lower the quality gate threshold so trade memory filters take effect immediately
   if (seedRunId) {
     selectivity.minMemoryTradesForGate = Math.min(selectivity.minMemoryTradesForGate, 30);
@@ -1330,7 +1385,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
       let exitP = state.tradeMemory?.exitParams;
       const regimeOverrides = state.tradeMemory?.regimeExitOverrides?.[position.regime];
       if (regimeOverrides) exitP = { ...exitP, ...regimeOverrides };
-      const exitReason = checkExitConditions(position, candles, exitP);
+      const exitReason = checkExitConditions(position, candles, exitP, { useDynamicExits: config.useDynamicExits || false });
       if (exitReason) {
         // Track exit reason
         const exitType = exitReason.startsWith('Stop loss') ? 'stopLoss'
@@ -1534,6 +1589,19 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         const avgVol = vols.reduce((a, b) => a + b, 0) / (vols.length || 1);
         const volRatio = avgVol > 0 ? ((candles[candles.length - 1].v || 0) / avgVol) * 25 : 50; // Scale to 0-100ish
         const indicatorValues = { tc: tcVal, momentum: momVal, breakout: bkoutVal, volRatio: Math.min(100, volRatio) };
+
+        // FEE-AWARE ENTRY FILTER — only enter when expected move > fees + slippage
+        // Require minimum 1% expected move to cover 0.52% taker fees + slippage
+        const minExpectedMove = TRADING_FEE_ROUND_TRIP + SLIPPAGE_PER_SIDE * 2 + 0.003; // ~1%
+        const atrForFilter = (() => {
+          try { return calculateATR(candles, 14); } catch { return 0; }
+        })();
+        const expectedMove = atrForFilter > 0 ? atrForFilter / currentPrice : 0;
+        if (expectedMove > 0 && expectedMove < minExpectedMove) {
+          if (!blockCounters.feeFilter) blockCounters.feeFilter = 0;
+          blockCounters.feeFilter++;
+          continue;
+        }
 
         // QUALITY FILTER — skip entries that historically lose
         let qualityMultiplier = 1.0;
@@ -1797,7 +1865,13 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
     strategy_weights_json: JSON.stringify(training.strategyBreakdown),
   });
 
+  // Fee breakdown
+  const avgFeePerTrade = training.stats.totalTrades > 0 ? training.stats.totalFees / training.stats.totalTrades : 0;
+  const feeToProfitRatio = training.stats.totalPnl !== 0 ? Math.abs(training.stats.totalFees / training.stats.totalPnl) : 0;
+  const feeMode = TRADING_FEE_PER_SIDE === TRADING_FEE_PER_SIDE_MAKER ? 'maker' : 'taker';
+
   console.log(`[Training] Run ${runId} COMPLETE: ${training.stats.totalTrades} trades, ${winRate.toFixed(1)}% win rate, $${training.stats.totalPnl.toFixed(2)} PnL, ${totalReturn.toFixed(1)}% return, Sharpe: ${sharpe.toFixed(2)}`);
+  console.log(`[Training] FEES (${feeMode}): total=$${training.stats.totalFees.toFixed(2)} avg=$${avgFeePerTrade.toFixed(2)}/trade fee:profit=${feeToProfitRatio.toFixed(2)}x`);
 
   // Log block-reason summary
   console.log(`[Training] BLOCK REASONS: entries=${blockCounters.totalEntries} attempts=${blockCounters.totalEntryAttempts} | noStrategy=${blockCounters.noStrategy} mtf=${blockCounters.mtfBlock} quality=${blockCounters.qualityFilter} confidence=${blockCounters.confidenceFloor} regime=${blockCounters.regimeGate} posSize=${blockCounters.positionTooSmall} | cooldown=${blockCounters.entryCooldown} noSlots=${blockCounters.noOpenSlots} noCash=${blockCounters.noCash} paused=${blockCounters.paused}`);

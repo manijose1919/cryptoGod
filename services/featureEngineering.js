@@ -9,7 +9,22 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-export const FEATURE_COUNT = 103;
+export const FEATURE_COUNT = 109;
+
+// B2: Features 0-81 are always reliably populated from candle/indicator data.
+// Features 82-102 depend on external APIs (on-chain, market intel, exchange enrichment)
+// and are often median-imputed, which can corrupt ML predictions.
+// Features 103-108 are surge-specific (Phase 5A) — locally computed, always reliable.
+export const RELIABLE_FEATURE_COUNT = 88;
+
+/**
+ * B2: Truncate a feature vector to only the reliable features (0-81).
+ * Prevents median-imputed external-API features from corrupting tree predictions.
+ */
+export function truncateToReliableFeatures(features) {
+  if (!features || features.length <= RELIABLE_FEATURE_COUNT) return features;
+  return features.slice(0, RELIABLE_FEATURE_COUNT);
+}
 
 // Fix #27 (Tier 3): Rolling median tracker for feature imputation
 // Replaces zero-fill for missing features with historical median values,
@@ -183,6 +198,13 @@ export function getFeatureNames() {
     'tvl_change_defi',
     'derivatives_basis',
     'exchange_volume_divergence',
+    // Surge-specific features (6) — Phase 5A
+    'price_velocity',
+    'price_acceleration',
+    'micro_burst_active',
+    'candlestick_signal',
+    'surge_type',
+    'bars_since_surge',
   ];
 }
 
@@ -320,6 +342,21 @@ export function buildFeatureVector(ticker, candles, options = {}) {
       );
       exchangeEnrich.forEach(f => features[idx++] = f);
     } catch (eeErr) {
+      while (idx < 103) features[idx++] = 0;
+    }
+
+    // Surge-specific features (6) — Phase 5A
+    try {
+      const surge = options.surgeData || {};
+      features[idx++] = clamp(surge.priceVelocity || 0, -5, 5) / 5;         // price_velocity (normalized -1 to 1)
+      features[idx++] = clamp(surge.priceAcceleration || 0, -5, 5) / 5;     // price_acceleration
+      features[idx++] = surge.microBurstActive ? 1 : 0;                      // micro_burst_active (binary)
+      features[idx++] = clamp(surge.candlestickSignal || 0, -1, 1);          // candlestick_signal (-1 to 1)
+      // surge_type encoded: 0=none, 0.33=DIP_BUY, 0.66=V_SHAPE, 1.0=TREND_RIDE
+      const surgeTypeMap = { 'DIP_BUY': 0.33, 'V_SHAPE': 0.66, 'TREND_RIDE': 1.0 };
+      features[idx++] = surgeTypeMap[surge.surgeType] || 0;                   // surge_type
+      features[idx++] = clamp((surge.barsSinceSurge || 0) / 60, 0, 1);       // bars_since_surge (normalized, 60 = max)
+    } catch (surgeErr) {
       while (idx < FEATURE_COUNT) features[idx++] = 0;
     }
 
@@ -349,6 +386,7 @@ export function buildFeatureVector(ticker, candles, options = {}) {
         onChain: features.slice(83, 91),
         marketIntelligence: features.slice(91, 97),
         exchangeEnrichment: features.slice(97, 103),
+        surge: features.slice(103, 109),
       }
     };
   } catch (err) {

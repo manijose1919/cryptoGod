@@ -27,7 +27,11 @@ import {
   getTrainingMLSamples,
   insertMLFeatures,
   getHistoricalCandleRange,
+  getHistoricalCandles,
 } from './database.js';
+
+// Minimum trades for a fold to count as valid (not "insufficient data")
+const MIN_FOLD_TRADES = 5;
 
 // Active walk-forward state
 let activeWF = null;
@@ -341,10 +345,41 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
       const testReturn = testPnl / initialCash;
       const overfittingRatio = trainReturn > 0 ? testReturn / trainReturn : (testReturn >= 0 ? 1 : 0);
 
+      // Min trade threshold: folds with <5 trades flagged as "insufficient"
+      const insufficient = testTrades < MIN_FOLD_TRADES;
+
+      // Regime distribution: count candles per regime in test window
+      let regimeDistribution = {};
+      try {
+        const testCandles = getHistoricalCandles(tickers[0], '1h', fw.testStart, fw.testEnd, 10000);
+        if (testCandles.length >= 21) {
+          const regimeCounts = { STRONG_UP: 0, UP: 0, SIDEWAYS: 0, DOWN: 0, STRONG_DOWN: 0 };
+          for (let ci = 21; ci < testCandles.length; ci++) {
+            const window = testCandles.slice(Math.max(0, ci - 21), ci + 1);
+            const closes = window.map(c => c.close);
+            const pctChange = ((closes[closes.length - 1] - closes[0]) / closes[0]) * 100;
+            let regime = 'SIDEWAYS';
+            if (pctChange > 10) regime = 'STRONG_UP';
+            else if (pctChange > 3) regime = 'UP';
+            else if (pctChange < -10) regime = 'STRONG_DOWN';
+            else if (pctChange < -3) regime = 'DOWN';
+            regimeCounts[regime]++;
+          }
+          const total = Object.values(regimeCounts).reduce((s, v) => s + v, 0);
+          if (total > 0) {
+            for (const [r, c] of Object.entries(regimeCounts)) {
+              regimeDistribution[r] = Math.round((c / total) * 100);
+            }
+          }
+        }
+      } catch { /* non-critical */ }
+
       activeWF.folds[i].testPnl = testPnl;
       activeWF.folds[i].testTrades = testTrades;
       activeWF.folds[i].testWinRate = testWinRate;
       activeWF.folds[i].overfittingRatio = overfittingRatio;
+      activeWF.folds[i].insufficient = insufficient;
+      activeWF.folds[i].regimeDistribution = regimeDistribution;
       activeWF.folds[i].status = 'completed';
 
       updateWalkForwardFold(foldId, {
@@ -357,12 +392,14 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
         status: 'completed',
       });
 
-      // Accumulate OOS stats
-      oosTradesTotal += testTrades;
-      if (testWinRate > 0 && testTrades > 0) {
-        oosWinsTotal += Math.round(testTrades * testWinRate / 100);
+      // Accumulate OOS stats (skip insufficient folds)
+      if (!insufficient) {
+        oosTradesTotal += testTrades;
+        if (testWinRate > 0 && testTrades > 0) {
+          oosWinsTotal += Math.round(testTrades * testWinRate / 100);
+        }
+        oosPnlTotal += testPnl;
       }
-      oosPnlTotal += testPnl;
 
       // Track best fold
       if (testPnl > bestTestPnl) {
@@ -370,7 +407,7 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
         bestFoldId = foldId;
       }
 
-      // Use this fold's training run as seed for next fold
+      // Use this fold's training run as seed for next fold (rolling seed)
       previousRunId = trainResult.runId;
 
       activeWF.completedFolds = i + 1;
@@ -379,6 +416,7 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
         winRate: oosTradesTotal > 0 ? (oosWinsTotal / oosTradesTotal) * 100 : 0,
         totalPnl: oosPnlTotal,
         sharpe: 0, // Calculated at end
+        insufficientFolds: activeWF.folds.filter(f => f.insufficient).length,
       };
 
       updateWalkForwardRun(wfId, {
@@ -387,7 +425,8 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
         best_fold_id: bestFoldId,
       });
 
-      console.log(`[WalkForward] Fold ${i + 1} complete: Train $${trainPnl.toFixed(2)} (${trainWinRate.toFixed(1)}% WR), Test $${testPnl.toFixed(2)} (${testWinRate.toFixed(1)}% WR), OOS Ratio: ${overfittingRatio.toFixed(2)}`);
+      const regimeStr = Object.entries(regimeDistribution).filter(([,v]) => v > 0).map(([r,v]) => `${r}:${v}%`).join(' ') || 'N/A';
+      console.log(`[WalkForward] Fold ${i + 1} complete: Train $${trainPnl.toFixed(2)} (${trainWinRate.toFixed(1)}% WR), Test $${testPnl.toFixed(2)} (${testWinRate.toFixed(1)}% WR), OOS Ratio: ${overfittingRatio.toFixed(2)}${insufficient ? ' [INSUFFICIENT]' : ''} Regimes: ${regimeStr}`);
 
     } catch (err) {
       console.error(`[WalkForward] Fold ${i + 1} failed: ${err.message}`);
@@ -461,6 +500,8 @@ export function getWalkForwardStatus() {
       trainWinRate: f.trainWinRate,
       testWinRate: f.testWinRate,
       overfittingRatio: f.overfittingRatio,
+      insufficient: f.insufficient || false,
+      regimeDistribution: f.regimeDistribution || {},
       status: f.status,
     })),
     aggregateOOS: activeWF.aggregateOOS,

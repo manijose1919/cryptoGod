@@ -292,6 +292,39 @@ export class SignalScanner {
     this.scanCount = 0;
     this.signals = [];
     this.lastScanResults = {};                 // ticker -> latest analysis
+
+    // C6: Signal outcome tracking for feedback loop
+    this.signalOutcomes = new Map();           // ticker -> { wins, losses, totalPnl }
+  }
+
+  /**
+   * C6: Record trade outcome for a ticker to track signal quality
+   */
+  recordSignalOutcome(ticker, timeframe, pnl) {
+    if (!this.signalOutcomes.has(ticker)) {
+      this.signalOutcomes.set(ticker, { wins: 0, losses: 0, totalPnl: 0 });
+    }
+    const stats = this.signalOutcomes.get(ticker);
+    if (pnl >= 0) stats.wins++;
+    else stats.losses++;
+    stats.totalPnl += pnl;
+  }
+
+  /**
+   * C6: Get signal outcome stats for dashboard
+   */
+  getSignalStats() {
+    const stats = {};
+    for (const [ticker, data] of this.signalOutcomes) {
+      const total = data.wins + data.losses;
+      stats[ticker] = {
+        ...data,
+        total,
+        winRate: total > 0 ? (data.wins / total * 100).toFixed(1) + '%' : 'N/A',
+        avgPnl: total > 0 ? (data.totalPnl / total).toFixed(2) : '0',
+      };
+    }
+    return stats;
   }
 
   start() {
@@ -444,5 +477,31 @@ export class SignalScanner {
         ])
       ),
     };
+  }
+
+  /**
+   * Phase 3B: Fast-track scan — evaluates a single ticker on 1m timeframe only.
+   * ~5x faster than full 5-timeframe scan. Called when velocity > 0.5%/min.
+   * Returns { shouldEnter, confidence, pattern, score }
+   */
+  async fastScan(ticker) {
+    try {
+      const candles = await this.fetchMarketData(ticker, '1m');
+      if (!candles || candles.length < 50) return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };
+
+      const analysis = analyzeCandles(candles, ticker);
+      if (!analysis || !analysis.signal) return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };
+
+      const shouldEnter = analysis.signal === 'BUY' && analysis.score >= MIN_SCORE_BUY;
+      return {
+        shouldEnter,
+        confidence: Math.min(100, Math.round(analysis.score * 10)),
+        pattern: analysis.details?.[0] || null,
+        score: analysis.score,
+        signal: analysis.signal,
+      };
+    } catch (e) {
+      return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };
+    }
   }
 }

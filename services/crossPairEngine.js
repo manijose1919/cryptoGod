@@ -12,7 +12,7 @@ import {
   getTrainingStatus,
   getLearnedState,
 } from './historicalTrainingEngine.js';
-import { getDb } from './database.js';
+import { getDb, getTrainingRun } from './database.js';
 
 let state = {
   running: false,
@@ -50,6 +50,8 @@ export async function startCrossPairValidation({
   initialCash = 10000,
   strategyFilter,
   selectivity,
+  startTime,
+  endTime,
 }) {
   if (state.running) throw new Error('Cross-pair validation already running');
   if (!trainPairs || trainPairs.length < 1) throw new Error('Need at least 1 training pair');
@@ -74,7 +76,7 @@ export async function startCrossPairValidation({
     aborted: false,
   };
 
-  runValidation({ trainPairs, testPairs, seedRunId, initialCash, strategyFilter, selectivity })
+  runValidation({ trainPairs, testPairs, seedRunId, initialCash, strategyFilter, selectivity, startTime, endTime })
     .catch(err => {
       state.error = err.message;
       state.running = false;
@@ -83,7 +85,19 @@ export async function startCrossPairValidation({
   return { trainPairs, testPairs };
 }
 
-async function runValidation({ trainPairs, testPairs, seedRunId, initialCash, strategyFilter, selectivity }) {
+async function runValidation({ trainPairs, testPairs, seedRunId, initialCash, strategyFilter, selectivity, startTime, endTime }) {
+  // If seedRunId provided but no time range, inherit from seed run config
+  if (seedRunId && !startTime) {
+    try {
+      const seedRun = getTrainingRun(seedRunId);
+      const seedConfig = JSON.parse(seedRun?.config_json || '{}');
+      if (seedConfig.startTime) startTime = seedConfig.startTime;
+      if (seedConfig.endTime) endTime = seedConfig.endTime;
+    } catch (e) {
+      console.warn('[CrossPair] Could not read seed run config:', e.message);
+    }
+  }
+
   // Phase 1: Train on training pairs
   state.phase = 'training';
   const trainResult = await startTraining({
@@ -92,6 +106,8 @@ async function runValidation({ trainPairs, testPairs, seedRunId, initialCash, st
     seedRunId,
     strategyFilter,
     selectivity,
+    startTime,
+    endTime,
     _isSubRun: true,
   });
   state.trainRunId = trainResult.runId;
@@ -118,6 +134,8 @@ async function runValidation({ trainPairs, testPairs, seedRunId, initialCash, st
     frozenState: learnedState,
     strategyFilter,
     selectivity,
+    startTime,
+    endTime,
     _isSubRun: true,
   });
   state.testRunId = testResult.runId;
