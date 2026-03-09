@@ -3077,6 +3077,17 @@ async function tradingBotLoop() {
 
                 if (score.compositeScore > tickerMinScore) candidates.push({ ticker, score, candles, sniperCandidate });
 
+                // Debug: log top scores to understand why candidates=0
+                if (!tradingBotLoop._scoreLog) tradingBotLoop._scoreLog = [];
+                tradingBotLoop._scoreLog.push({ t: ticker, s: score.compositeScore, m: tickerMinScore });
+                if (tradingBotLoop._scoreLog.length >= scanBatch.length) {
+                    if (tradingBotLoop._diagCount && tradingBotLoop._diagCount % 10 === 1) {
+                        const sorted = tradingBotLoop._scoreLog.sort((a, b) => b.s - a.s).slice(0, 5);
+                        console.log(`[BotLoop:Scores] Top scores: ${sorted.map(x => `${x.t}:${x.s}(min=${x.m})`).join(', ')}`);
+                    }
+                    tradingBotLoop._scoreLog = [];
+                }
+
                 // === SWING STRATEGY: 4h + 1D candle fetch and evaluation ===
                 const now4h = Date.now();
                 // 4h candles for swing trading (cache 3 hours)
