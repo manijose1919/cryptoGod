@@ -3995,6 +3995,15 @@ async function tradingBotLoop() {
                             { strategySignals, geneticSignals, onChainData, marketIntelligence, surgeData: _surgeMLData }
                         );
 
+                        // SIM mode: never let ML gatekeeper block — switch to advisory
+                        // ML predictions are still recorded for accuracy tracking, but don't prevent trades
+                        if (isSim && pipelineResult && !pipelineResult.proceed) {
+                            pipelineResult.proceed = true;
+                            pipelineResult.sizeMultiplier = Math.max(0.5, pipelineResult.sizeMultiplier || 0.5);
+                            pipelineResult.reason += ' [SIM: overridden to ADVISORY]';
+                            pipelineResult.tier = 'SIM_ADVISORY';
+                        }
+
                         // Record ML prediction for A/B testing (champion vs challenger)
                         if (pipelineResult && mlABTest) {
                             try {
