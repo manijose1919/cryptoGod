@@ -2273,14 +2273,19 @@ async function handlePartialSell(position, price, fraction, reason) {
 
 async function checkTickExit(ticker, price) {
     const position = portfolio.positions[ticker];
-    if (!position || position._exitPending) return;
+    if (!position || position._exitPending || position._partialSellPending) return;
+
+    // Validate position has valid data before processing
+    if (!position.openPrice || isNaN(position.openPrice) || position.openPrice <= 0) return;
+    if (!price || isNaN(price) || price <= 0) return;
+    if (!position.quantity || position.quantity <= 0) return;
 
     const levels = exitLevelCache.get(ticker);
     if (!levels) return; // No cached levels yet (first bot loop hasn't run)
 
     // Update tracking prices on every tick
     if (price > (position.highestPrice || 0)) position.highestPrice = price;
-    if (price < (position.lowestPrice || Infinity)) position.lowestPrice = price;
+    if (price < (position.lowestPrice || Number.MAX_SAFE_INTEGER)) position.lowestPrice = price;
     position.currentPrice = price;
 
     // --- STAGED PARTIAL EXITS ---
@@ -2299,6 +2304,7 @@ async function checkTickExit(ticker, price) {
     // Stage 1: exit 25% at 1.0× ATR profit (if not already done)
     if (!skipStaged && !position._stage1Done && levels.stage1Price && price >= levels.stage1Price) {
         position._stage1Done = true;
+        position._partialSellPending = true; // Block concurrent exits during partial sell
         try {
             const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
             await handlePartialSell(position, price, 0.25,
@@ -2306,6 +2312,8 @@ async function checkTickExit(ticker, price) {
         } catch (e) {
             console.error(`[RT-STAGE1] Failed for ${ticker}: ${e.message}`);
             position._stage1Done = false;
+        } finally {
+            if (portfolio.positions[ticker]) position._partialSellPending = false;
         }
         return; // Don't check further exits this tick
     }
@@ -2313,6 +2321,7 @@ async function checkTickExit(ticker, price) {
     // Stage 2: exit 35% at 2.0× ATR profit (of remaining position)
     if (!skipStaged && position._stage1Done && !position._stage2Done && levels.stage2Price && price >= levels.stage2Price) {
         position._stage2Done = true;
+        position._partialSellPending = true;
         // 35% of original = ~46.7% of remaining (after 25% was sold)
         const stage2Fraction = Math.min(0.467, 0.35 / (1 - 0.25));
         try {
@@ -2322,6 +2331,8 @@ async function checkTickExit(ticker, price) {
         } catch (e) {
             console.error(`[RT-STAGE2] Failed for ${ticker}: ${e.message}`);
             position._stage2Done = false;
+        } finally {
+            if (portfolio.positions[ticker]) position._partialSellPending = false;
         }
         return;
     }
@@ -2351,7 +2362,13 @@ async function checkTickExit(ticker, price) {
         if (position._stage1Done && position._stage2Done) {
             effectiveTrailPct *= 0.6; // 40% tighter trail on runner (already booked 60%)
         }
-        const trailLevel = position.highestPrice * (1 - effectiveTrailPct / 100);
+        let trailLevel = position.highestPrice * (1 - effectiveTrailPct / 100);
+        // After stage2 done (60% already sold), runner trail must never go below breakeven
+        // This ensures the remaining 40% is pure profit or zero — never a loss
+        if (position._stage2Done && position.openPrice > 0) {
+            const breakEvenFloor = position.openPrice * 1.001; // Just above entry
+            if (trailLevel < breakEvenFloor) trailLevel = breakEvenFloor;
+        }
         if (price <= trailLevel) {
             const isRunner = position._stage1Done && position._stage2Done;
             exitReason = `[RT-TRAIL${isRunner ? '-RUNNER' : ''}] price ${price.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${position.highestPrice.toFixed(4)})`;
@@ -2502,11 +2519,14 @@ async function checkTickExit(ticker, price) {
     }
 
     if (exitReason) {
+        // Set _exitPending IMMEDIATELY to prevent double-sells from concurrent ticks
+        // (another WebSocket tick could enter checkTickExit before handleSell completes)
         position._exitPending = true;
         try {
             await handleSell(position, price, exitReason);
         } catch (err) {
             console.error(`[RT-EXIT] Failed for ${ticker}: ${err.message}`);
+            // Only clear flag if position still exists (wasn't removed by handleSell)
             if (portfolio.positions[ticker]) portfolio.positions[ticker]._exitPending = false;
         }
         return;
@@ -2747,6 +2767,17 @@ async function tradingBotLoop() {
                     if (Math.random() < 0.1) {
                         addLog(`[CANDLE-GAP] ${ticker}: gap ${(actualGap / 60000).toFixed(1)}min (expected ${(expectedInterval / 60000).toFixed(1)}min) — skipping stale data`, 'WARN');
                     }
+                }
+            }
+        }
+
+        // C8b: Absolute staleness check — reject candle data older than 3min for 1m timeframe
+        // This catches cases where the gap check above passes but data is simply old (e.g., WS reconnect lag)
+        for (const [ticker, candles] of marketDataMap) {
+            if (!positionTickers.includes(ticker) && candles.length > 0) { // Only block entries, not position monitoring
+                const lastCandle = candles[candles.length - 1];
+                if (lastCandle.t && (Date.now() - lastCandle.t) > 180_000) { // 3 min stale
+                    marketDataMap.delete(ticker); // Remove from entry candidates
                 }
             }
         }
@@ -3108,11 +3139,14 @@ async function tradingBotLoop() {
             tradingBotLoop._statusLogTime = Date.now();
             const posCount = Object.keys(portfolio.positions).length;
             const drawdownPct = peakValue > 0 ? ((peakValue - totalValue) / peakValue * 100).toFixed(2) : '0.00';
-            // Calculate aggregate unrealized PnL
+            // Calculate aggregate unrealized PnL (net of estimated round-trip fees)
             let unrealizedPnl = 0;
+            const _fees = getActiveFees();
             for (const pos of Object.values(portfolio.positions)) {
                 if (pos.currentPrice && pos.openPrice) {
-                    unrealizedPnl += (pos.currentPrice - pos.openPrice) * pos.quantity;
+                    const gross = (pos.currentPrice - pos.openPrice) * pos.quantity;
+                    const feeEst = (pos.openPrice * pos.quantity + pos.currentPrice * pos.quantity) * _fees.perSide;
+                    unrealizedPnl += gross - feeEst;
                 }
             }
             const sessionTrades = portfolio.tradeLog?.length || 0;
@@ -3122,15 +3156,24 @@ async function tradingBotLoop() {
         }
 
         // --- ENTRY LOGIC ---
-        // Determine current market regime for strategy filtering
+        // Determine current market regime — prefer BTC as primary market regime indicator
+        // BTC leads the crypto market; using a random ticker's candles can give misleading regime signals
         const currentRegime = (() => {
             try {
+                // Primary: use BTC candles (market leader — most reliable regime signal)
+                const btcCandles = marketDataMap.get('BTCUSD');
+                if (btcCandles && btcCandles.length >= 35) {
+                    return getMarketRegime(btcCandles, 'BTCUSD') || 'UNKNOWN';
+                }
+                // Fallback: ETH or first available
+                const ethCandles = marketDataMap.get('ETHUSD');
+                if (ethCandles && ethCandles.length >= 35) {
+                    return getMarketRegime(ethCandles, 'ETHUSD') || 'UNKNOWN';
+                }
                 const firstTicker = marketDataMap.keys().next().value;
                 const firstCandles = firstTicker ? marketDataMap.get(firstTicker) : null;
-                if (firstCandles) {
-                    // Pass ticker to enable 30s regime cache + populate beastMode status
-                    const regime = getMarketRegime(firstCandles, firstTicker);
-                    return regime || 'UNKNOWN';
+                if (firstCandles && firstCandles.length >= 35) {
+                    return getMarketRegime(firstCandles, firstTicker) || 'UNKNOWN';
                 }
             } catch (e) {}
             return 'UNKNOWN';
@@ -3263,6 +3306,24 @@ async function tradingBotLoop() {
                 const candles = marketDataMap.get(ticker);
                 if (!candles) { _debugSkips.noCandles++; continue; }
 
+                // Re-entry cooldown: skip tickers that recently had a losing exit (before scoring)
+                if (tradingBotLoop._reEntryCooldowns?.has(ticker)) {
+                    const cooldownExpiry = tradingBotLoop._reEntryCooldowns.get(ticker);
+                    if (Date.now() < cooldownExpiry) {
+                        continue; // Skip this ticker entirely during cooldown
+                    } else {
+                        tradingBotLoop._reEntryCooldowns.delete(ticker);
+                    }
+                }
+
+                // Regime transition cooldown: wait 3 minutes after regime change before new entries
+                if (botState._regimeChangeTime && botState.tradingMode !== 'SIMULATION') {
+                    const sinceRegimeChange = Date.now() - botState._regimeChangeTime;
+                    if (sinceRegimeChange < 3 * 60 * 1000) {
+                        continue; // Skip all candidates during regime transition cooldown
+                    }
+                }
+
                 // Liquidity gate: skip low-volume garbage tokens
                 const liq = checkLiquidity(candles, ticker);
                 if (!liq.pass) {
@@ -3289,24 +3350,6 @@ async function tradingBotLoop() {
                         : 0;
                     score.compositeScore += mtfBoost;
                     score.factors.mtfBoost = mtfBoost;
-                }
-
-                // Re-entry cooldown: skip tickers that recently had a losing exit (before scoring)
-                if (tradingBotLoop._reEntryCooldowns?.has(ticker)) {
-                    const cooldownExpiry = tradingBotLoop._reEntryCooldowns.get(ticker);
-                    if (Date.now() < cooldownExpiry) {
-                        continue; // Skip this ticker entirely during cooldown
-                    } else {
-                        tradingBotLoop._reEntryCooldowns.delete(ticker);
-                    }
-                }
-
-                // Regime transition cooldown: wait 3 minutes after regime change before new entries
-                if (botState._regimeChangeTime && botState.tradingMode !== 'SIMULATION') {
-                    const sinceRegimeChange = Date.now() - botState._regimeChangeTime;
-                    if (sinceRegimeChange < 3 * 60 * 1000) {
-                        continue; // Skip all candidates during regime transition cooldown
-                    }
                 }
 
                 // Per-ticker cooldown raises threshold after consecutive losses
@@ -5557,7 +5600,26 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
     }
 };
 
+// Cascade sell throttle — stagger rapid-fire sells to avoid market impact
+// When >2 positions try to sell within 3 seconds, add brief delays between them
+let _lastSellTime = 0;
+let _sellsInWindow = 0;
+const SELL_WINDOW_MS = 3000;
+
 const handleSell = async (position, price, reason) => {
+    // Throttle cascade sells — if 3+ sells in 3s, stagger by 500ms each
+    const now = Date.now();
+    if (now - _lastSellTime < SELL_WINDOW_MS) {
+        _sellsInWindow++;
+        if (_sellsInWindow > 2 && botState.tradingMode !== 'SIMULATION') {
+            const stagger = (_sellsInWindow - 2) * 500; // 500ms, 1000ms, 1500ms...
+            await new Promise(r => setTimeout(r, Math.min(stagger, 3000)));
+        }
+    } else {
+        _sellsInWindow = 0;
+    }
+    _lastSellTime = Date.now();
+
     addLog(`Triggering SELL for ${position.ticker} @ ${price}. Reason: ${reason}`, 'SELL');
 
     // A3: Remove simulated SL on SIM sell

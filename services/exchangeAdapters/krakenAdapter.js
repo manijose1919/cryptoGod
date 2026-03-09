@@ -48,19 +48,42 @@ function fromKrakenPair(krakenPair) {
     return pair;
 }
 
-async function krakenPublicRequest(endpoint, params = {}) {
+async function krakenPublicRequest(endpoint, params = {}, maxRetries = 3) {
     const url = new URL(`${KRAKEN_BASE_URL}/0/public/${endpoint}`);
     for (const [key, val] of Object.entries(params)) {
         url.searchParams.set(key, String(val));
     }
 
-    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
-    const data = await response.json();
-
-    if (data.error && data.error.length > 0) {
-        throw new Error(`Kraken API Error: ${data.error.join(', ')}`);
+    let lastError;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            const response = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
+            if (response.status === 429) {
+                // Rate limited — backoff and retry
+                const delay = Math.pow(2, attempt + 1) * 1000;
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            if (response.status >= 500 && attempt < maxRetries - 1) {
+                // Server error — retry with backoff
+                const delay = Math.pow(2, attempt) * 500 + Math.random() * 200;
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            const data = await response.json();
+            if (data.error && data.error.length > 0) {
+                throw new Error(`Kraken API Error: ${data.error.join(', ')}`);
+            }
+            return data.result;
+        } catch (e) {
+            lastError = e;
+            if (attempt < maxRetries - 1) {
+                const delay = Math.pow(2, attempt) * 500 + Math.random() * 200;
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
     }
-    return data.result;
+    throw lastError;
 }
 
 function createKrakenSignature(path, nonce, postData, secret) {

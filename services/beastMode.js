@@ -46,7 +46,7 @@ export function setRoundTripFee(fee) {
 
 // Per-ticker regime cache
 const regimeCache = new Map(); // ticker -> { regime, timestamp, ema10, ema30, rsi, prevRegime, ... }
-const REGIME_CACHE_TTL = 60000; // 60s cache - prevents regime ping-ponging
+const REGIME_CACHE_TTL = 20000; // 20s cache — faster regime detection (was 60s — too slow for 1m candles)
 
 // Regime transition history — stores last 5 regimes per ticker for transition detection
 const regimeHistory = new Map(); // ticker -> [{ regime, timestamp, ema10Slope }]
@@ -112,11 +112,17 @@ function calcATR(candles, period = 14) {
  * @returns {'UPTREND' | 'SIDEWAYS' | 'DOWNTREND'}
  */
 export function getMarketRegime(candles, ticker = '') {
-  // Check cache
+  // Check cache — invalidate early if price moved significantly (>1.5% from cached price)
   if (ticker) {
     const cached = regimeCache.get(ticker);
     if (cached && Date.now() - cached.timestamp < REGIME_CACHE_TTL) {
-      return cached.regime;
+      const currentPrice = candles.length > 0 ? candles[candles.length - 1].c : 0;
+      const cachedPrice = cached.ema10 || 0;
+      const priceDrift = cachedPrice > 0 ? Math.abs((currentPrice - cachedPrice) / cachedPrice) : 0;
+      if (priceDrift < 0.015) { // < 1.5% drift — cache still valid
+        return cached.regime;
+      }
+      // >1.5% price move — force re-detect (flash crash / surge)
     }
   }
 
