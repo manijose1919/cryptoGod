@@ -3291,30 +3291,21 @@ async function tradingBotLoop() {
                     score.factors.mtfBoost = mtfBoost;
                 }
 
-                // Re-entry cooldown: skip tickers that recently had a losing exit
-                if (entryStrategy && tradingBotLoop._reEntryCooldowns?.has(ticker)) {
+                // Re-entry cooldown: skip tickers that recently had a losing exit (before scoring)
+                if (tradingBotLoop._reEntryCooldowns?.has(ticker)) {
                     const cooldownExpiry = tradingBotLoop._reEntryCooldowns.get(ticker);
                     if (Date.now() < cooldownExpiry) {
-                        logThought({ type: 'SKIP', ticker, action: 'REENTRY_COOLDOWN',
-                            confidence: score.compositeScore,
-                            reason: `Lost on ${ticker} recently — ${((cooldownExpiry - Date.now()) / 60000).toFixed(0)}min cooldown remaining`,
-                            regime: currentRegime });
-                        entryStrategy = null;
+                        continue; // Skip this ticker entirely during cooldown
                     } else {
                         tradingBotLoop._reEntryCooldowns.delete(ticker);
                     }
                 }
 
                 // Regime transition cooldown: wait 3 minutes after regime change before new entries
-                // Fresh regime transitions produce noisy signals — let the dust settle
-                if (entryStrategy && botState._regimeChangeTime && botState.tradingMode !== 'SIMULATION') {
+                if (botState._regimeChangeTime && botState.tradingMode !== 'SIMULATION') {
                     const sinceRegimeChange = Date.now() - botState._regimeChangeTime;
                     if (sinceRegimeChange < 3 * 60 * 1000) {
-                        logThought({ type: 'SKIP', ticker, action: 'REGIME_COOLDOWN',
-                            confidence: score.compositeScore,
-                            reason: `Regime changed ${(sinceRegimeChange / 1000).toFixed(0)}s ago — waiting for confirmation (3min cooldown)`,
-                            regime: currentRegime });
-                        entryStrategy = null;
+                        continue; // Skip all candidates during regime transition cooldown
                     }
                 }
 
