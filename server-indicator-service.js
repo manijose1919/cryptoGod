@@ -741,14 +741,58 @@ export function calculateOpportunityScore(candles, ticker, options = {}) {
     // Factor 6 (Phase 1D): Candlestick pattern signal
     const candlestickScore = scoreCandlestickPatterns(candles);
 
-    // Combine factors — 6 components with candlestick taking 10% (5% from trend + 5% from momentum)
-    const weights = {
-        trendAlignment: 0.25,       // was 0.30
-        momentumStrength: 0.20,     // was 0.25
+    // Factor 7: Mean-reversion signal (RSI extremes in SIDEWAYS = high-probability bounce)
+    const closePrices = candles.map(c => c.c);
+    const rsiValues = calculateRsi(closePrices, 14);
+    const currentRsi = rsiValues[rsiValues.length - 1] ?? 50;
+    let meanReversionScore = 0;
+    if (regime.trend === 'SIDEWAYS' || regime.trend === 'UNKNOWN') {
+        // Oversold bounce: RSI < 30 = strong buy signal in range
+        if (currentRsi < 25) meanReversionScore = 95;
+        else if (currentRsi < 30) meanReversionScore = 85;
+        else if (currentRsi < 35) meanReversionScore = 70;
+        else if (currentRsi < 40) meanReversionScore = 55;
+        // Also reward Bollinger Band touches (price near lower band)
+        if (closePrices.length >= 20) {
+            const bbPeriod = 20;
+            const bbSlice = closePrices.slice(-bbPeriod);
+            const bbMean = bbSlice.reduce((a, b) => a + b, 0) / bbPeriod;
+            const bbStd = Math.sqrt(bbSlice.reduce((s, v) => s + (v - bbMean) ** 2, 0) / bbPeriod);
+            const lowerBand = bbMean - 2 * bbStd;
+            const upperBand = bbMean + 2 * bbStd;
+            const bandWidth = upperBand - lowerBand;
+            if (bandWidth > 0) {
+                const lastClose = closePrices[closePrices.length - 1];
+                const bandPosition = (lastClose - lowerBand) / bandWidth;
+                if (bandPosition < 0.1) meanReversionScore = Math.max(meanReversionScore, 90);
+                else if (bandPosition < 0.2) meanReversionScore = Math.max(meanReversionScore, 75);
+                else if (bandPosition < 0.3) meanReversionScore = Math.max(meanReversionScore, 60);
+            }
+        }
+    } else if (regime.trend === 'UPTREND' || regime.trend === 'UP' || regime.trend === 'STRONG_UP') {
+        // In uptrend, RSI dip = buy-the-dip opportunity
+        if (currentRsi < 35) meanReversionScore = 70;
+        else if (currentRsi < 40) meanReversionScore = 50;
+    }
+
+    // Dynamic weights: shift toward mean-reversion in SIDEWAYS, toward trend in UPTREND
+    const isSideways = regime.trend === 'SIDEWAYS' || regime.trend === 'UNKNOWN';
+    const weights = isSideways ? {
+        trendAlignment: 0.15,        // less important in range
+        momentumStrength: 0.15,
+        volumeConfirmation: 0.15,
+        gapOpportunity: 0.05,
+        multiTimeframeAlignment: 0.15,
+        candlestickPattern: 0.10,
+        meanReversion: 0.25,         // high weight for RSI/BB mean-reversion
+    } : {
+        trendAlignment: 0.25,
+        momentumStrength: 0.20,
         volumeConfirmation: 0.20,
         gapOpportunity: 0.10,
         multiTimeframeAlignment: 0.15,
-        candlestickPattern: 0.10,   // new
+        candlestickPattern: 0.10,
+        meanReversion: 0.00,         // zero in trending markets
     };
 
     const compositeScore =
@@ -757,7 +801,8 @@ export function calculateOpportunityScore(candles, ticker, options = {}) {
         volumeConfirmation * weights.volumeConfirmation +
         gapOpportunity * weights.gapOpportunity +
         multiTimeframeAlignment * weights.multiTimeframeAlignment +
-        candlestickScore * weights.candlestickPattern;
+        candlestickScore * weights.candlestickPattern +
+        meanReversionScore * weights.meanReversion;
 
     // Determine urgency
     let urgency;
@@ -779,7 +824,9 @@ export function calculateOpportunityScore(candles, ticker, options = {}) {
             volumeConfirmation,
             gapOpportunity,
             multiTimeframeAlignment,
-            candlestickPattern: candlestickScore
+            candlestickPattern: candlestickScore,
+            meanReversion: meanReversionScore,
+            rsi: currentRsi
         }
     };
 }
