@@ -3573,7 +3573,7 @@ async function tradingBotLoop() {
             tradingBotLoop._diagCount++;
             const _allScores = tradingBotLoop._iterScores || [];
             tradingBotLoop._iterScores = []; // reset for next iteration
-            if (tradingBotLoop._diagCount % 3 === 1) {
+            if (tradingBotLoop._diagCount % 15 === 1) {
                 const topScores = candidates.slice(0, 5).map(c => `${c.ticker}:${c.score.compositeScore.toFixed(1)}`).join(', ');
                 const topRaw = _allScores.sort((a, b) => b.s - a.s).slice(0, 5).map(x => `${x.t}=${x.s.toFixed(1)}(min${x.m})`).join(', ');
                 console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}, positions=${Object.keys(portfolio.positions).length}, skips=pos:${_debugSkips.pos}/noData:${_debugSkips.noCandles}/liq:${_debugSkips.liq}/scored:${_debugSkips.scored}${candidates.length > 0 ? `, top=[${topScores}]` : topRaw ? `, rawTop=[${topRaw}]` : ''}`);
@@ -4165,7 +4165,7 @@ async function tradingBotLoop() {
                     try {
                         const perTickerRegime = score.regime || currentRegime;
                         regimeBoostAdj = regimeTransitionBoost.checkTransition(ticker, perTickerRegime);
-                        if (regimeBoostAdj >= 5) {
+                        if (regimeBoostAdj >= 5 && Math.random() < 0.05) {
                             addLog(`[REGIME-BOOST] ${ticker}: +${regimeBoostAdj} pts from bullish transition`, 'INFO');
                         }
                     } catch (e) { /* non-critical */ }
