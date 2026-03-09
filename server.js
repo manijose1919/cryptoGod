@@ -2262,6 +2262,15 @@ async function handlePartialSell(position, price, fraction, reason) {
     position.quantity -= sellQty;
     portfolio.cash += (sellQty * avgPrice) - sellFee;
 
+    // Dust cleanup: if remaining position is too small to exit profitably, auto-liquidate
+    const remainingValue = position.quantity * (position.currentPrice || position.openPrice);
+    if (position.quantity > 0 && remainingValue < 2.0) {
+        addLog(`[DUST] Auto-liquidating ${ticker} dust: ${position.quantity.toFixed(8)} ($${remainingValue.toFixed(2)})`, 'INFO');
+        portfolio.cash += remainingValue * 0.95; // Assume some slippage on dust
+        delete portfolio.positions[ticker];
+        exitLevelCache.delete(ticker);
+    }
+
     addLog(`[PARTIAL-EXIT] ${ticker}: Sold ${(fraction * 100).toFixed(0)}% (${sellQty.toFixed(6)}) @ $${avgPrice.toFixed(2)} | PnL: $${partialPnl.toFixed(2)} | ${reason}`, partialPnl >= 0 ? 'PROFIT' : 'LOSS');
 
     logThought({
@@ -5017,6 +5026,14 @@ async function tradingBotLoop() {
                             }
                         } catch (e) { /* fail open */ }
                     }
+
+                    // Hard upper bound: no single entry exceeds 15% of total portfolio (defense against multiplier stacking)
+                    const maxSingleEntry = totalValue * 0.15;
+                    if (investmentAmount > maxSingleEntry) {
+                        investmentAmount = maxSingleEntry;
+                    }
+                    // Also cap at 95% of available cash (leave buffer for fees)
+                    investmentAmount = Math.min(investmentAmount, portfolio.cash * 0.95);
 
                     // C2: Position size floor — prevent dust amounts after 13+ multiplicative stages
                     if (entryStrategy && investmentAmount > 0 && investmentAmount < CONFIG.MIN_TRADE_SIZE * 1.1) {
