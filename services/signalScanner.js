@@ -347,26 +347,41 @@ export class SignalScanner {
     this.scanCount++;
 
     try {
-      // Scan all tickers across all timeframes in parallel
+      // Scan all tickers across all timeframes — batched to avoid rate limit hits
+      // 50 parallel requests (10 tickers × 5 TFs) can overwhelm exchange APIs
       const results = new Map(); // ticker -> { timeframe -> analysis }
+      const CONCURRENT_LIMIT = 10; // Max parallel fetches at once
 
-      const fetchPromises = [];
+      const allTasks = [];
       for (const ticker of TICKERS) {
         for (const tf of SCAN_TIMEFRAMES) {
-          fetchPromises.push(
-            this.fetchMarketData(ticker, tf)
-              .then(candles => ({ ticker, tf, candles }))
-              .catch(() => ({ ticker, tf, candles: null }))
-          );
+          allTasks.push({ ticker, tf });
         }
       }
 
-      const fetched = await Promise.all(fetchPromises);
+      const fetched = [];
+      for (let i = 0; i < allTasks.length; i += CONCURRENT_LIMIT) {
+        const batch = allTasks.slice(i, i + CONCURRENT_LIMIT);
+        const batchResults = await Promise.all(
+          batch.map(({ ticker, tf }) =>
+            this.fetchMarketData(ticker, tf)
+              .then(candles => ({ ticker, tf, candles }))
+              .catch(() => ({ ticker, tf, candles: null }))
+          )
+        );
+        fetched.push(...batchResults);
+      }
 
-      // Group by ticker
+      // Group by ticker — with freshness check to skip stale data
+      const TF_MAX_AGE_MS = { '1m': 90_000, '5m': 360_000, '15m': 1_080_000, '1h': 4_200_000, '4h': 16_800_000, '1D': 90_000_000 };
       for (const { ticker, tf, candles } of fetched) {
         if (!results.has(ticker)) results.set(ticker, {});
         if (candles && candles.length >= 50) {
+          // Stale data check: last candle timestamp should be recent for short timeframes
+          const lastCandle = candles[candles.length - 1];
+          const maxAge = TF_MAX_AGE_MS[tf] || 3_600_000;
+          const candleAge = lastCandle.t ? (Date.now() - lastCandle.t) : 0;
+          if (candleAge > maxAge) continue; // Skip stale data — signal would be unreliable
           results.get(ticker)[tf] = analyzeCandles(candles, ticker);
         }
       }

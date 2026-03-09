@@ -136,18 +136,31 @@ function scheduleReconnect() {
     }, delay);
 }
 
-/** Kraken sends heartbeat messages; if we haven't received anything in a while, reconnect */
+/** Kraken sends heartbeat messages; if we haven't received anything in a while, reconnect.
+ *  Two-phase: warn at HEARTBEAT_TIMEOUT_MS, force reconnect after grace period (10s extra).
+ *  This avoids killing the connection on brief network blips. */
+let _heartbeatWarned = false;
+const HEARTBEAT_GRACE_MS = 10000; // Extra 10s grace before force kill
+
 function checkHeartbeat() {
     if (!connected) return;
     const elapsed = Date.now() - lastMessageTime;
-    if (elapsed > HEARTBEAT_TIMEOUT_MS) {
-        console.warn(`[KrakenWS] No message in ${(elapsed / 1000).toFixed(0)}s, reconnecting...`);
+    if (elapsed > HEARTBEAT_TIMEOUT_MS + HEARTBEAT_GRACE_MS) {
+        // Grace period exceeded — force reconnect
+        console.warn(`[KrakenWS] Dead for ${(elapsed / 1000).toFixed(0)}s — forcing reconnect`);
+        _heartbeatWarned = false;
         if (ws) {
             ws.close();
             ws = null;
         }
         connected = false;
         scheduleReconnect();
+    } else if (elapsed > HEARTBEAT_TIMEOUT_MS && !_heartbeatWarned) {
+        // First warning — connection may be flaky but give it grace period
+        console.warn(`[KrakenWS] Stale for ${(elapsed / 1000).toFixed(0)}s — will reconnect if continues`);
+        _heartbeatWarned = true;
+    } else if (elapsed < HEARTBEAT_TIMEOUT_MS) {
+        _heartbeatWarned = false; // Reset warning if messages resume
     }
 }
 
