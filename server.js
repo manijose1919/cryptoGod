@@ -2772,7 +2772,11 @@ async function tradingBotLoop() {
         // --- CIRCUIT BREAKER CHECK ---
         const pauseCheck = shouldPauseTrading(botState.tradingMode);
         if (pauseCheck.paused) {
-            if (Math.random() < 0.1) addLog(`[CIRCUIT BREAKER] Paused: ${pauseCheck.reason} (${pauseCheck.remainingMinutes}min left)`, 'WARN');
+            // Log circuit breaker status max once per 30s (was 10% random ≈ 18/min)
+            if (!tradingBotLoop._lastCBLogTime || Date.now() - tradingBotLoop._lastCBLogTime > 30000) {
+                tradingBotLoop._lastCBLogTime = Date.now();
+                addLog(`[CIRCUIT BREAKER] Paused: ${pauseCheck.reason} (${pauseCheck.remainingMinutes}min left)`, 'WARN');
+            }
         }
 
         // --- FLASH CRASH PROTECTION ---
@@ -3962,8 +3966,8 @@ async function tradingBotLoop() {
                             break;
                         }
                     }
-                    // Diagnostic: log TC and strategy selection for candidates (every 5th iteration)
-                    if (!entryStrategy && tradingBotLoop._diagCount % 5 === 0) {
+                    // Diagnostic: log TC and strategy selection for candidates (every 30th iteration ≈ 60s)
+                    if (!entryStrategy && tradingBotLoop._diagCount % 30 === 0) {
                         console.log(`[EntryDiag] ${ticker}: TC=${tcValue.toFixed(1)}, threshold=${trendEntryThreshold}, mom=${_cachedMom.toFixed(1)}, stratCandidates=${stratCandidates.length}, regime=${currentRegime}`);
                     }
                 } else {
