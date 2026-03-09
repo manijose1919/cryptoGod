@@ -74,7 +74,7 @@ import {
 // State
 let isRunning = false;
 let checkInterval = null;
-let lastRetrainTime = 0;
+let lastRetrainTime = Date.now(); // Initialize to now so "time since retrain" starts from boot
 let totalTradesProcessed = 0;
 let retrainCount = 0;
 let newSamplesSinceRetrain = 0;
