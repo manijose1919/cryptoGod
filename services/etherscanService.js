@@ -24,6 +24,15 @@ const CACHE_TTL = {
 const requestTimestamps = []; // sliding window rate limiter
 const MAX_REQ_PER_SEC = 5;
 
+// Dead flag: set after deprecation or repeated auth errors, suppresses for 30min
+let _deadUntil = 0;
+const DEAD_TTL = 30 * 60 * 1000;
+function isDead() { return Date.now() < _deadUntil; }
+function markDead(reason) {
+  if (!_deadUntil) console.warn(`[Etherscan] Suppressing for 30min: ${reason}`);
+  _deadUntil = Date.now() + DEAD_TTL;
+}
+
 if (!API_KEY) {
   console.log('[Etherscan] No ETHERSCAN_API_KEY set. All functions will return null.');
 }
@@ -54,7 +63,9 @@ async function rateLimitedFetch(url) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const json = await res.json();
   if (json.status === '0' && json.message === 'NOTOK') {
-    throw new Error(json.result || 'Etherscan API error');
+    const msg = json.result || 'Etherscan API error';
+    if (msg.includes('deprecated')) { markDead(msg); return null; }
+    throw new Error(msg);
   }
   return json;
 }
@@ -64,7 +75,7 @@ function weiToEth(wei) {
 }
 
 async function getGasPrice() {
-  if (!API_KEY) return null;
+  if (!API_KEY || isDead()) return null;
   const cacheKey = 'gas';
   const cached = getCached(cacheKey);
   if (cached) return cached;
@@ -89,7 +100,7 @@ async function getGasPrice() {
 }
 
 async function getEthPrice() {
-  if (!API_KEY) return null;
+  if (!API_KEY || isDead()) return null;
   const cacheKey = 'ethprice';
   const cached = getCached(cacheKey);
   if (cached) return cached;
@@ -113,7 +124,7 @@ async function getEthPrice() {
 }
 
 async function getTopWhaleTransactions(limit = 10) {
-  if (!API_KEY) return null;
+  if (!API_KEY || isDead()) return null;
   const cacheKey = `whale_${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
@@ -155,7 +166,7 @@ async function getTopWhaleTransactions(limit = 10) {
 }
 
 async function getERC20TopTransfers(contractAddress, limit = 5) {
-  if (!API_KEY) return null;
+  if (!API_KEY || isDead()) return null;
   if (!contractAddress) {
     console.log('[Etherscan] getERC20TopTransfers: contractAddress required');
     return null;
@@ -187,7 +198,7 @@ async function getERC20TopTransfers(contractAddress, limit = 5) {
 }
 
 async function getNetworkStats() {
-  if (!API_KEY) return null;
+  if (!API_KEY || isDead()) return null;
   const cacheKey = 'netstats';
   const cached = getCached(cacheKey);
   if (cached) return cached;
