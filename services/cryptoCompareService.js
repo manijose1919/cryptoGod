@@ -59,9 +59,13 @@ async function apiFetch(path) {
   return response.json();
 }
 
+const _unknownCoins = new Set();
 function resolveCoinId(coin) {
   const id = COIN_IDS[coin?.toUpperCase()];
-  if (!id) console.log(`[CryptoCompare] Unknown coin: ${coin}`);
+  if (!id && !_unknownCoins.has(coin)) {
+    _unknownCoins.add(coin);
+    console.log(`[CryptoCompare] Unknown coin: ${coin} (logged once)`);
+  }
   return id || null;
 }
 
