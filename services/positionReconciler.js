@@ -139,11 +139,11 @@ export async function reconcilePositions(portfolio, sessionId) {
   } catch (err) {
     // Rate-limit: only log once per 10 min per error message
     const errKey = err.message?.slice(0, 50) || 'unknown';
-    if (!reconcile._errCooldowns) reconcile._errCooldowns = {};
+    if (!reconcilePositions._errCooldowns) reconcilePositions._errCooldowns = {};
     const now = Date.now();
-    if (!reconcile._errCooldowns[errKey] || now - reconcile._errCooldowns[errKey] > 600_000) {
+    if (!reconcilePositions._errCooldowns[errKey] || now - reconcilePositions._errCooldowns[errKey] > 600_000) {
       console.warn('[Reconciler] Reconciliation failed:', err.message);
-      reconcile._errCooldowns[errKey] = now;
+      reconcilePositions._errCooldowns[errKey] = now;
     }
     result.actionsRequired.push('RECONCILIATION_ERROR');
   }

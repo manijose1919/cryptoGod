@@ -3416,9 +3416,12 @@ async function tradingBotLoop() {
                     let trendEntryThreshold = optParams.TREND_BULLISH_ENTRY;
                     const isSim = botState.tradingMode === 'SIMULATION';
                     if (currentRegime === 'SIDEWAYS') {
-                        trendEntryThreshold = isSim ? 55 : 40;
+                        // In Extreme Fear markets, TC sits at 70-100 for nearly all assets.
+                        // SIM: TC < 70 still selects the "least bearish" tickers for training data.
+                        // REAL: TC < 40 is conservative — only enter on genuine bullish momentum.
+                        trendEntryThreshold = isSim ? 70 : 40;
                     } else if (currentRegime === 'DOWNTREND') {
-                        trendEntryThreshold = isSim ? 45 : 30;
+                        trendEntryThreshold = isSim ? 55 : 30;
                     } else if (currentRegime === 'UPTREND') {
                         trendEntryThreshold = isSim ? 50 : 35;
                     }
@@ -3437,6 +3440,27 @@ async function tradingBotLoop() {
                         // TREND: lower = more bullish, strength = how far below threshold
                         const strength = (trendEntryThreshold - tcValue) / trendEntryThreshold;
                         stratCandidates.push({ strategy: 'TREND', value: tcValue, strength, sniperEntry: sniperCandidate && trendEntryThreshold > optParams.TREND_BULLISH_ENTRY });
+                    }
+                    // MEAN_REVERSION in SIDEWAYS: enter when TC is extremely bearish (>80) expecting bounce
+                    // Only in SIDEWAYS regime where mean-reversion is the dominant dynamic
+                    if (currentRegime === 'SIDEWAYS' && (profileStrategies.includes('ADAPTIVE') || profileStrategies.includes('TREND'))) {
+                        // Inline RSI calculation — closes from candle array
+                        let rsiLast = null;
+                        if (candles.length >= 16) {
+                            const closes = candles.slice(-15).map(c => c.c);
+                            let gains = 0, losses = 0;
+                            for (let i = 1; i < closes.length; i++) {
+                                const diff = closes[i] - closes[i - 1];
+                                if (diff > 0) gains += diff; else losses -= diff;
+                            }
+                            const avgGain = gains / 14, avgLoss = losses / 14;
+                            rsiLast = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+                        }
+                        if (tcValue >= 80 && rsiLast !== null && rsiLast < 35) {
+                            // Strength: higher TC + lower RSI = stronger mean-reversion signal
+                            const strength = ((tcValue - 80) / 20) * 0.5 + ((35 - rsiLast) / 35) * 0.5;
+                            stratCandidates.push({ strategy: 'ADAPTIVE', value: tcValue, strength, meanReversion: true });
+                        }
                     }
                     if (profileStrategies.includes('MOMENTUM')) {
                         if (_cachedMom > optParams.MOMENTUM_BULLISH_ENTRY) {
