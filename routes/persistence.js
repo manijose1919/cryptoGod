@@ -22,8 +22,8 @@ const router = express.Router();
 // ============================================
 router.get('/trades', (req, res, next) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 500, 5000);
-    const offset = parseInt(req.query.offset) || 0;
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 500, 5000));
+    const offset = Math.max(0, parseInt(req.query.offset) || 0);
     const strategy = req.query.strategy || null;
     const trades = getTrades({ limit, offset, strategy });
     const total = getTradeCount(strategy);
