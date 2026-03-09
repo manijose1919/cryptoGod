@@ -4808,7 +4808,13 @@ async function tradingBotLoop() {
         // Only evaluate shorts in bearish regimes for sim mode learning
         try {
             const overallRegime = getMarketRegime();
-            if (shortSellingEngine && (overallRegime === 'DOWNTREND' || overallRegime === 'DOWN' || overallRegime === 'STRONG_DOWN')) {
+            // Also evaluate shorts in SIDEWAYS when Fear & Greed is Extreme Fear (<15)
+            // because SIDEWAYS with F&G=8 is functionally bearish even if price is range-bound
+            const fgForShort = fearGreedGate?.getFearGreedIndex?.()?.value ?? 50;
+            const bearishRegimes = ['DOWNTREND', 'DOWN', 'STRONG_DOWN'];
+            const isBearishEnough = bearishRegimes.includes(overallRegime) ||
+                (overallRegime === 'SIDEWAYS' && fgForShort < 15);
+            if (shortSellingEngine && isBearishEnough) {
                 const exchangeId = getActiveExchangeId();
                 for (const [ticker, candles] of marketDataMap) {
                     if (!candles || candles.length < 21) continue;
@@ -4817,7 +4823,7 @@ async function tradingBotLoop() {
 
                     // Get TC score, RSI, and price momentum for short evaluation
                     const closes = candles.map(c => c.c);
-                    const tcSeries = calculateTCSeries(closes, 14);
+                    const tcSeries = calculateTCSeries(candles);
                     const tcValue = tcSeries?.[tcSeries.length - 1] || 50;
 
                     // RSI calculation for overbought detection (inline 14-period)
