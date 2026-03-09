@@ -498,7 +498,9 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
 
     // Blend all model predictions into final confidence
     const direction = prediction.prediction === 1 ? 'UP' : 'DOWN';
-    let blendedUpProb = prediction.probabilities?.up || (direction === 'UP' ? confidence : 1 - confidence);
+    let blendedUpProb = prediction.probabilities?.up ?? (direction === 'UP' ? confidence : 1 - confidence);
+    // Guard: if blendedUpProb is NaN/undefined, default to 0.5 (uncertain)
+    if (typeof blendedUpProb !== 'number' || isNaN(blendedUpProb)) blendedUpProb = 0.5;
 
     // Apply model weights
     let totalWeight = metaWeights.rf_gbt_lr || 0.25;
@@ -561,6 +563,14 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
     } else if (anomalyResult.severity === 'UNUSUAL') {
       confidence = Math.max(0, confidence - 15);
       reason = 'Unusual market conditions detected, reducing confidence by 15%';
+    }
+
+    // NaN guard: if confidence is NaN, fail open — defer to rule-based logic
+    if (typeof confidence !== 'number' || isNaN(confidence)) {
+      confidence = 50; // Neutral confidence
+      take = true;
+      reason = 'ML confidence unavailable (NaN), deferring to rules';
+      console.log(`[ML Prediction] ${ticker} ${strategy}: NaN confidence detected — failing open`);
     }
 
     // Decision logic
