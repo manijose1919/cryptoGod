@@ -4,6 +4,15 @@ const API_KEY = process.env.MESSARI_API_KEY;
 const BASE_URL = 'https://data.messari.io/api';
 const HEADERS = API_KEY ? { 'x-messari-api-key': API_KEY } : {};
 
+// Dead flag: suppress after repeated 401 errors for 30 min
+let _deadUntil = 0;
+const DEAD_TTL = 30 * 60 * 1000;
+function isDead() { return Date.now() < _deadUntil; }
+function markDead(status) {
+  if (!_deadUntil) console.warn(`[Messari] Suppressing for 30min after HTTP ${status}`);
+  _deadUntil = Date.now() + DEAD_TTL;
+}
+
 if (!API_KEY) {
   console.log('[Messari] No MESSARI_API_KEY found — all requests will return null');
 }
@@ -32,7 +41,7 @@ function cacheSet(key, data, ttlMs) {
 let lastRequestTime = 0;
 
 async function rateLimitedFetch(url) {
-  if (!API_KEY) return null;
+  if (!API_KEY || isDead()) return null;
   const now = Date.now();
   const wait = Math.max(0, 1000 - (now - lastRequestTime));
   if (wait > 0) await new Promise(r => setTimeout(r, wait));
@@ -40,12 +49,11 @@ async function rateLimitedFetch(url) {
   try {
     const res = await fetch(url, { headers: HEADERS, timeout: 10000 });
     if (!res.ok) {
-      console.log(`[Messari] HTTP ${res.status} for ${url}`);
+      if (res.status === 401 || res.status === 403) markDead(res.status);
       return null;
     }
     return await res.json();
   } catch (err) {
-    console.log(`[Messari] Fetch error: ${err.message}`);
     return null;
   }
 }
