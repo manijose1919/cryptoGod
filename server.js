@@ -2548,10 +2548,12 @@ async function checkTickExit(ticker, price) {
             } catch (e) {}
 
             // Check regime is still bullish
+            // Note: getMarketRegime(candles, ticker) returns 'UPTREND'/'SIDEWAYS'/'DOWNTREND'
+            // We don't have candles in checkTickExit, so use the bot loop's cached regime
             let regimeOk = false;
             try {
-                const regime = getMarketRegime(ticker)?.regime || 'UNKNOWN';
-                regimeOk = regime === 'STRONG_UP' || regime === 'UP';
+                const cachedRegime = botState._lastRegime || 'UNKNOWN';
+                regimeOk = cachedRegime === 'UPTREND';
             } catch (e) {}
 
             if (tcScore > 70 && regimeOk) {
@@ -5592,6 +5594,25 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
 
         if (telegramEnabled()) alertTradeExecution({ type: 'BUY', ticker, price: parseFloat(avgPrice), strategy, pnl: null });
         discordAlertTrade({ type: 'BUY', ticker, price: parseFloat(avgPrice), strategy, pnl: null });
+
+        // Seed default exit levels immediately so WebSocket ticks can fire exits
+        // before the next bot loop's refreshExitLevels() runs (fixes 2-3 min gap)
+        if (!exitLevelCache.has(ticker)) {
+            const fees = getActiveFees();
+            const entryPx = parseFloat(avgPrice);
+            const defaultATRPct = entryMeta.atrPct ? (entryMeta.atrPct / 100) : 0.015; // Use stored ATR or 1.5% default
+            exitLevelCache.set(ticker, {
+                tpPrice: entryPx * (1 + defaultATRPct * 3 + fees.roundTrip), // 3× ATR TP
+                slPrice: entryPx * (1 - 0.05), // Emergency 5% SL (will be tightened by refreshExitLevels)
+                trailActivationPrice: entryPx * (1 + defaultATRPct * 1.5),
+                trailPct: defaultATRPct * 150, // 1.5× ATR trail %
+                stage1Price: entryPx * (1 + defaultATRPct * 1.0 + fees.roundTrip),
+                stage2Price: entryPx * (1 + defaultATRPct * 2.0 + fees.roundTrip),
+                profitGoal: 0,
+                regime: 'UNKNOWN',
+            });
+        }
+
         saveSessionState();
         return { success: true };
     } catch (error) {
