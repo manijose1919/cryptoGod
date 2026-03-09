@@ -6761,6 +6761,50 @@ const startServer = async () => {
         }
     }
 
+    // Fallback: auto-start SIM session if bot didn't auto-resume (fresh deploy or lost state)
+    if (!botState.isActive) {
+        const simSessionId = `sim_auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const simBudget = portfolio.cash > 0 ? portfolio.cash : 10000;
+
+        botState.isActive = true;
+        botState.tradingMode = 'SIMULATION';
+        botState.sessionId = simSessionId;
+        botState.sessionStartTime = Date.now();
+        botState.settings = {
+            ...botState.settings,
+            riskAmount: botState.settings.riskAmount || 0.15,
+            maxConcurrentTrades: botState.settings.maxConcurrentTrades || 5,
+            sessionProfitGoal: botState.settings.sessionProfitGoal || (simBudget * 2),
+        };
+        if (portfolio.cash <= 0) {
+            portfolio.cash = simBudget;
+            portfolio.initialBudget = simBudget;
+        }
+
+        pmSetSessionStart(Date.now());
+        setActiveSession(simSessionId, 'SIMULATION');
+        setThoughtSessionId(simSessionId);
+        fullResetCircuitBreaker();
+        fullResetBeastMode(portfolio.cash);
+
+        if (botInterval) clearInterval(botInterval);
+        botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);
+
+        addLog(`[SESSION] Auto-started SIM session: $${simBudget} budget, ${availableTickers.length} tickers`, 'INFO');
+        console.log(`[Server] Auto-started SIM session ${simSessionId} ($${simBudget} budget)`);
+
+        try {
+            const db = getDb();
+            db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_session_id', ?)").run(simSessionId);
+        } catch { /* ignore */ }
+
+        // Notify Telegram
+        try {
+            const { queueMessage } = await import('./services/telegramService.js');
+            queueMessage?.(`▶️ <b>AUTO-STARTED SIM</b>\nBudget: $${simBudget}\nTickers: ${availableTickers.length}\nSession: ${simSessionId.substring(0, 8)}...`);
+        } catch { /* telegram may not be configured */ }
+    }
+
     // Start auto-save (every 60 seconds)
     startAutoSave({
         get portfolio() { return portfolio; },
@@ -6826,15 +6870,27 @@ function gracefulShutdown(signal) {
         console.warn('[Server] Could not log final portfolio:', e.message);
     }
 
-    // Save state
+    // Save state — preserve isActive so auto-resume works after restarts/deploys
     try {
         stopAutoSave();
+        const wasRunning = botState.isActive;
+        // Temporarily mark as active so restart auto-resumes the session
+        if (wasRunning || botState.sessionId) {
+            botState.isActive = true;
+        }
         saveFullState({
             portfolio, botState,
             cbExportState, awExportState, beastExportState, pmExportState, optExportState,
             availableTickers,
         });
-        console.log('[Server] State saved successfully');
+        // Also persist session ID for the fallback restore path
+        if (botState.sessionId) {
+            try {
+                const db = getDb();
+                db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('last_session_id', ?)").run(botState.sessionId);
+            } catch { /* ignore */ }
+        }
+        console.log(`[Server] State saved successfully (wasRunning=${wasRunning})`);
     } catch (e) {
         console.error('[Server] State save failed:', e.message);
     }
