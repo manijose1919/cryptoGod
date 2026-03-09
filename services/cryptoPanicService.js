@@ -10,6 +10,11 @@ const API_KEY = process.env.CRYPTOPANIC_API_KEY || '';
 const CACHE_TTL_NEWS = 5 * 60 * 1000; // 5 minutes
 const CACHE_TTL_FEAR_GREED = 30 * 60 * 1000; // 30 minutes
 
+// Error suppression: after first failure, exponentially back off (max 30 min)
+let _newsErrorBackoff = 0;
+let _newsLastError = 0;
+const _NEWS_MAX_BACKOFF = 30 * 60 * 1000;
+
 // Cache storage
 let newsCache = {
   data: null,
@@ -66,6 +71,11 @@ export async function getLatestNews(ticker = null, limit = 20) {
       return newsCache.data;
     }
 
+    // Backoff: skip fetch if recent error (exponential backoff)
+    if (_newsErrorBackoff > 0 && (Date.now() - _newsLastError) < _newsErrorBackoff) {
+      return null;
+    }
+
     // Build URL with auth token
     let url = `https://cryptopanic.com/api/v1/posts/?auth_token=${API_KEY}&public=true`;
     if (currency) {
@@ -80,9 +90,13 @@ export async function getLatestNews(ticker = null, limit = 20) {
     });
 
     if (!response.ok) {
-      console.error(`[CryptoPanic] HTTP error: ${response.status} ${response.statusText}`);
+      _newsLastError = Date.now();
+      _newsErrorBackoff = Math.min(_NEWS_MAX_BACKOFF, Math.max(60000, _newsErrorBackoff * 2 || 60000));
+      if (_newsErrorBackoff <= 60000) console.error(`[CryptoPanic] HTTP error: ${response.status} — backing off ${(_newsErrorBackoff/1000).toFixed(0)}s`);
       return null;
     }
+    // Success: reset backoff
+    _newsErrorBackoff = 0;
 
     const data = await response.json();
 

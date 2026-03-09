@@ -3009,13 +3009,12 @@ async function tradingBotLoop() {
             } catch (e) { /* fall through to optimizer defaults */ }
         }
         // Regime-adaptive entry thresholds: lower bar in strong trends, higher bar in choppy markets
+        // Match beastMode regime names: UPTREND / SIDEWAYS / DOWNTREND
         const regimeScoreFloors = {
-            'STRONG_UP': 40,   // Ride the wave — accept weaker signals
-            'UP': 45,          // Standard bullish
-            'SIDEWAYS': 60,    // High conviction needed — choppy kills profits
-            'DOWN': 55,        // Only strong setups in bearish markets
-            'STRONG_DOWN': 65, // Very selective — most entries lose here
-            'UNKNOWN': 50,     // Conservative default
+            'UPTREND': 35,     // Ride the wave — accept weaker signals
+            'SIDEWAYS': 48,    // Moderate conviction — was 60, which blocked everything
+            'DOWNTREND': 55,   // Only strong setups in bearish markets
+            'UNKNOWN': 45,     // Moderate default
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || 50;
@@ -3334,7 +3333,11 @@ async function tradingBotLoop() {
                     const stratCandidates = [];
 
                     // Phase 1C: Dynamic TC threshold relaxation during surges
+                    // In SIDEWAYS regime, relax TC from 25 to 35 to allow moderate trend signals
                     let trendEntryThreshold = optParams.TREND_BULLISH_ENTRY;
+                    if (currentRegime === 'SIDEWAYS') {
+                        trendEntryThreshold = Math.max(trendEntryThreshold, 35);
+                    }
                     if (sniperCandidate && getFlag('SNIPER_MODE_ENABLED')) {
                         const vel = priceVelocityTracker.getMetrics(ticker);
                         const microBurst = microBurstDetector.isMicroBurst(ticker);
@@ -4014,23 +4017,25 @@ async function tradingBotLoop() {
 
                 // Blocked hours filter (from best seed training + mined patterns)
                 if (entryStrategy) {
-                    const currentUTCHour = new Date().getUTCHours();
-                    // Merge seed-based blocked hours with mined blocked hours
-                    const seedBlocked = botState._blockedHours || [];
-                    let minedBlocked = [];
-                    try { minedBlocked = getMinedBlockedHours(); } catch (e) {}
-                    const allBlocked = [...new Set([...seedBlocked, ...minedBlocked])];
-                    if (allBlocked.includes(currentUTCHour)) {
-                        logThought({ type: 'SKIP', ticker, action: 'BLOCKED_HOUR',
-                            confidence: score.compositeScore,
-                            reason: `UTC hour ${currentUTCHour} blocked (seed: ${seedBlocked.includes(currentUTCHour) ? 'yes' : 'no'}, mined: ${minedBlocked.includes(currentUTCHour) ? 'yes' : 'no'})`,
-                            regime: currentRegime });
-                        entryStrategy = null;
+                    // Skip blocked hours, time-of-day, and journal gates in SIM — they prevent learning
+                    if (botState.tradingMode !== 'SIMULATION') {
+                        const currentUTCHour = new Date().getUTCHours();
+                        const seedBlocked = botState._blockedHours || [];
+                        let minedBlocked = [];
+                        try { minedBlocked = getMinedBlockedHours(); } catch (e) {}
+                        const allBlocked = [...new Set([...seedBlocked, ...minedBlocked])];
+                        if (allBlocked.includes(currentUTCHour)) {
+                            logThought({ type: 'SKIP', ticker, action: 'BLOCKED_HOUR',
+                                confidence: score.compositeScore,
+                                reason: `UTC hour ${currentUTCHour} blocked (seed: ${seedBlocked.includes(currentUTCHour) ? 'yes' : 'no'}, mined: ${minedBlocked.includes(currentUTCHour) ? 'yes' : 'no'})`,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
                     }
                 }
 
-                // Time-of-day win rate gate (self-learning from trade outcomes)
-                if (entryStrategy) {
+                // Time-of-day win rate gate — skip in SIM to avoid self-reinforcing blocks
+                if (entryStrategy && botState.tradingMode !== 'SIMULATION') {
                     const todCheck = timeOfDayTracker.shouldBlockEntry();
                     if (todCheck.blocked) {
                         logThought({ type: 'SKIP', ticker, action: 'TIME_OF_DAY_GATE',
@@ -4041,8 +4046,8 @@ async function tradingBotLoop() {
                     }
                 }
 
-                // Journal pattern: skip ticker+strategy combos that consistently lose
-                if (entryStrategy) {
+                // Journal pattern — skip in SIM to allow re-evaluation
+                if (entryStrategy && botState.tradingMode !== 'SIMULATION') {
                     const tickerScore = getTickerStrategyScore(ticker, entryStrategy);
                     if (tickerScore?.shouldAvoid) {
                         logThought({ type: 'SKIP', ticker, action: 'JOURNAL_PATTERN',

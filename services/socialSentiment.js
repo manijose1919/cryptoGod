@@ -174,6 +174,14 @@ export async function fetchCryptoNews(filter = 'all') {
     return stale ? stale.data : [...DEFAULT_NEWS];
   }
 
+  // Backoff on repeated failures
+  if (!fetchCryptoNews._backoff) fetchCryptoNews._backoff = 0;
+  if (!fetchCryptoNews._lastErr) fetchCryptoNews._lastErr = 0;
+  if (fetchCryptoNews._backoff > 0 && (Date.now() - fetchCryptoNews._lastErr) < fetchCryptoNews._backoff) {
+    const stale = cache.get(cacheKey);
+    return stale ? stale.data : [...DEFAULT_NEWS];
+  }
+
   try {
     let url = 'https://cryptopanic.com/api/free/v1/posts/?public=true';
     if (filter && filter !== 'all') {
@@ -185,6 +193,7 @@ export async function fetchCryptoNews(filter = 'all') {
     if (!response.ok) {
       throw new Error(`CryptoPanic API returned ${response.status}`);
     }
+    fetchCryptoNews._backoff = 0; // reset on success
 
     const json = await response.json();
     const results = json.results || [];
@@ -214,7 +223,9 @@ export async function fetchCryptoNews(filter = 'all') {
     setCache(cacheKey, articles);
     return articles;
   } catch (err) {
-    console.error('[SocialSentiment] fetchCryptoNews error:', err.message);
+    fetchCryptoNews._lastErr = Date.now();
+    fetchCryptoNews._backoff = Math.min(30 * 60 * 1000, Math.max(120000, (fetchCryptoNews._backoff || 0) * 2 || 120000));
+    if (fetchCryptoNews._backoff <= 120000) console.error('[SocialSentiment] fetchCryptoNews error:', err.message, `— backing off ${(fetchCryptoNews._backoff/1000).toFixed(0)}s`);
     const stale = cache.get(cacheKey);
     return stale ? stale.data : [...DEFAULT_NEWS];
   }
