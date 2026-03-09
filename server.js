@@ -3158,6 +3158,14 @@ async function tradingBotLoop() {
 
             candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
+            // Diagnostic: log scan summary every 5 iterations
+            if (!tradingBotLoop._diagCount) tradingBotLoop._diagCount = 0;
+            tradingBotLoop._diagCount++;
+            if (tradingBotLoop._diagCount % 5 === 1) {
+                const topScores = candidates.slice(0, 5).map(c => `${c.ticker}:${c.score.compositeScore}`).join(', ');
+                console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}${candidates.length > 0 ? `, top=[${topScores}]` : ''}, positions=${Object.keys(portfolio.positions).length}`);
+            }
+
             // --- SENTIMENT ENRICHMENT (Tiered) ---
             // Tier 1 (ALL candidates): CryptoPanic news + CoinGecko trending (1 global call each, cached)
             // Tier 2 (top 10):         Reddit + YouTube per-ticker sentiment (rate-limited, cached 5min)
