@@ -160,8 +160,18 @@ function triggerPause(reason) {
  * Check if trading should be paused
  */
 export function shouldPauseTrading(tradingMode = 'REAL') {
-  // In simulation mode, never pause — we need all data (wins AND losses) for ML training
+  // In simulation mode, apply a short 5-minute cooldown (vs full 60min+ in real mode)
+  // Prevents bleeding through entire losing streaks while still generating varied training data
   if (tradingMode === 'SIMULATION') {
+    if (Date.now() < pausedUntil) {
+      const SIM_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+      const pauseStartedAt = pausedUntil - (CIRCUIT_BREAKER_CONFIG.PAUSE_DURATION_MS * pauseCount || 3600000);
+      const simPauseEnd = pauseStartedAt + SIM_COOLDOWN_MS;
+      if (Date.now() < simPauseEnd) {
+        const remaining = Math.ceil((simPauseEnd - Date.now()) / 60000);
+        return { paused: true, reason: `SIM cooldown: ${pauseReason}`, remainingMinutes: remaining, simBypassed: false };
+      }
+    }
     return { paused: false, reason: '', remainingMinutes: 0, simBypassed: true };
   }
   if (Date.now() < pausedUntil) {
