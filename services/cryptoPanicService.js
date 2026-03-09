@@ -91,8 +91,7 @@ export async function getLatestNews(ticker = null, limit = 20) {
 
     if (!response.ok) {
       _newsLastError = Date.now();
-      _newsErrorBackoff = Math.min(_NEWS_MAX_BACKOFF, Math.max(60000, _newsErrorBackoff * 2 || 60000));
-      if (_newsErrorBackoff <= 60000) console.error(`[CryptoPanic] HTTP error: ${response.status} — backing off ${(_newsErrorBackoff/1000).toFixed(0)}s`);
+      _newsErrorBackoff = Math.min(_NEWS_MAX_BACKOFF, Math.max(_NEWS_MAX_BACKOFF, _newsErrorBackoff * 2 || _NEWS_MAX_BACKOFF));
       return null;
     }
     // Success: reset backoff
