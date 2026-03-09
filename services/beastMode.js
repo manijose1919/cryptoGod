@@ -434,6 +434,17 @@ export function checkDynamicExit(position, currentPrice, candles) {
   const holdTimeMs = Date.now() - position.entryTime;
   const holdMinutes = holdTimeMs / 60000;
 
+  // Quick-kill: If position drops below -0.7% (fee-adjusted) in first 10 minutes,
+  // exit immediately. This catches bad entries before they become big losses.
+  // The 0.7% threshold is Kraken round-trip fee + 0.18% buffer.
+  if (holdMinutes <= 10 && feeAdjustedPnl <= -0.7) {
+    return {
+      shouldExit: true,
+      reason: `[BEAST-QUICK-KILL] ${feeAdjustedPnl.toFixed(2)}% loss in ${holdMinutes.toFixed(0)}min — bad entry, cutting early`,
+      pnlPercent,
+    };
+  }
+
   // Take profit (fee-adjusted)
   if (feeAdjustedPnl >= targets.takeProfitPct) {
     return {
