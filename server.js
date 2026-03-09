@@ -3061,6 +3061,18 @@ async function tradingBotLoop() {
                     if (microBurstDetector.recentBurst(ticker)) _surgeOpts.microBurstActive = true;
                 }
                 const score = calculateOpportunityScore(candles, ticker, _surgeOpts);
+
+                // MTF confluence boost: add alignment score directly to composite
+                const mtfData = mtfScores.get(ticker);
+                if (mtfData) {
+                    // Aligned: boost up to +8 pts; Misaligned: penalize up to -5 pts
+                    const mtfBoost = mtfData.alignmentScore >= 70 ? (mtfData.alignmentScore - 50) * 0.16
+                        : mtfData.alignmentScore <= 30 ? (mtfData.alignmentScore - 50) * 0.25
+                        : 0;
+                    score.compositeScore += mtfBoost;
+                    score.factors.mtfBoost = mtfBoost;
+                }
+
                 // Per-ticker cooldown raises threshold after consecutive losses
                 const tickerCooldownAdj = tickerLossCooldown.getScoreAdjustment(ticker);
                 let tickerMinScore = minOppScore + tickerCooldownAdj;
@@ -3087,7 +3099,7 @@ async function tradingBotLoop() {
                         tickerMinScore -= 15; // Micro volume burst — fast entry
                         sniperCandidate = true;
                     }
-                    tickerMinScore = Math.max(25, tickerMinScore); // Floor: never go below 25
+                    tickerMinScore = Math.max(isSim ? 10 : 20, tickerMinScore); // Lower floor in SIM for training data
                 }
 
                 if (score.compositeScore > tickerMinScore) candidates.push({ ticker, score, candles, sniperCandidate });
@@ -3182,9 +3194,9 @@ async function tradingBotLoop() {
             tradingBotLoop._diagCount++;
             const _allScores = tradingBotLoop._iterScores || [];
             tradingBotLoop._iterScores = []; // reset for next iteration
-            if (tradingBotLoop._diagCount % 5 === 1) {
-                const topScores = candidates.slice(0, 5).map(c => `${c.ticker}:${c.score.compositeScore}`).join(', ');
-                const topRaw = _allScores.sort((a, b) => b.s - a.s).slice(0, 5).map(x => `${x.t}=${x.s}`).join(', ');
+            if (tradingBotLoop._diagCount % 3 === 1) {
+                const topScores = candidates.slice(0, 5).map(c => `${c.ticker}:${c.score.compositeScore.toFixed(1)}`).join(', ');
+                const topRaw = _allScores.sort((a, b) => b.s - a.s).slice(0, 5).map(x => `${x.t}=${x.s.toFixed(1)}(min${x.m})`).join(', ');
                 console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}, positions=${Object.keys(portfolio.positions).length}${candidates.length > 0 ? `, top=[${topScores}]` : topRaw ? `, rawTop=[${topRaw}]` : ''}`);
             }
 
