@@ -3444,6 +3444,10 @@ async function tradingBotLoop() {
                             break;
                         }
                     }
+                    // Diagnostic: log TC and strategy selection for candidates (every 5th iteration)
+                    if (!entryStrategy && tradingBotLoop._diagCount % 5 === 0) {
+                        console.log(`[EntryDiag] ${ticker}: TC=${tcValue.toFixed(1)}, threshold=${trendEntryThreshold}, mom=${_cachedMom.toFixed(1)}, stratCandidates=${stratCandidates.length}, regime=${currentRegime}`);
+                    }
                 } else {
                     // Fallback: original TREND-only entry (optimizer-tuned threshold)
                     if (tcValue < optParams.TREND_BULLISH_ENTRY) {
