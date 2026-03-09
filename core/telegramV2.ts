@@ -115,7 +115,7 @@ class TelegramV2Service {
     const exchangeName = event.exchange === 'crypto.com' ? 'CRYPTO.COM' : 'KRAKEN';
     const result = isProfit ? 'PROFIT ✅' : 'LOSS ❌';
 
-    const holdMs = event.holdDurationMs;
+    const holdMs = event.holdDurationMs ?? 0;
     const holdStr = holdMs > 3600000
       ? `${(holdMs / 3600000).toFixed(1)}h`
       : `${(holdMs / 60000).toFixed(0)}m`;
@@ -124,9 +124,9 @@ class TelegramV2Service {
       `${icon} <b>${exchangeName} SOLD — ${result}</b>`,
       `━━━━━━━━━━━━━━━━━━`,
       `📊 <b>${event.ticker}</b> @ $${this.fmtPrice(event.price)}`,
-      `💵 P&L: ${event.pnlUsd >= 0 ? '+' : ''}$${event.pnlUsd.toFixed(2)} (${event.pnlPercent >= 0 ? '+' : ''}${event.pnlPercent.toFixed(2)}%)`,
-      `📉 Fees: -$${event.feesUsd.toFixed(2)}`,
-      `📊 Net: ${event.netPnlUsd >= 0 ? '+' : ''}$${event.netPnlUsd.toFixed(2)}`,
+      `💵 P&L: ${(event.pnlUsd ?? 0) >= 0 ? '+' : ''}$${(event.pnlUsd ?? 0).toFixed(2)} (${(event.pnlPercent ?? 0) >= 0 ? '+' : ''}${(event.pnlPercent ?? 0).toFixed(2)}%)`,
+      `📉 Fees: -$${(event.feesUsd ?? 0).toFixed(2)}`,
+      `📊 Net: ${(event.netPnlUsd ?? 0) >= 0 ? '+' : ''}$${(event.netPnlUsd ?? 0).toFixed(2)}`,
       `⏱️ Held: ${holdStr}`,
       `📋 Reason: ${event.reason}`,
       `💼 Mode: ${event.mode}`,
@@ -497,6 +497,7 @@ class TelegramV2Service {
   }
 
   private fmtPrice(price: number): string {
+    if (price == null || typeof price !== 'number' || isNaN(price)) return '0.00';
     if (price >= 1000) return price.toFixed(2);
     if (price >= 1) return price.toFixed(4);
     return price.toFixed(6);
