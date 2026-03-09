@@ -98,7 +98,15 @@ export async function makeSignedRequest(method, params = {}, sessionId = null) {
     const data = await response.json();
 
     if (data.code != 0) {
-        console.error(`[Crypto.com] ${method} failed:`, JSON.stringify(data));
+        // Suppress recurring auth failures (no API keys configured)
+        if (data.code === 40101) {
+            if (!makeSignedRequest._authWarn) {
+                makeSignedRequest._authWarn = true;
+                console.warn(`[Crypto.com] Authentication not configured — private API calls disabled`);
+            }
+        } else {
+            console.error(`[Crypto.com] ${method} failed:`, JSON.stringify(data));
+        }
         throw new Error(`Crypto.com API Error (Code: ${data.code}): ${data.message || 'No message provided.'}`);
     }
     return data.result;
