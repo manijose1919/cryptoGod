@@ -2288,6 +2288,14 @@ async function checkTickExit(ticker, price) {
     // would sell 60% of the position before the seed's 12-35% TP is reached
     const skipStaged = levels.regime && levels.tpPrice && (levels.tpPrice / position.openPrice - 1) > 0.05; // TP > 5% = seed override active
 
+    // Move SL to breakeven after stage1 is hit (already booked 25% profit)
+    // This ensures the remaining 75% can't turn into a loss
+    if (position._stage1Done && !position._slMovedToBreakeven && levels.slPrice < position.openPrice) {
+        const breakEvenSL = position.openPrice * (1 + 0.001); // Just above entry (covers minimal slippage)
+        levels.slPrice = breakEvenSL;
+        position._slMovedToBreakeven = true;
+    }
+
     // Stage 1: exit 25% at 1.0× ATR profit (if not already done)
     if (!skipStaged && !position._stage1Done && levels.stage1Price && price >= levels.stage1Price) {
         position._stage1Done = true;
@@ -2337,9 +2345,16 @@ async function checkTickExit(ticker, price) {
 
     // 3. Trailing stop (only if trail activated — stage1 price acts as trail activation)
     if (!exitReason && position.highestPrice >= levels.trailActivationPrice) {
-        const trailLevel = position.highestPrice * (1 - levels.trailPct / 100);
+        // After both partial exits (stage1+stage2), the remaining 40% is a "runner"
+        // Tighten trail on the runner to protect locked-in profits
+        let effectiveTrailPct = levels.trailPct;
+        if (position._stage1Done && position._stage2Done) {
+            effectiveTrailPct *= 0.6; // 40% tighter trail on runner (already booked 60%)
+        }
+        const trailLevel = position.highestPrice * (1 - effectiveTrailPct / 100);
         if (price <= trailLevel) {
-            exitReason = `[RT-TRAIL] price ${price.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${position.highestPrice.toFixed(4)})`;
+            const isRunner = position._stage1Done && position._stage2Done;
+            exitReason = `[RT-TRAIL${isRunner ? '-RUNNER' : ''}] price ${price.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${position.highestPrice.toFixed(4)})`;
         }
     }
 
@@ -3093,7 +3108,17 @@ async function tradingBotLoop() {
             tradingBotLoop._statusLogTime = Date.now();
             const posCount = Object.keys(portfolio.positions).length;
             const drawdownPct = peakValue > 0 ? ((peakValue - totalValue) / peakValue * 100).toFixed(2) : '0.00';
-            console.log(`[BotLoop] Status: ${posCount} positions, cash=$${portfolio.cash.toFixed(2)}, total=$${totalValue.toFixed(2)}, drawdown=${drawdownPct}%`);
+            // Calculate aggregate unrealized PnL
+            let unrealizedPnl = 0;
+            for (const pos of Object.values(portfolio.positions)) {
+                if (pos.currentPrice && pos.openPrice) {
+                    unrealizedPnl += (pos.currentPrice - pos.openPrice) * pos.quantity;
+                }
+            }
+            const sessionTrades = portfolio.tradeLog?.length || 0;
+            const sessionWins = portfolio.tradeLog?.filter(t => t.pnl >= 0).length || 0;
+            const sessionWR = sessionTrades > 0 ? ((sessionWins / sessionTrades) * 100).toFixed(0) : 'N/A';
+            console.log(`[BotLoop] ${posCount} pos, $${totalValue.toFixed(0)} total, dd=${drawdownPct}%, unrealized=$${unrealizedPnl.toFixed(2)}, ${sessionTrades} trades (${sessionWR}% WR), regime=${currentRegime}`);
         }
 
         // --- ENTRY LOGIC ---
@@ -3111,13 +3136,15 @@ async function tradingBotLoop() {
             return 'UNKNOWN';
         })();
 
-        // Regime transition Telegram alert
+        // Regime transition Telegram alert + cooldown tracking
         if (!botState._lastRegime) botState._lastRegime = currentRegime;
         if (currentRegime !== botState._lastRegime && currentRegime !== 'UNKNOWN' && botState._lastRegime !== 'UNKNOWN') {
             addLog(`[REGIME] Transition: ${botState._lastRegime} → ${currentRegime}`, 'INFO');
             if (telegramEnabled()) {
                 alertRegimeTransition(botState._lastRegime, currentRegime);
             }
+            // Track regime change time — used for entry cooldown after transitions
+            botState._regimeChangeTime = Date.now();
             botState._lastRegime = currentRegime;
         } else if (currentRegime !== 'UNKNOWN') {
             botState._lastRegime = currentRegime;
@@ -3176,6 +3203,25 @@ async function tradingBotLoop() {
                 reason: `Monte Carlo risk gate: p95 MaxDD=${_mcRiskGate.maxDD95.toFixed(1)}%, Sharpe=${_mcRiskGate.sharpe50.toFixed(2)} — new entries blocked`,
                 regime: currentRegime });
         }
+
+        // BTC correlation gate: When BTC is in strong downtrend, penalize altcoin entries
+        // Altcoins are 70-90% correlated with BTC — entering alts during BTC dumps is high risk
+        let btcDownPenalty = 0;
+        try {
+            const btcCandles = marketDataMap.get('BTCUSD');
+            if (btcCandles && btcCandles.length >= 30) {
+                const btcCloses = btcCandles.slice(-20).map(c => c.c);
+                const btcPrice = btcCloses[btcCloses.length - 1];
+                const btc20Ago = btcCloses[0];
+                const btcChange20 = ((btcPrice - btc20Ago) / btc20Ago) * 100;
+                // BTC dropping >1% in last 20 candles → penalize alt entries
+                if (btcChange20 < -2.0) btcDownPenalty = 15; // Strong BTC dump → heavy penalty
+                else if (btcChange20 < -1.0) btcDownPenalty = 8;  // Moderate BTC weakness
+                else if (btcChange20 < -0.5) btcDownPenalty = 3;  // Mild BTC weakness
+                // BTC rising → small boost for alts
+                else if (btcChange20 > 1.0) btcDownPenalty = -5;  // BTC strong → alt tailwind
+            }
+        } catch (e) { /* fail open */ }
 
         // Derive entry thresholds from timeframe profile, then overlay optimizer + adaptive values
         const optParams = getOptimizedEntryParams();
@@ -3243,6 +3289,33 @@ async function tradingBotLoop() {
                         : 0;
                     score.compositeScore += mtfBoost;
                     score.factors.mtfBoost = mtfBoost;
+                }
+
+                // Re-entry cooldown: skip tickers that recently had a losing exit
+                if (entryStrategy && tradingBotLoop._reEntryCooldowns?.has(ticker)) {
+                    const cooldownExpiry = tradingBotLoop._reEntryCooldowns.get(ticker);
+                    if (Date.now() < cooldownExpiry) {
+                        logThought({ type: 'SKIP', ticker, action: 'REENTRY_COOLDOWN',
+                            confidence: score.compositeScore,
+                            reason: `Lost on ${ticker} recently — ${((cooldownExpiry - Date.now()) / 60000).toFixed(0)}min cooldown remaining`,
+                            regime: currentRegime });
+                        entryStrategy = null;
+                    } else {
+                        tradingBotLoop._reEntryCooldowns.delete(ticker);
+                    }
+                }
+
+                // Regime transition cooldown: wait 3 minutes after regime change before new entries
+                // Fresh regime transitions produce noisy signals — let the dust settle
+                if (entryStrategy && botState._regimeChangeTime && botState.tradingMode !== 'SIMULATION') {
+                    const sinceRegimeChange = Date.now() - botState._regimeChangeTime;
+                    if (sinceRegimeChange < 3 * 60 * 1000) {
+                        logThought({ type: 'SKIP', ticker, action: 'REGIME_COOLDOWN',
+                            confidence: score.compositeScore,
+                            reason: `Regime changed ${(sinceRegimeChange / 1000).toFixed(0)}s ago — waiting for confirmation (3min cooldown)`,
+                            regime: currentRegime });
+                        entryStrategy = null;
+                    }
                 }
 
                 // Per-ticker cooldown raises threshold after consecutive losses
@@ -4418,6 +4491,63 @@ async function tradingBotLoop() {
                     }
                 }
 
+                // Candle indecision filter: skip entries when last 3 candles are mostly dojis/spinners
+                // Doji candles (tiny body, long wicks) indicate market indecision → poor entry timing
+                if (entryStrategy && candles.length >= 5) {
+                    try {
+                        const last3 = candles.slice(-3);
+                        let dojiCount = 0;
+                        for (const c of last3) {
+                            const bodySize = Math.abs(c.c - c.o);
+                            const totalRange = c.h - c.l;
+                            if (totalRange > 0 && bodySize / totalRange < 0.2) dojiCount++;
+                        }
+                        if (dojiCount >= 2) {
+                            logThought({ type: 'SKIP', ticker, action: 'CANDLE_INDECISION',
+                                confidence: score.compositeScore,
+                                reason: `${dojiCount}/3 recent candles are doji/spinner — market undecided`,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                    } catch (e) { /* fail open */ }
+                }
+
+                // Volume confirmation gate: skip entries on below-average volume
+                // Low volume entries have wider spreads and worse fills
+                if (entryStrategy && candles.length >= 25) {
+                    try {
+                        const recentVols = candles.slice(-20).map(c => c.v || 0);
+                        const avgVol = recentVols.reduce((s, v) => s + v, 0) / recentVols.length;
+                        const currentVol = candles[candles.length - 1].v || 0;
+                        if (avgVol > 0 && currentVol < avgVol * 0.4) {
+                            logThought({ type: 'SKIP', ticker, action: 'LOW_VOLUME',
+                                confidence: score.compositeScore,
+                                reason: `Volume ${(currentVol / avgVol * 100).toFixed(0)}% of avg — too thin for reliable entry`,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                    } catch (e) { /* fail open */ }
+                }
+
+                // Session loss backoff: After 5+ losses in current session, scale down entries
+                // Prevents bleeding out during a bad streak
+                if (entryStrategy && botState.tradingMode !== 'SIMULATION') {
+                    const recentTrades = (portfolio.tradeLog || []).slice(-20);
+                    const recentLosses = recentTrades.filter(t => t.pnl < 0).length;
+                    const recentWins = recentTrades.filter(t => t.pnl >= 0).length;
+                    if (recentTrades.length >= 8 && recentLosses >= recentWins * 2) {
+                        // Win rate below 33% in last 20 trades — double the entry threshold
+                        const boostedFloor = (optParams?.compositeScoreFloor || 30) * 1.5;
+                        if (score.compositeScore < boostedFloor) {
+                            logThought({ type: 'SKIP', ticker, action: 'SESSION_LOSS_BACKOFF',
+                                confidence: score.compositeScore,
+                                reason: `${recentLosses}L/${recentWins}W in last ${recentTrades.length} trades — raised floor to ${boostedFloor.toFixed(0)}`,
+                                regime: currentRegime });
+                            entryStrategy = null;
+                        }
+                    }
+                }
+
                 // Regime transition confidence boost/penalty
                 let regimeTransitionAdj = 0;
                 if (entryStrategy) {
@@ -4533,17 +4663,30 @@ async function tradingBotLoop() {
                     } catch (e) { /* fail open */ }
                 }
 
-                // Asset volatility profile for position sizing (was dead code — assetIntelligenceBackend.js)
+                // Asset volatility profile for position sizing — ATR-based dynamic sizing
+                // Uses real-time ATR to scale position size inversely with volatility
                 let assetVolatilitySizeMultiplier = 1.0;
-                if (entryStrategy) {
+                if (entryStrategy && candles.length >= 15) {
                     try {
-                        const profile = getAssetProfile(ticker);
-                        if (profile?.volatilityTier) {
-                            // Higher volatility = smaller position (tail risk protection)
-                            if (profile.volatilityTier === 'EXTREME') assetVolatilitySizeMultiplier = 0.5;
-                            else if (profile.volatilityTier === 'HIGH') assetVolatilitySizeMultiplier = 0.7;
-                            else if (profile.volatilityTier === 'MEDIUM') assetVolatilitySizeMultiplier = 1.0;
-                            else if (profile.volatilityTier === 'LOW') assetVolatilitySizeMultiplier = 1.2;
+                        const atrForSizing = calculateATRFromCandles(candles, 14);
+                        const currentPrice = candles[candles.length - 1].c;
+                        if (atrForSizing > 0 && currentPrice > 0) {
+                            const atrPct = (atrForSizing / currentPrice) * 100;
+                            // Target 1% risk per position: if ATR% > 2%, reduce; if < 1%, increase
+                            // ATR% < 0.5% → 1.3x (calm), 0.5-1% → 1.15x, 1-2% → 1.0x,
+                            // 2-3% → 0.75x, 3-5% → 0.55x, >5% → 0.35x (extreme vol)
+                            if (atrPct < 0.5) assetVolatilitySizeMultiplier = 1.3;
+                            else if (atrPct < 1.0) assetVolatilitySizeMultiplier = 1.15;
+                            else if (atrPct < 2.0) assetVolatilitySizeMultiplier = 1.0;
+                            else if (atrPct < 3.0) assetVolatilitySizeMultiplier = 0.75;
+                            else if (atrPct < 5.0) assetVolatilitySizeMultiplier = 0.55;
+                            else assetVolatilitySizeMultiplier = 0.35;
+                        } else {
+                            // Fallback to static profile
+                            const profile = getAssetProfile(ticker);
+                            if (profile?.volatilityTier === 'EXTREME') assetVolatilitySizeMultiplier = 0.5;
+                            else if (profile?.volatilityTier === 'HIGH') assetVolatilitySizeMultiplier = 0.7;
+                            else if (profile?.volatilityTier === 'LOW') assetVolatilitySizeMultiplier = 1.2;
                         }
                     } catch (e) { /* fail open */ }
                 }
@@ -4620,7 +4763,9 @@ async function tradingBotLoop() {
                     } catch (e) { /* fail open */ }
                 }
 
-                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj + volumeBurstAdj + velocityAdj + regimeTransitionAdj + leadLagAdj + journalAdj + candlestickAdj + onChainAdj + macroCompositeAdj + scannerAdj + derivativesAdj + fearGreedAdj + sweepAdj + mtfConfidenceAdj + obAdj + vwapAdj + stochRSIAdj + deltaVolAdj + adversarialAdj + microBurstAdj + regimeBoostAdj;
+                // BTC correlation penalty for altcoins (BTC itself gets no penalty)
+                const btcCorrAdj = (ticker !== 'BTCUSD' && btcDownPenalty > 0) ? -btcDownPenalty : (ticker !== 'BTCUSD' ? -btcDownPenalty : 0);
+                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj + volumeBurstAdj + velocityAdj + regimeTransitionAdj + leadLagAdj + journalAdj + candlestickAdj + onChainAdj + macroCompositeAdj + scannerAdj + derivativesAdj + fearGreedAdj + sweepAdj + mtfConfidenceAdj + obAdj + vwapAdj + stochRSIAdj + deltaVolAdj + adversarialAdj + microBurstAdj + regimeBoostAdj + btcCorrAdj;
                 if (entryStrategy && adjustedComposite < optParams.compositeScoreFloor) {
                     logThought({
                         type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
@@ -4838,6 +4983,7 @@ async function tradingBotLoop() {
                             metaRLActions: metaRLParams ? { positionSizeMult: metaRLParams.positionSizeMult, slMult: metaRLParams.slMult, tpMult: metaRLParams.tpMult, entryThreshMult: metaRLParams.entryThreshMult } : null,
                             entryType: sniperCandidate ? 'SNIPER' : 'STANDARD',
                             fearGreedAtEntry: fearGreedGate?.getFearGreedIndex?.()?.value ?? null,
+                            atrPct: candles.length >= 15 ? ((calculateATRFromCandles(candles, 14) / currentPrice) * 100) : null,
                         });
                     }
                 }
@@ -5283,6 +5429,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 mlDirection: entryMeta.mlDirection || null,
                 metaRLActions: entryMeta.metaRLActions || null,
                 fearGreedAtEntry: entryMeta.fearGreedAtEntry ?? null,
+                atrPct: entryMeta.atrPct ?? null,
             };
         }
         portfolio.cash -= (actualCost + buyFee);
@@ -5684,6 +5831,13 @@ const handleSell = async (position, price, reason) => {
                 const actions = position.metaRLActions || metaRL.selectActions(regime);
                 metaRL.updateBeliefs(regime, actions, pnlPercent);
             } catch (e) {}
+        }
+
+        // Re-entry cooldown: after a losing trade, prevent re-entering same ticker for 10 min
+        // Prevents revenge trading and entering the same failing setup
+        if (pnl < 0) {
+            if (!tradingBotLoop._reEntryCooldowns) tradingBotLoop._reEntryCooldowns = new Map();
+            tradingBotLoop._reEntryCooldowns.set(position.ticker, Date.now() + 10 * 60 * 1000);
         }
 
         // C6: Signal scanner feedback loop — record outcome for scanner weight adjustment

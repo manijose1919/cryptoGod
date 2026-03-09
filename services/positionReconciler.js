@@ -45,6 +45,18 @@ export async function reconcilePositions(portfolio, sessionId) {
   try {
     const adapter = getExchangeAdapter();
 
+    // Skip reconciliation if exchange has no auth configured (e.g. Crypto.com without API keys)
+    if (adapter.getName?.() === 'crypto.com') {
+      if (!process.env.SESSION_API_KEY && !process.env.SESSION_SECRET_KEY) {
+        if (!reconcilePositions._cryptoComSkipWarn) {
+          reconcilePositions._cryptoComSkipWarn = true;
+          console.log('[Reconciler] Skipping Crypto.com reconciliation — no API keys configured');
+        }
+        result.actionsRequired.push('AUTH_NOT_CONFIGURED');
+        return result;
+      }
+    }
+
     // Get exchange balances
     const balanceResult = await adapter.getBalance(sessionId);
     if (!balanceResult) {

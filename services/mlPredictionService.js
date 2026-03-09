@@ -733,7 +733,7 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
         return currentDiff < closestDiff ? current : closest;
       }, null);
 
-    if (matchingFeature && Math.abs(matchingFeature.timestamp - entryTime) < 60000) { // within 1 minute
+    if (matchingFeature && Math.abs(matchingFeature.timestamp - entryTime) < 300000) { // within 5 minutes (was 1min — too tight, missed most labels)
       db.labelMLFeatures(matchingFeature.id, label, labelValue);
       console.log(`[ML Prediction] Labeled feature #${matchingFeature.id}: ${ticker} ${outcome} (${pnlPercent?.toFixed(2)}%)`);
 
@@ -767,7 +767,13 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
         await trainModel();
       }
     } else {
-      console.warn(`[ML Prediction] No matching feature found for ${ticker} at ${entryTime}`);
+      // Rate-limit this warning per ticker (10min cooldown)
+      if (!recordTradeOutcome._warnCooldowns) recordTradeOutcome._warnCooldowns = {};
+      const now = Date.now();
+      if (!recordTradeOutcome._warnCooldowns[ticker] || now - recordTradeOutcome._warnCooldowns[ticker] > 600_000) {
+        recordTradeOutcome._warnCooldowns[ticker] = now;
+        console.warn(`[ML Prediction] No matching feature for ${ticker} within 5min of entry (${new Date(entryTime).toISOString()})`);
+      }
     }
 
     // Also resolve any pending ML predictions

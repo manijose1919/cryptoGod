@@ -24,13 +24,12 @@ const CACHE_TTL = {
 const requestTimestamps = []; // sliding window rate limiter
 const MAX_REQ_PER_SEC = 5;
 
-// Dead flag: set after deprecation or repeated auth errors, suppresses for 30min
-let _deadUntil = 0;
-const DEAD_TTL = 30 * 60 * 1000;
-function isDead() { return Date.now() < _deadUntil; }
+// Dead flag: set permanently after deprecation errors (only resets on restart)
+let _dead = false;
+function isDead() { return _dead; }
 function markDead(reason) {
-  if (!_deadUntil) console.warn(`[Etherscan] Suppressing for 30min: ${reason}`);
-  _deadUntil = Date.now() + DEAD_TTL;
+  if (!_dead) console.warn(`[Etherscan] Permanently disabled this session: ${reason}`);
+  _dead = true;
 }
 
 if (!API_KEY) {
