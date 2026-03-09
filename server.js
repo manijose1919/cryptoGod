@@ -2589,7 +2589,19 @@ async function tradingBotLoop() {
         const tier = CapitalTierManager.getTier(totalValue);
 
         // Enforce tier's maxConcurrentTrades as a hard cap
-        const maxConcurrentTrades = tier.maxConcurrentTrades;
+        // In Extreme Fear (F&G < 15), cap positions at 50% of max to preserve capital
+        let maxConcurrentTrades = tier.maxConcurrentTrades;
+        if (fearGreedGate) {
+            try {
+                const fgi = fearGreedGate.getFearGreedIndex?.();
+                const fgValue = fgi?.value ?? 50;
+                if (fgValue < 15) {
+                    maxConcurrentTrades = Math.max(3, Math.floor(maxConcurrentTrades * 0.5));
+                } else if (fgValue < 25) {
+                    maxConcurrentTrades = Math.max(4, Math.floor(maxConcurrentTrades * 0.7));
+                }
+            } catch (e) { /* fail open */ }
+        }
 
         // Halt trading if drawdown exceeds tier limits
         const drawdown = peakValue > 0 ? ((peakValue - totalValue) / peakValue) * 100 : 0;
@@ -2767,7 +2779,38 @@ async function tradingBotLoop() {
                     ? getMultipleMarketData(rest5mTickers, '5m').then(rest => [...synth5mMap.values(), ...rest])
                     : Promise.resolve([...synth5mMap.values(), ...(_mtfCache5m.data || [])])
             );
-            fetches.push(mtf15mStale ? getMultipleMarketData(mtfTickers, '15m') : Promise.resolve(_mtfCache15m.data));
+            // 15m: aggregate from 1m WS candles (same pattern as 5m, needs 315+ 1m candles)
+            const synth15mData = mtfTickers.map(ticker => {
+                const candles1m = marketDataMap.get(ticker);
+                if (candles1m && candles1m.length >= 315) {
+                    const bars15m = [];
+                    const aligned = candles1m.filter(c => c.t);
+                    for (let i = 0; i < aligned.length - 14; i += 15) {
+                        const group = aligned.slice(i, i + 15);
+                        if (group.length >= 10) {
+                            bars15m.push({
+                                t: group[0].t,
+                                o: group[0].o,
+                                h: Math.max(...group.map(c => c.h)),
+                                l: Math.min(...group.map(c => c.l)),
+                                c: group[group.length - 1].c,
+                                v: group.reduce((sum, c) => sum + (c.v || 0), 0),
+                            });
+                        }
+                    }
+                    if (bars15m.length >= 21) {
+                        return { ticker, candles: bars15m, source: 'ws-aggregate-15m' };
+                    }
+                }
+                return null;
+            });
+            const synth15mMap = new Map(synth15mData.filter(Boolean).map(d => [d.ticker, d]));
+            const rest15mTickers = mtfTickers.filter(t => !synth15mMap.has(t));
+            fetches.push(
+                rest15mTickers.length > 0 && mtf15mStale
+                    ? getMultipleMarketData(rest15mTickers, '15m').then(rest => [...synth15mMap.values(), ...rest])
+                    : Promise.resolve([...synth15mMap.values(), ...(_mtfCache15m.data || [])])
+            );
             fetches.push(mtf1hStale ? getMultipleMarketData(mtfTickers, '1h') : Promise.resolve(_mtfCache1h.data));
 
             const [data5m, data15m, data1h] = await Promise.all(fetches);
@@ -2880,6 +2923,36 @@ async function tradingBotLoop() {
             if (!exitReason && position.entryStrategy !== 'EXISTING') {
                 const dynamicCheck = checkDynamicExit(position, currentPrice, candles);
                 if (dynamicCheck.shouldExit) exitReason = dynamicCheck.reason;
+            }
+
+            // ML-accelerated early exit: If position is in loss AND ML strongly predicts DOWN,
+            // cut losses faster instead of waiting for beastMode time-based exits.
+            // This prevents holding losers for 90+ minutes when the model says it's going lower.
+            if (!exitReason && mlPredictionService?.getMLAdvice) {
+                try {
+                    const pnlPct = ((currentPrice - position.openPrice) / position.openPrice) * 100;
+                    const holdMin = (Date.now() - (position.entryTime || 0)) / 60000;
+                    if (pnlPct < -0.15 && holdMin >= 5) {
+                        // Throttle: max 1 ML exit check per ticker per 2 min
+                        const _mlExitKey = `mlExit_${position.ticker}`;
+                        const lastCheck = tradingBotLoop[_mlExitKey] || 0;
+                        if (Date.now() - lastCheck > 2 * 60 * 1000) {
+                            tradingBotLoop[_mlExitKey] = Date.now();
+                            const mlAdv = await mlPredictionService.getMLAdvice(position.ticker, candles, {
+                                marketRegime: typeof getMarketRegime === 'function' ? getMarketRegime(candles, position.ticker) : 'UNKNOWN'
+                            });
+                            const mlDown = mlAdv?.available &&
+                                (mlAdv.direction === 'SELL' || mlAdv.direction === 'SHORT' || mlAdv.direction === 'DOWN') &&
+                                mlAdv.confidence >= 78;
+                            if (mlDown) {
+                                const feeAdj = pnlPct + 0.52; // account for exit fees
+                                if (feeAdj < -0.3) {
+                                    exitReason = `[ML-ACCEL-EXIT] ${pnlPct.toFixed(2)}% loss + ML ${mlAdv.confidence.toFixed(0)}% DOWN after ${holdMin.toFixed(0)}min`;
+                                }
+                            }
+                        }
+                    }
+                } catch (e) { /* fail open */ }
             }
 
             // Strategy indicator exits — only fire after minimum hold time.
@@ -3417,7 +3490,38 @@ async function tradingBotLoop() {
                 } catch (e) {}
             }
 
+            // ═══ ML CONSENSUS GATE ═══
+            // When ALL ML predictions unanimously agree DOWN with high confidence,
+            // stop entering entirely — even in SIM. Losing trades in a bear consensus
+            // produce low-quality training data (all labeled LOSS, no signal).
+            // Only enter when there's genuine disagreement or mixed signals.
+            let mlConsensusBlock = false;
+            if (_mlAdviceCache.size >= 3) {
+                const adviceValues = [..._mlAdviceCache.values()].filter(a => a.available);
+                if (adviceValues.length >= 3) {
+                    const downCount = adviceValues.filter(a =>
+                        (a.direction === 'SELL' || a.direction === 'SHORT' || a.direction === 'DOWN') && a.confidence >= 72
+                    ).length;
+                    const downRatio = downCount / adviceValues.length;
+                    if (downRatio >= 0.85) {
+                        mlConsensusBlock = true;
+                        // Allow 1 trade per 10 minutes as a "scout" for training data diversity
+                        const timeSinceLastScout = Date.now() - (tradingBotLoop._lastScoutTime || 0);
+                        if (timeSinceLastScout > 10 * 60 * 1000) {
+                            mlConsensusBlock = false; // Let one through as a scout
+                            tradingBotLoop._lastScoutTime = Date.now();
+                            if (tradingBotLoop._diagCount % 3 === 0) {
+                                console.log(`[ML-Consensus] ${downCount}/${adviceValues.length} predict DOWN ≥72% — allowing scout trade`);
+                            }
+                        } else if (tradingBotLoop._diagCount % 5 === 0) {
+                            console.log(`[ML-Consensus] BLOCKED: ${downCount}/${adviceValues.length} predict DOWN ≥72% — sitting on hands (next scout in ${((10*60*1000 - timeSinceLastScout)/60000).toFixed(1)}m)`);
+                        }
+                    }
+                }
+            }
+
             for (const candidate of candidates) {
+                if (mlConsensusBlock) break;
                 if (maxConcurrentTrades - Object.keys(portfolio.positions).length <= 0) break;
                 if (portfolio.cash < CONFIG.MIN_TRADE_SIZE) break;
 
