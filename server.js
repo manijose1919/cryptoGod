@@ -1775,15 +1775,20 @@ function checkLiquidity(candles, ticker) {
     const avgUsdVol = totalUsdVol / recent.length;
     const isSimMode = typeof botState !== 'undefined' && botState.tradingMode === 'SIMULATION';
     // WS 1m candles have very low volume for altcoins ($0-200/candle typical)
-    // SIM mode: $50 min allows most tradeable Kraken pairs through for ML training
+    // SIM mode: $1 min — virtually no filter since we're not placing real orders,
+    // and we need trade data flowing for ML training. Only filters dead pairs.
     // REAL mode: $500 min ensures adequate liquidity for actual order fills
-    const baseMinVol = isSimMode ? 50 : CONFIG.MIN_AVG_CANDLE_USD_VOLUME;
+    const baseMinVol = isSimMode ? 1 : CONFIG.MIN_AVG_CANDLE_USD_VOLUME;
     const minVolume = (ticker && isNewListing && isNewListing(ticker)) ? 20 : baseMinVol;
 
     if (avgUsdVol < minVolume) {
-        // Log first few failures for debugging
+        // Log first few failures per bot loop cycle for debugging (reset every 60s)
         if (!checkLiquidity._logCount) checkLiquidity._logCount = 0;
-        if (checkLiquidity._logCount < 5) {
+        if (!checkLiquidity._logResetTime || Date.now() - checkLiquidity._logResetTime > 60000) {
+            checkLiquidity._logCount = 0;
+            checkLiquidity._logResetTime = Date.now();
+        }
+        if (checkLiquidity._logCount < 3) {
             console.log(`[Liquidity] ${ticker} FAIL: avgVol=$${avgUsdVol.toFixed(0)} < min=$${minVolume} (${recent.length} candles, price=$${lastPrice})`);
             checkLiquidity._logCount++;
         }
@@ -2852,17 +2857,33 @@ async function tradingBotLoop() {
                 ADA: 1.0, LINK: 0.9, DOT: 1.0, AVAX: 0.6, BNB: 1.0,
             };
             const holdScale = ASSET_HOLD_SCALE[holdBaseCurrency] || 1.0;
-            // Base hold: 5 minutes, scaled by asset volatility profile
-            // Fast assets (SOL, DOGE) → ~2-2.5 min; BTC → ~7.5 min
-            const MIN_HOLD_FOR_INDICATOR_EXIT = Math.round(5 * 60 * 1000 * holdScale);
+            // Regime-aware minimum hold: SIDEWAYS needs longer holds because TC oscillates
+            // rapidly between bullish/bearish, causing premature 5-min round trips.
+            // SIDEWAYS: 15 min base (3x normal), gives mean-reversion trades time to develop
+            // DOWNTREND: 10 min base (2x), exits need more confirmation in bear markets
+            // UPTREND: 5 min base (1x), trend exits are reliable in bull markets
+            const posRegime = (typeof getMarketRegime === 'function' ? getMarketRegime(candles, ticker) : null) || 'UNKNOWN';
+            const regimeHoldMultiplier = {
+                'SIDEWAYS': 3.0, 'DOWNTREND': 2.0, 'STRONG_DOWN': 2.5,
+                'UPTREND': 1.0, 'STRONG_UP': 0.8,
+            };
+            const regimeMult = regimeHoldMultiplier[posRegime] || 1.5;
+            const MIN_HOLD_FOR_INDICATOR_EXIT = Math.round(5 * 60 * 1000 * holdScale * regimeMult);
 
             if (!exitReason && indicatorHoldMs >= MIN_HOLD_FOR_INDICATOR_EXIT) {
-                const tcValue = calculateTCSeries(candles).pop() ?? 50;
+                const tcSeries = calculateTCSeries(candles);
+                const tcValue = tcSeries.pop() ?? 50;
+                const tcPrev = tcSeries.length > 0 ? tcSeries[tcSeries.length - 1] : tcValue;
                 const momentumValue = calculateMomentumSeries(candles).pop() ?? 50;
+
+                // In SIDEWAYS, require exit confirmation: TC must be rising (trending more bearish)
+                // AND momentum must also be weak. Prevents whipsaw exits on TC noise.
+                const isSidewaysRegime = posRegime === 'SIDEWAYS';
+                const tcConfirmed = !isSidewaysRegime || (tcValue > tcPrev && momentumValue < 55);
 
                 switch (position.entryStrategy) {
                     case 'TREND':
-                        if (tcValue > CONFIG.THRESHOLDS.TREND_BEARISH_EXIT) exitReason = 'Trend Signal: Bearish exit';
+                        if (tcValue > CONFIG.THRESHOLDS.TREND_BEARISH_EXIT && tcConfirmed) exitReason = 'Trend Signal: Bearish exit';
                         break;
                     case 'MOMENTUM':
                         if (momentumValue < CONFIG.THRESHOLDS.MOMENTUM_BEARISH_EXIT) exitReason = 'Momentum Signal: Bearish Momentum';
