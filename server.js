@@ -2731,7 +2731,42 @@ async function tradingBotLoop() {
 
             // Only fetch stale timeframes
             const fetches = [];
-            fetches.push(mtf5mStale ? getMultipleMarketData(mtfTickers, '5m') : Promise.resolve(_mtfCache5m.data));
+            // 5m: aggregate from 1m WS candles (real-time, no REST needed)
+            // Fall back to REST if insufficient 1m data
+            const synth5mData = mtfTickers.map(ticker => {
+                const candles1m = marketDataMap.get(ticker);
+                if (candles1m && candles1m.length >= 25) {
+                    // Aggregate 1m candles into 5m bars
+                    const bars5m = [];
+                    // Align to 5-minute boundaries
+                    const aligned = candles1m.filter(c => c.t);
+                    for (let i = 0; i < aligned.length - 4; i += 5) {
+                        const group = aligned.slice(i, i + 5);
+                        if (group.length >= 3) {
+                            bars5m.push({
+                                t: group[0].t,
+                                o: group[0].o,
+                                h: Math.max(...group.map(c => c.h)),
+                                l: Math.min(...group.map(c => c.l)),
+                                c: group[group.length - 1].c,
+                                v: group.reduce((sum, c) => sum + (c.v || 0), 0),
+                            });
+                        }
+                    }
+                    if (bars5m.length >= 21) {
+                        return { ticker, candles: bars5m, source: 'ws-aggregate' };
+                    }
+                }
+                return null; // Fall through to REST
+            });
+            const synth5mMap = new Map(synth5mData.filter(Boolean).map(d => [d.ticker, d]));
+            // Only REST-fetch tickers that couldn't be aggregated
+            const rest5mTickers = mtfTickers.filter(t => !synth5mMap.has(t));
+            fetches.push(
+                rest5mTickers.length > 0 && mtf5mStale
+                    ? getMultipleMarketData(rest5mTickers, '5m').then(rest => [...synth5mMap.values(), ...rest])
+                    : Promise.resolve([...synth5mMap.values(), ...(_mtfCache5m.data || [])])
+            );
             fetches.push(mtf15mStale ? getMultipleMarketData(mtfTickers, '15m') : Promise.resolve(_mtfCache15m.data));
             fetches.push(mtf1hStale ? getMultipleMarketData(mtfTickers, '1h') : Promise.resolve(_mtfCache1h.data));
 
