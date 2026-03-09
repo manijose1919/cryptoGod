@@ -305,7 +305,7 @@ export function stopDerivativesPolling() {
  * @returns {DerivativesData|null}
  */
 export function getDerivativesSignal(ticker) {
-  const symbol = ticker.replace('USD', '').replace('USDT', '');
+  const symbol = ticker.replace(/USD[T]?$/, '');
   const cached = cache.get(symbol);
   if (!cached || Date.now() - cached.timestamp > CACHE_TTL_MS * 2) return null;
   return cached.data;
@@ -451,7 +451,7 @@ export function getDerivativesStatus() {
  * Uses funding rate extremes and OI concentration as proxies.
  */
 export function getLiquidationLevels(ticker) {
-  const base = ticker.replace('USD', '').replace('USDT', '');
+  const base = ticker.replace(/USD[T]?$/, '');
   const entry = cache.get(base);
   if (!entry) return { ticker, levels: [], available: false };
 

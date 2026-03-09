@@ -182,53 +182,10 @@ export async function fetchCryptoNews(filter = 'all') {
     return stale ? stale.data : [...DEFAULT_NEWS];
   }
 
-  try {
-    let url = 'https://cryptopanic.com/api/free/v1/posts/?public=true';
-    if (filter && filter !== 'all') {
-      url += `&filter=${encodeURIComponent(filter)}`;
-    }
-
-    const response = await fetch(url, { timeout: 10_000 });
-
-    if (!response.ok) {
-      throw new Error(`CryptoPanic API returned ${response.status}`);
-    }
-    fetchCryptoNews._backoff = 0; // reset on success
-
-    const json = await response.json();
-    const results = json.results || [];
-
-    const articles = results.map((post) => {
-      // Determine sentiment from votes if available
-      let sentiment = 'neutral';
-      if (post.votes) {
-        const positive = (post.votes.positive || 0) + (post.votes.liked || 0);
-        const negative = (post.votes.negative || 0) + (post.votes.disliked || 0);
-        if (positive > negative && positive > 0) {
-          sentiment = 'positive';
-        } else if (negative > positive && negative > 0) {
-          sentiment = 'negative';
-        }
-      }
-
-      return {
-        title: post.title || '',
-        source: (post.source && post.source.title) || 'Unknown',
-        publishedAt: post.published_at || post.created_at || new Date().toISOString(),
-        sentiment,
-        url: post.url || '',
-      };
-    });
-
-    setCache(cacheKey, articles);
-    return articles;
-  } catch (err) {
-    fetchCryptoNews._lastErr = Date.now();
-    fetchCryptoNews._backoff = Math.min(30 * 60 * 1000, Math.max(120000, (fetchCryptoNews._backoff || 0) * 2 || 120000));
-    if (fetchCryptoNews._backoff <= 120000) console.error('[SocialSentiment] fetchCryptoNews error:', err.message, `— backing off ${(fetchCryptoNews._backoff/1000).toFixed(0)}s`);
-    const stale = cache.get(cacheKey);
-    return stale ? stale.data : [...DEFAULT_NEWS];
-  }
+  // CryptoPanic free API has been deprecated (returns 404 permanently).
+  // Return cached/default data. News is fetched by cryptoPanicService.js if API key is configured.
+  const stale = cache.get(cacheKey);
+  return stale ? stale.data : [...DEFAULT_NEWS];
 }
 
 // ============================================

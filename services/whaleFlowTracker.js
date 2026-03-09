@@ -218,7 +218,7 @@ export function stopWhaleFlowPolling() {
  * @returns {{ direction: string, strength: number, netFlow: number, largeTransfers: number, trend: string }}
  */
 export function getWhaleFlowSignal(ticker) {
-  const symbol = ticker.replace('USD', '').toUpperCase();
+  const symbol = ticker.replace(/USD$/, '').toUpperCase();
   const asset = symbol === 'BTC' || symbol === 'XBT' ? 'btc' : symbol === 'ETH' ? 'eth' : null;
 
   if (!asset || !flowData[asset].lastUpdate) {

@@ -91,7 +91,7 @@ export function scanOpportunities() {
  * In production: would place spot buy + perp short.
  */
 export function openBasisPosition(ticker, amountUSD) {
-  const symbol = ticker.replace('USD', '');
+  const symbol = ticker.replace(/USD$/, '');
   if (positions.has(symbol)) {
     return { success: false, reason: 'Already have basis position in ' + ticker };
   }

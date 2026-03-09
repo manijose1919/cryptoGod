@@ -81,7 +81,7 @@ export async function reconcilePositions(portfolio, sessionId) {
 
     // Check each bot position against exchange
     for (const [ticker, position] of Object.entries(portfolio.positions)) {
-      const asset = ticker.replace('USD', '').replace('USDT', '');
+      const asset = ticker.replace(/USD[T]?$/, '');
       const exchangeQty = exchangeBalances.get(asset) || 0;
 
       if (exchangeQty === 0 || exchangeQty * (position.currentPrice || position.openPrice) < DUST_THRESHOLD_USD) {

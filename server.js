@@ -2374,7 +2374,7 @@ async function checkTickExit(ticker, price) {
     // 6b. Funding rate exit tightening — extreme funding = overleveraged market = vulnerability
     if (!exitReason && derivativesIntel && position.highestPrice > position.openPrice) {
         try {
-            const derivSignal = derivativesIntel.getDerivativesSignal?.(ticker.replace('USD', ''));
+            const derivSignal = derivativesIntel.getDerivativesSignal?.(ticker.replace(/USD$/, ''));
             if (derivSignal?.fundingRate) {
                 const fundingAPR = Math.abs(derivSignal.fundingRate * 3 * 365 * 100); // 8h rate to annualized
                 // If funding is extreme (>50% APR), tighten trailing stop by 30%
@@ -3615,7 +3615,7 @@ async function tradingBotLoop() {
                 if (entryStrategy && fearGreedGate && derivativesIntel) {
                     try {
                         const fgIndex = fearGreedGate.getFearGreedIndex?.() || 50;
-                        const derivSignal = derivativesIntel.getDerivativesSignal?.(ticker.replace('USD', ''));
+                        const derivSignal = derivativesIntel.getDerivativesSignal?.(ticker.replace(/USD$/, ''));
                         const fundingAPR = derivSignal?.fundingRateAnnualized || 0;
 
                         // Extreme Fear + negative/low funding = market panic + shorts paying = STRONG BUY
@@ -3822,7 +3822,7 @@ async function tradingBotLoop() {
                                 };
                             }
                             if (whaleFlowTracker) {
-                                const flow = whaleFlowTracker.getFlowSignal?.(ticker.replace('USD', ''));
+                                const flow = whaleFlowTracker.getFlowSignal?.(ticker.replace(/USD$/, ''));
                                 if (flow) mlOptions.onChainData = flow;
                             }
                             try {
@@ -3964,8 +3964,8 @@ async function tradingBotLoop() {
                             const [cmcData, ethData, ccData, messData] = await Promise.allSettled([
                                 coinMarketCapService?.getGlobalMetrics?.(),
                                 etherscanService?.getGasPrice?.(),
-                                cryptoCompareService?.getSocialStats?.(ticker.replace('USD', '')),
-                                messariService?.getAssetMetrics?.(ticker.replace('USD', '')),
+                                cryptoCompareService?.getSocialStats?.(ticker.replace(/USD$/, '')),
+                                messariService?.getAssetMetrics?.(ticker.replace(/USD$/, '')),
                             ]);
                             marketIntelligence = {
                                 fearGreed: cmcData?.value?.fear_greed_value || 0,
@@ -4585,7 +4585,7 @@ async function tradingBotLoop() {
                     // Evaluate via derivatives intelligence for short signal
                     let derivShortFavor = false;
                     if (derivativesIntel) {
-                        const shortCheck = derivativesIntel.shouldFavorShortEntry(ticker.replace('USD', ''));
+                        const shortCheck = derivativesIntel.shouldFavorShortEntry(ticker.replace(/USD$/, ''));
                         derivShortFavor = shortCheck.favorable;
                     }
 
