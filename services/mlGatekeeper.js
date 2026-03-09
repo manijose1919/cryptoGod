@@ -113,7 +113,22 @@ export function evaluateEntry(ticker, candles, ruleStrategy, ruleStrength, optio
 
     // Get ML prediction — use reliable features to avoid NaN from imputed values
     const mlPrediction = mlEngine.predict(reliableFeatures);
-    const mlConfidence = mlPrediction.confidence * 100; // Convert to 0-100
+    let mlConfidence = mlPrediction.confidence * 100; // Convert to 0-100
+
+    // NaN guard: if ML confidence is NaN, fail open entirely
+    if (typeof mlConfidence !== 'number' || isNaN(mlConfidence)) {
+      console.log(`[MLGatekeeper] ${ticker}: NaN confidence from ML engine — failing open`);
+      return {
+        proceed: true,
+        confidence: 0,
+        tier: 'NaN_FAILOPEN',
+        sizeMultiplier: 1.0,
+        reason: 'ML confidence NaN — failing open, deferring to rules',
+        mlPrediction,
+        adversarialConsensus: null,
+        lastFeatureVector: features,
+      };
+    }
 
     // Adversarial consensus (if enabled)
     let advConsensus = null;
