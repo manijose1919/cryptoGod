@@ -35,7 +35,7 @@ const lastSignalTime = new Map(); // ticker → timestamp (cooldown tracking)
  * @returns {{ sweep: boolean, direction: 'LONG'|'SHORT'|null, confidence: number, reason: string }}
  */
 export function detectLiquidationSweep(ticker, recentCandles = []) {
-  const symbol = ticker.replace('USD', '').replace('USDT', '');
+  const symbol = ticker.replace(/USD[T]?$/, '');
   const signal = getDerivativesSignal(symbol);
 
   if (!signal) {
