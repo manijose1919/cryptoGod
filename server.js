@@ -2588,7 +2588,11 @@ async function tradingBotLoop() {
         // Always scan QUALITY_TICKERS (the curated list), regardless of session ticker selection
         // This ensures the bot scans all supported pairs even if session was started with just 1 ticker
         // Merge QUALITY_TICKERS with any newly detected listings
-        const newCoinTickers = getActiveNewListings ? getActiveNewListings().map(n => n.ticker).filter(t => !QUALITY_TICKERS.includes(t)) : [];
+        const newCoinTickers = getActiveNewListings
+            ? getActiveNewListings().map(n => n.ticker)
+                .filter(t => !QUALITY_TICKERS.includes(t))
+                .filter(t => /USD$/.test(t) && !/_/.test(t) && !/-/.test(t)) // Only spot USD pairs (no USDT, PERP, BTC, EUR, underscore formats)
+            : [];
 
         // Fetch CoinGecko trending coins and add Kraken-available USD pairs to ticker pool
         let trendingCoinsList = [];
@@ -5448,10 +5452,11 @@ const updateAvailableTickers = async () => {
             .filter(name => name.length > 0)
             .sort();
 
-        // Check for new listings
+        // Check for new listings (only USD spot pairs, not PERP/USDT/BTC/EUR)
         try {
             if (detectNewListings) {
-                const newlyDetected = detectNewListings(availableTickers);
+                const spotUsdTickers = availableTickers.filter(t => /USD$/.test(t) && !/_/.test(t) && !/-/.test(t));
+                const newlyDetected = detectNewListings(spotUsdTickers);
                 if (newlyDetected.length > 0) {
                     console.log(`[Server] New listings detected: ${newlyDetected.join(', ')}`);
                     addLog(`New Kraken listings: ${newlyDetected.join(', ')}`, 'SPECIAL');
