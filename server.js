@@ -1905,6 +1905,7 @@ function get1hTrend(candles1h) {
 // ============================================
 const exitLevelCache = new Map();
 // Map<ticker, { tpPrice, slPrice, trailActivationPrice, trailPct, profitGoal, regime }>
+const mtfScoresCache = new Map(); // Module-level MTF alignment scores for real-time exit checks
 
 // Native exchange stop-loss order tracking — survives bot crashes
 // Map<ticker, { orderId, stopPrice, volume, placedAt }>
@@ -2347,6 +2348,25 @@ async function checkTickExit(ticker, price) {
         const pnl = ((price - position.openPrice) / position.openPrice * 100).toFixed(2);
         exitReason = `[RT-SL] ${pnl}% hit SL @ ${levels.slPrice.toFixed(4)} (${levels.regime})`;
         isStopLoss = true;
+    }
+
+    // 4B. 5m/15m MTF divergence exit — tighten trail when short timeframes turn bearish
+    // If position is profitable and 5m alignment drops bearish, lock in gains before reversal completes
+    if (!exitReason && position.highestPrice > position.openPrice) {
+        try {
+            const pnlPct = (price - position.openPrice) / position.openPrice * 100;
+            if (pnlPct > 0.3) { // Only for profitable positions
+                const mtfData = mtfScoresCache?.get(ticker);
+                if (mtfData && mtfData.alignmentScore != null && mtfData.alignmentScore < 35) {
+                    // 5m/15m turned bearish — tighten trail to 30% of normal giveback
+                    const tightTrailPct = (levels.trailPct || 2) * 0.3;
+                    const tightTrailLevel = position.highestPrice * (1 - tightTrailPct / 100);
+                    if (price <= tightTrailLevel) {
+                        exitReason = `[RT-MTF-DIVERGE] 5m/15m alignment ${mtfData.alignmentScore.toFixed(0)}%: tight trail ${tightTrailLevel.toFixed(4)} (peak ${position.highestPrice.toFixed(4)}, pnl +${pnlPct.toFixed(2)}%)`;
+                    }
+                }
+            }
+        } catch (e) { /* fail open */ }
     }
 
     // 5. Mid-trade regime-aware exit switching
@@ -2844,6 +2864,7 @@ async function tradingBotLoop() {
             try {
                 const alignment = getMTFAlignmentScore(tfData);
                 mtfScores.set(ticker, alignment);
+                mtfScoresCache.set(ticker, alignment); // Update module-level cache for RT exit checks
             } catch (e) {}
         }
 
