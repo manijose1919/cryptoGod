@@ -10,7 +10,7 @@ import { getFlag } from './systemConfig.js';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 10_000;
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 2;
 const LOG = '[OnChainData]';
 const SATS_PER_BTC = 100_000_000;
 
@@ -44,8 +44,41 @@ async function enforceRateLimit(domain) {
   lastReqTime.set(domain, Date.now());
 }
 
-// --- Fetch with retry + exponential backoff on 429 ---
+// --- Dead domain tracker (suppress calls after repeated auth/server errors) ---
+const deadDomains = new Map();
+const domainFailCounts = new Map();
+const DEAD_DOMAIN_TTL_MS = 30 * 60 * 1000; // suppress for 30 min
+const DEAD_THRESHOLD = 3;
+
+function isDomainDead(domain) {
+  const entry = deadDomains.get(domain);
+  if (!entry) return false;
+  if (Date.now() > entry.until) {
+    deadDomains.delete(domain);
+    domainFailCounts.delete(domain);
+    return false;
+  }
+  return true;
+}
+
+function recordDomainFailure(domain, status) {
+  const count = (domainFailCounts.get(domain) || 0) + 1;
+  domainFailCounts.set(domain, count);
+  if (count >= DEAD_THRESHOLD) {
+    deadDomains.set(domain, { until: Date.now() + DEAD_DOMAIN_TTL_MS });
+    console.warn(`${LOG} Suppressing ${domain} for 30min after ${count} failures (HTTP ${status})`);
+  }
+}
+
+function recordDomainSuccess(domain) {
+  domainFailCounts.delete(domain);
+  deadDomains.delete(domain);
+}
+
+// --- Fetch with retry + dead domain check ---
 async function fetchJSON(url, domain) {
+  if (isDomainDead(domain)) return null;
+
   await enforceRateLimit(domain);
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
@@ -56,15 +89,21 @@ async function fetchJSON(url, domain) {
 
       if (res.status === 429) {
         const wait = Math.pow(2, i + 1) * 1000;
-        console.warn(`${LOG} 429 from ${domain}, backoff ${wait}ms (${i + 1}/${MAX_RETRIES})`);
         await sleep(wait);
         lastReqTime.set(domain, Date.now());
         continue;
       }
-      if (!res.ok) { console.warn(`${LOG} HTTP ${res.status} from ${domain}`); return null; }
+      if (res.status === 401 || res.status === 403) {
+        recordDomainFailure(domain, res.status);
+        return null;
+      }
+      if (!res.ok) {
+        recordDomainFailure(domain, res.status);
+        return null;
+      }
+      recordDomainSuccess(domain);
       return await res.json();
     } catch (err) {
-      console.warn(`${LOG} ${err.name === 'AbortError' ? 'Timeout' : err.message} from ${domain} (${i + 1}/${MAX_RETRIES})`);
       if (i < MAX_RETRIES - 1) await sleep(Math.pow(2, i + 1) * 1000);
     }
   }
@@ -101,7 +140,7 @@ export async function getExchangeNetFlow(ticker) {
     const result = txVol > 0 ? Math.round(((tradeVol - txVol) / txVol) * 10000) / 10000 : 0;
     setCache(`netflow_${sym}`, result);
     return result;
-  } catch (e) { console.warn(`${LOG} getExchangeNetFlow: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 /** MVRV ratio for BTC. >3.5 overvalued, <1 undervalued. */
@@ -115,7 +154,7 @@ export async function getMVRV() {
     const result = typeof v === 'number' ? Math.round(v * 1000) / 1000 : 0;
     setCache('mvrv', result);
     return result;
-  } catch (e) { console.warn(`${LOG} getMVRV: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 /** 24h active address count change %. BTC/ETH only. */
@@ -134,7 +173,7 @@ export async function getActiveAddresses(ticker) {
     const result = prev > 0 ? Math.round(((cur - prev) / prev) * 10000) / 100 : 0;
     setCache(`active_addr_${sym}`, result);
     return result;
-  } catch (e) { console.warn(`${LOG} getActiveAddresses: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 /** BTC hash rate change % (24h). */
@@ -150,7 +189,7 @@ export async function getHashRate() {
     const result = prev > 0 ? Math.round(((cur - prev) / prev) * 10000) / 100 : 0;
     setCache('hashrate', result);
     return result;
-  } catch (e) { console.warn(`${LOG} getHashRate: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 /** Count of whale transactions (>10 BTC / ~$1M) in recent mempool. BTC only. */
@@ -170,7 +209,7 @@ export async function getWhaleTransactions(ticker) {
     }
     setCache(`whale_count_${sym}`, count);
     return count;
-  } catch (e) { console.warn(`${LOG} getWhaleTransactions: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 /** Total USD volume of whale transactions (>$1M) in recent mempool. BTC only. */
@@ -194,7 +233,7 @@ export async function getWhaleVolume(ticker) {
     const result = Math.round(volume);
     setCache(`whale_vol_${sym}`, result);
     return result;
-  } catch (e) { console.warn(`${LOG} getWhaleVolume: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 /** Change in exchange reserves %. Uses BTC tx count as proxy. BTC only. */
@@ -211,7 +250,7 @@ export async function getExchangeReserveChange(ticker) {
     const result = Math.round((txCount / typicalDaily - 1) * 10000) / 100;
     setCache(`reserve_chg_${sym}`, result);
     return result;
-  } catch (e) { console.warn(`${LOG} getExchangeReserveChange: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 /** BTC miner outflow change %. Uses mempool.space mining pool concentration as proxy. */
@@ -229,7 +268,7 @@ export async function getMinerOutflow() {
     const result = Math.round(-((share - 0.55) / 0.55) * 10000) / 100;
     setCache('miner_outflow', result);
     return result;
-  } catch (e) { console.warn(`${LOG} getMinerOutflow: ${e.message}`); return 0; }
+  } catch (e) { return 0; }
 }
 
 // ============================================
@@ -256,7 +295,6 @@ export async function getAllOnChainData(ticker) {
              whaleTransactions, whaleVolume, exchangeReserveChange, minerOutflow,
              ticker, timestamp: Date.now(), enabled: true };
   } catch (e) {
-    console.warn(`${LOG} getAllOnChainData: ${e.message}`);
     return ZERO_RESULT(ticker, true);
   }
 }
