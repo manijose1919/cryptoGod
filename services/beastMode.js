@@ -443,7 +443,12 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
-  // Quick-profit scalping: if profitable above fees after 15-60 min with fading momentum,
+  // --- PEAK TRACKING (used by trailing stop + scalp exit) ---
+  const highestPrice = position.highestPrice || position.openPrice;
+  const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
+  const highFeeAdj = highPnl - roundTripFeePercent;
+
+  // Quick-profit scalping: if profitable above fees after 15-120 min with fading momentum,
   // take the profit rather than risk reversal in choppy markets
   if (holdMinutes >= 15 && holdMinutes <= 120 && feeAdjustedPnl >= 0.5) {
     // Check if price is retreating from peak (losing more than 40% of peak gain)
@@ -461,9 +466,6 @@ export function checkDynamicExit(position, currentPrice, candles) {
   // Best seed uses activation at ~8% with 20% giveback from peak
   // Scale activation based on TP target: activate at 60% of TP (e.g., TP=8% → activate at 4.8%)
   const trailActivation = Math.max(1.5, targets.takeProfitPct * 0.6);
-  const highestPrice = position.highestPrice || position.openPrice;
-  const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
-  const highFeeAdj = highPnl - roundTripFeePercent;
 
   if (highFeeAdj >= trailActivation) {
     // Trail giveback = 20% of peak gain (best seed), minimum 0.8%
