@@ -2105,8 +2105,8 @@ function refreshExitLevels(marketDataMap) {
                 (async () => {
                     try {
                         const adapter = getExchangeAdapter();
-                        await adapter.cancelOrder(_oldOrderId, botState.sessionId);
-                        const newSL = await adapter.placeStopLoss(_ticker, _qty, _slPrice, botState.sessionId);
+                        await withTimeout(adapter.cancelOrder(_oldOrderId, botState.sessionId), 15000, 'cancelNativeSL');
+                        const newSL = await withTimeout(adapter.placeStopLoss(_ticker, _qty, _slPrice, botState.sessionId), 15000, 'placeNativeSL');
                         if (newSL.orderId) {
                             nativeStopOrders.set(_ticker, {
                                 orderId: newSL.orderId,
@@ -5597,7 +5597,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 if (getFlag('NATIVE_TRAILING_STOP') && adapter.placeTrailingStop) {
                     const trailPct = 0.03; // 3% trail offset
                     const trailOffset = parseFloat(avgPrice) * trailPct;
-                    const tsResult = await adapter.placeTrailingStop(ticker, parseFloat(quantity), trailOffset, botState.sessionId);
+                    const tsResult = await withTimeout(adapter.placeTrailingStop(ticker, parseFloat(quantity), trailOffset, botState.sessionId), 15000, 'placeTrailingStop');
                     if (tsResult.orderId) {
                         nativeStopOrders.set(ticker, {
                             orderId: tsResult.orderId,
@@ -5613,7 +5613,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                     // Will be tightened by refreshExitLevels() once ATR data is available
                     const emergencySlPct = 0.05;
                     const slPrice = parseFloat(avgPrice) * (1 - emergencySlPct);
-                    const slResult = await adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId);
+                    const slResult = await withTimeout(adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId), 15000, 'placeEmergencySL');
                     if (slResult.orderId) {
                         nativeStopOrders.set(ticker, {
                             orderId: slResult.orderId,
@@ -5634,7 +5634,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                         addLog(`[NATIVE-SL] Retry ${attempt}/3 for ${ticker}...`, 'WARN');
                         const adapter = getExchangeAdapter();
                         const slPrice = parseFloat(avgPrice) * (1 - 0.05);
-                        const retryResult = await adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId);
+                        const retryResult = await withTimeout(adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId), 15000, 'retrySL');
                         if (retryResult.orderId) {
                             nativeStopOrders.set(ticker, {
                                 orderId: retryResult.orderId,
