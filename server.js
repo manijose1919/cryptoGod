@@ -449,7 +449,7 @@ function getWebSocketStatusProxy() {
 /** Get dynamic fees from the active exchange adapter */
 function getActiveFees() {
     const adapter = getExchangeAdapter();
-    const perSide = adapter.getFeePercent();  // e.g. 0.00075 or 0.0026
+    const perSide = adapter.getFeePercent?.() || 0.0026;  // Fallback to Kraken taker rate
     return { perSide, roundTrip: perSide * 2 };
 }
 
@@ -2016,7 +2016,7 @@ function refreshExitLevels(marketDataMap) {
 
             // Phase 2B: Momentum-ride exit extension
             // If position hit TP but velocity still strong, extend TP
-            const vel = priceVelocityTracker.getMetrics(ticker);
+            const vel = priceVelocityTracker?.getMetrics?.(ticker) || { velocity: 0, acceleration: 0 };
             const currentPrice = position.currentPrice || openPrice;
             const extensions = position.sniperExtensions || 0;
             if (currentPrice >= tpPrice && vel.velocity > 0.3 && extensions < 3) {
@@ -2161,8 +2161,9 @@ function refreshExitLevels(marketDataMap) {
         }
         const state = perTickerFlashCrash.get(ticker);
         state.prices.push({ price: currentPrice, ts: now });
-        // Keep only prices from last 5 minutes
+        // Keep only prices from last 5 minutes, capped at 150 entries
         state.prices = state.prices.filter(p => now - p.ts <= 5 * 60 * 1000);
+        if (state.prices.length > 150) state.prices = state.prices.slice(-150);
 
         if (state.prices.length >= 2) {
             const oldestPrice = state.prices[0].price;
@@ -2269,6 +2270,11 @@ async function handlePartialSell(position, price, fraction, reason) {
         portfolio.cash += remainingValue * 0.95; // Assume some slippage on dust
         delete portfolio.positions[ticker];
         exitLevelCache.delete(ticker);
+        // Clean up pyramid timer for dust-liquidated positions
+        if (tradingBotLoop._pyramidTimers?.has(ticker)) {
+            clearTimeout(tradingBotLoop._pyramidTimers.get(ticker));
+            tradingBotLoop._pyramidTimers.delete(ticker);
+        }
     }
 
     addLog(`[PARTIAL-EXIT] ${ticker}: Sold ${(fraction * 100).toFixed(0)}% (${sellQty.toFixed(6)}) @ $${avgPrice.toFixed(2)} | PnL: $${partialPnl.toFixed(2)} | ${reason}`, partialPnl >= 0 ? 'PROFIT' : 'LOSS');
