@@ -3042,16 +3042,19 @@ async function tradingBotLoop() {
 
             // Calculate Opportunity Scores for current batch (with liquidity filter)
             const candidates = [];
+            let _debugSkips = { pos: 0, noCandles: 0, liq: 0, scored: 0 };
             for (const ticker of scanBatch) {
-                if (portfolio.positions[ticker]) continue;
+                if (portfolio.positions[ticker]) { _debugSkips.pos++; continue; }
                 const candles = marketDataMap.get(ticker);
-                if (!candles) continue;
+                if (!candles) { _debugSkips.noCandles++; continue; }
 
                 // Liquidity gate: skip low-volume garbage tokens
                 const liq = checkLiquidity(candles, ticker);
                 if (!liq.pass) {
-                    continue; // silently skip — too many low-vol tickers to log each one
+                    _debugSkips.liq++;
+                    continue;
                 }
+                _debugSkips.scored++;
 
                 // Phase 4A: Pass surge context to volume scoring
                 const _surgeOpts = {};
@@ -3190,14 +3193,14 @@ async function tradingBotLoop() {
             candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
             // Diagnostic: log scan summary every 5 iterations, with actual scores
-            if (!tradingBotLoop._diagCount) tradingBotLoop._diagCount = 0;
+            if (tradingBotLoop._diagCount === undefined) tradingBotLoop._diagCount = 0;
             tradingBotLoop._diagCount++;
             const _allScores = tradingBotLoop._iterScores || [];
             tradingBotLoop._iterScores = []; // reset for next iteration
             if (tradingBotLoop._diagCount % 3 === 1) {
                 const topScores = candidates.slice(0, 5).map(c => `${c.ticker}:${c.score.compositeScore.toFixed(1)}`).join(', ');
                 const topRaw = _allScores.sort((a, b) => b.s - a.s).slice(0, 5).map(x => `${x.t}=${x.s.toFixed(1)}(min${x.m})`).join(', ');
-                console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}, positions=${Object.keys(portfolio.positions).length}${candidates.length > 0 ? `, top=[${topScores}]` : topRaw ? `, rawTop=[${topRaw}]` : ''}`);
+                console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}, positions=${Object.keys(portfolio.positions).length}, skips=pos:${_debugSkips.pos}/noData:${_debugSkips.noCandles}/liq:${_debugSkips.liq}/scored:${_debugSkips.scored}${candidates.length > 0 ? `, top=[${topScores}]` : topRaw ? `, rawTop=[${topRaw}]` : ''}`);
             }
 
             // --- SENTIMENT ENRICHMENT (Tiered) ---
