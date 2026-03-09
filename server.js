@@ -1362,6 +1362,32 @@ setInterval(() => {
     if (cleaned > 0) {
         console.log(`[SessionManager] Cleaned up ${cleaned} expired sessions.`);
     }
+    // Evict stale entries from sentimentCachePersistent to prevent unbounded growth
+    const sentimentNow = Date.now();
+    let sentimentEvicted = 0;
+    for (const [key, val] of sentimentCachePersistent) {
+        if (sentimentNow - val.timestamp > SENTIMENT_CACHE_TTL_MS * 2) {
+            sentimentCachePersistent.delete(key);
+            sentimentEvicted++;
+        }
+    }
+    // Clean up swing caches for tickers no longer in portfolio
+    if (tradingBotLoop._swing4hCache) {
+        for (const t of tradingBotLoop._swing4hCache.keys()) {
+            if (!portfolio.positions[t]) tradingBotLoop._swing4hCache.delete(t);
+        }
+    }
+    if (tradingBotLoop._swing1dCache) {
+        for (const t of tradingBotLoop._swing1dCache.keys()) {
+            if (!portfolio.positions[t]) tradingBotLoop._swing1dCache.delete(t);
+        }
+    }
+    // Clean up ATR percentile cache for tickers no longer in portfolio
+    if (refreshExitLevels._atrPercentileCache) {
+        for (const t of refreshExitLevels._atrPercentileCache.keys()) {
+            if (!portfolio.positions[t]) refreshExitLevels._atrPercentileCache.delete(t);
+        }
+    }
 }, 300000); // Every 5 minutes
 
 // Daily maintenance: vacuum old data, reanalyze indexes (Upgrade #17)
@@ -1950,28 +1976,34 @@ function refreshExitLevels(marketDataMap) {
 
         // Volatility regime multiplier (market volatility level)
         // Compare current ATR% to historical ATR% to classify volatility regime
+        // Cached per-ticker with 60s TTL to avoid O(n²) recomputation every 2s loop
         let volRegimeMultiplier = 1.0;
         if (candles.length >= 50) {
-            // Compute ATR percentile from last 50 candles
-            const atrHistory = [];
-            for (let i = 14; i < candles.length; i++) {
-                const slice = candles.slice(i - 14, i);
-                const histATR = calculateATRFromCandles(slice, 14);
-                const histPrice = slice[slice.length - 1].c || 1;
-                atrHistory.push(histATR / histPrice);
+            if (!refreshExitLevels._atrPercentileCache) refreshExitLevels._atrPercentileCache = new Map();
+            const atrCacheKey = ticker;
+            const atrCached = refreshExitLevels._atrPercentileCache.get(atrCacheKey);
+            let atrPercentile;
+            if (atrCached && (Date.now() - atrCached.ts) < 60000) {
+                atrPercentile = atrCached.pct;
+            } else {
+                const atrHistory = [];
+                for (let i = 14; i < candles.length; i++) {
+                    const slice = candles.slice(i - 14, i);
+                    const histATR = calculateATRFromCandles(slice, 14);
+                    const histPrice = slice[slice.length - 1].c || 1;
+                    atrHistory.push(histATR / histPrice);
+                }
+                atrHistory.sort((a, b) => a - b);
+                const percentileIdx = atrHistory.findIndex(v => v >= atrPct);
+                atrPercentile = percentileIdx >= 0 ? (percentileIdx / atrHistory.length) * 100 : 50;
+                refreshExitLevels._atrPercentileCache.set(atrCacheKey, { pct: atrPercentile, ts: Date.now() });
             }
-            atrHistory.sort((a, b) => a - b);
-            const percentileIdx = atrHistory.findIndex(v => v >= atrPct);
-            const atrPercentile = percentileIdx >= 0 ? (percentileIdx / atrHistory.length) * 100 : 50;
 
             if (atrPercentile < 25) {
-                // Low volatility: tighter stops, smaller targets (mean-reversion environment)
                 volRegimeMultiplier = 0.7;
             } else if (atrPercentile > 75) {
-                // High volatility: wider stops, bigger targets (trend/breakout environment)
                 volRegimeMultiplier = 1.4;
             }
-            // else: normal volatility, multiplier stays 1.0
         }
 
         const adjustedATR = atrPct * regimeMultiplier * volRegimeMultiplier;
@@ -2039,13 +2071,12 @@ function refreshExitLevels(marketDataMap) {
                 const pnlPct = ((currentPrice - openPrice) / openPrice) * 100;
                 if (!position._exitPending) {
                     addLog(`[SNIPER] Velocity emergency exit for ${ticker}: vel=${vel.velocity.toFixed(2)}%/min, accel=${vel.acceleration.toFixed(2)} — selling at ${pnlPct.toFixed(1)}%`, 'WARN');
-                    position._exitPending = true;
-                    // Fire-and-forget async sell
+                    // Fire-and-forget async sell (handleSell manages _exitPending internally)
                     const _pos = position;
                     const _price = currentPrice;
                     (async () => {
                         try { await handleSell(_pos, _price, `SNIPER_VELOCITY_EXIT (vel=${vel.velocity.toFixed(2)}, accel=${vel.acceleration.toFixed(2)})`); }
-                        catch (e) { _pos._exitPending = false; }
+                        catch (e) { /* handleSell clears _exitPending on failure */ }
                     })();
                 }
             }
@@ -2055,11 +2086,10 @@ function refreshExitLevels(marketDataMap) {
             if (Date.now() - (position.entryTime || 0) > sniperMaxHold && !position._exitPending) {
                 const _pos = position;
                 const _price = position.currentPrice || openPrice;
-                position._exitPending = true;
                 addLog(`[SNIPER] Max hold time reached for ${ticker} (${((Date.now() - position.entryTime) / 3600000).toFixed(1)}h) — forcing exit`, 'INFO');
                 (async () => {
                     try { await handleSell(_pos, _price, 'SNIPER_MAX_HOLD_EXIT'); }
-                    catch (e) { _pos._exitPending = false; }
+                    catch (e) { /* handleSell clears _exitPending on failure */ }
                 })();
             }
         } else {
@@ -2535,15 +2565,11 @@ async function checkTickExit(ticker, price) {
     }
 
     if (exitReason) {
-        // Set _exitPending IMMEDIATELY to prevent double-sells from concurrent ticks
-        // (another WebSocket tick could enter checkTickExit before handleSell completes)
-        position._exitPending = true;
+        // handleSell sets _exitPending internally (prevents double-sells from any caller)
         try {
             await handleSell(position, price, exitReason);
         } catch (err) {
             console.error(`[RT-EXIT] Failed for ${ticker}: ${err.message}`);
-            // Only clear flag if position still exists (wasn't removed by handleSell)
-            if (portfolio.positions[ticker]) portfolio.positions[ticker]._exitPending = false;
         }
         return;
     }
@@ -5735,6 +5761,12 @@ const handleSell = async (position, price, reason) => {
         console.warn(`[SELL] Invalid price ${price} for ${position.ticker} — skipping sell`);
         return;
     }
+    // Guard: prevent double-sells from concurrent callers (main loop + WebSocket tick)
+    if (position._exitPending) {
+        if (Math.random() < 0.1) console.warn(`[SELL] ${position.ticker} already has _exitPending — skipping duplicate sell (reason: ${reason})`);
+        return;
+    }
+    position._exitPending = true;
     // Throttle cascade sells — if 3+ sells in 3s, stagger by 500ms each
     const now = Date.now();
     if (now - _lastSellTime < SELL_WINDOW_MS) {
@@ -6091,6 +6123,10 @@ const handleSell = async (position, price, reason) => {
         saveSessionState();
     } catch (error) {
         addLog(`SELL order failed for ${position.ticker}: ${error.message}`, 'ERROR');
+        // Clear _exitPending so this position can be retried on next loop
+        if (portfolio.positions[position.ticker]) {
+            portfolio.positions[position.ticker]._exitPending = false;
+        }
     }
 };
 
@@ -7317,9 +7353,13 @@ const startServer = async () => {
         try {
             const adapter = getExchangeAdapter();
             if (adapter.cancelAllOrdersAfter) {
+                // Clear previous heartbeat interval if one exists (prevents duplicate heartbeats on resume)
+                if (tradingBotLoop._deadManSwitchInterval) {
+                    clearInterval(tradingBotLoop._deadManSwitchInterval);
+                }
                 // Set 90-second timeout, refresh every 60 seconds
                 await adapter.cancelAllOrdersAfter(90, botState.sessionId);
-                setInterval(async () => {
+                tradingBotLoop._deadManSwitchInterval = setInterval(async () => {
                     try {
                         await adapter.cancelAllOrdersAfter(90, botState.sessionId);
                     } catch (e) {
@@ -7643,12 +7683,13 @@ function gracefulShutdown(signal) {
     // Clear all intervals to prevent orphaned timers
     try {
         if (botInterval) clearInterval(botInterval);
+        if (tradingBotLoop._deadManSwitchInterval) clearInterval(tradingBotLoop._deadManSwitchInterval);
         // Clear pyramid timers
         if (tradingBotLoop._pyramidTimers) {
             for (const timer of tradingBotLoop._pyramidTimers.values()) clearTimeout(timer);
             tradingBotLoop._pyramidTimers.clear();
         }
-    } catch (e) {}
+    } catch (e) { console.warn('[Server] Interval cleanup error:', e.message); }
 
     // Stop health monitor
     try {
