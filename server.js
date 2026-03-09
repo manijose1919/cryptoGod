@@ -3350,10 +3350,17 @@ async function tradingBotLoop() {
                     const stratCandidates = [];
 
                     // Phase 1C: Dynamic TC threshold relaxation during surges
-                    // In SIDEWAYS regime, relax TC from 25 to 35 to allow moderate trend signals
+                    // In SIDEWAYS market, TC naturally hovers around 50 (neutral).
+                    // TC < 25 is extremely strict — only triggers in strong uptrends.
+                    // SIM mode: relax aggressively to generate trades for learning.
                     let trendEntryThreshold = optParams.TREND_BULLISH_ENTRY;
+                    const isSim = botState.tradingMode === 'SIMULATION';
                     if (currentRegime === 'SIDEWAYS') {
-                        trendEntryThreshold = Math.max(trendEntryThreshold, 35);
+                        trendEntryThreshold = isSim ? 55 : 40;
+                    } else if (currentRegime === 'DOWNTREND') {
+                        trendEntryThreshold = isSim ? 45 : 30;
+                    } else if (currentRegime === 'UPTREND') {
+                        trendEntryThreshold = isSim ? 50 : 35;
                     }
                     if (sniperCandidate && getFlag('SNIPER_MODE_ENABLED')) {
                         const vel = priceVelocityTracker.getMetrics(ticker);
