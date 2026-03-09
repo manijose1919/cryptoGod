@@ -4108,10 +4108,15 @@ async function tradingBotLoop() {
 
                         // SIM mode: never let ML gatekeeper block — switch to advisory
                         // ML predictions are still recorded for accuracy tracking, but don't prevent trades
+                        // However, use ML confidence to scale position size — high-confidence DOWN = smaller position
                         if (isSim && pipelineResult && !pipelineResult.proceed) {
                             pipelineResult.proceed = true;
-                            pipelineResult.sizeMultiplier = Math.max(0.5, pipelineResult.sizeMultiplier || 0.5);
-                            pipelineResult.reason += ' [SIM: overridden to ADVISORY]';
+                            // Scale position size by inverse of DOWN confidence: 73% DOWN → 0.27x, 60% DOWN → 0.40x
+                            const mlConf = (pipelineResult.confidence || 50) / 100;
+                            const confDirection = pipelineResult.direction || 'UNKNOWN';
+                            const sizeMult = confDirection === 'DOWN' ? Math.max(0.25, 1 - mlConf) : Math.max(0.5, mlConf);
+                            pipelineResult.sizeMultiplier = sizeMult;
+                            pipelineResult.reason += ` [SIM: ADVISORY, size=${(sizeMult*100).toFixed(0)}%]`;
                             pipelineResult.tier = 'SIM_ADVISORY';
                         }
 
