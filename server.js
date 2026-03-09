@@ -2679,11 +2679,15 @@ async function tradingBotLoop() {
                 .filter(t => /USD$/.test(t) && !/_/.test(t) && !/-/.test(t)) // Only spot USD pairs (no USDT, PERP, BTC, EUR, underscore formats)
             : [];
 
-        // Fetch CoinGecko trending coins and add Kraken-available USD pairs to ticker pool
-        let trendingCoinsList = [];
-        try {
-            trendingCoinsList = await fetchCoinGeckoTrending();
-        } catch (e) { /* fail open */ }
+        // Fetch CoinGecko trending coins (cached — only refresh every 60s, not every 2s loop)
+        if (!tradingBotLoop._trendingCache) tradingBotLoop._trendingCache = { data: [], ts: 0 };
+        let trendingCoinsList = tradingBotLoop._trendingCache.data;
+        if (Date.now() - tradingBotLoop._trendingCache.ts > 60_000) {
+            try {
+                trendingCoinsList = await fetchCoinGeckoTrending();
+                tradingBotLoop._trendingCache = { data: trendingCoinsList, ts: Date.now() };
+            } catch (e) { /* fail open */ }
+        }
         const trendingTickers = trendingCoinsList
             .map(c => `${(c.symbol || '').toUpperCase()}USD`)
             .filter(t => t.length > 3 && !QUALITY_TICKERS.includes(t) && !newCoinTickers.includes(t));
@@ -3201,14 +3205,21 @@ async function tradingBotLoop() {
         }
 
         // --- TIMEFRAME STRATEGY: detect market speed + get active profile ---
+        // Cache market speed for 30s — O(N) computation on 21 candles doesn't need to run every 2s
         let marketSpeed = 'FAST';
         let activeProfile = null;
+        if (!tradingBotLoop._marketSpeedCache) tradingBotLoop._marketSpeedCache = { speed: 'FAST', ts: 0 };
         try {
             if (timeframeStrategyService) {
-                const refCandles = marketDataMap.values().next().value;
-                if (refCandles) {
-                    marketSpeed = timeframeStrategyService.detectMarketSpeed(refCandles);
+                const now = Date.now();
+                if (now - tradingBotLoop._marketSpeedCache.ts > 30000) { // Recompute every 30s
+                    const refCandles = marketDataMap.values().next().value;
+                    if (refCandles) {
+                        tradingBotLoop._marketSpeedCache.speed = timeframeStrategyService.detectMarketSpeed(refCandles);
+                        tradingBotLoop._marketSpeedCache.ts = now;
+                    }
                 }
+                marketSpeed = tradingBotLoop._marketSpeedCache.speed;
                 const bestTf = timeframeStrategyService.getBestTimeframe(
                     marketDataMap.values().next().value || [], marketSpeed
                 );
@@ -3391,21 +3402,31 @@ async function tradingBotLoop() {
 
                 // === SWING STRATEGY: 4h + 1D candle fetch and evaluation ===
                 const now4h = Date.now();
-                // 4h candles for swing trading (cache 3 hours)
-                let candles4h = _mtfCache4h.data;
-                if (!candles4h || (now4h - _mtfCache4h.ts) > 180 * 60 * 1000) {
+                // 4h candles for swing trading (per-ticker cache, 3 hours)
+                // BUG FIX: was using a single global cache for all tickers — wrong ticker's candles!
+                if (!tradingBotLoop._swing4hCache) tradingBotLoop._swing4hCache = new Map();
+                if (!tradingBotLoop._swing1dCache) tradingBotLoop._swing1dCache = new Map();
+
+                let candles4h = null;
+                const cached4h = tradingBotLoop._swing4hCache.get(ticker);
+                if (cached4h && (now4h - cached4h.ts) < 180 * 60 * 1000) {
+                  candles4h = cached4h.data;
+                } else {
                   try {
                     candles4h = await getMarketData(ticker, '4h', 100) || [];
-                    _mtfCache4h = { data: candles4h, ts: now4h };
+                    tradingBotLoop._swing4hCache.set(ticker, { data: candles4h, ts: now4h });
                   } catch (err) { candles4h = []; }
                 }
 
-                // 1D candles for swing trading (cache 12 hours)
-                let candles1d = _mtfCache1d.data;
-                if (!candles1d || (now4h - _mtfCache1d.ts) > 720 * 60 * 1000) {
+                // 1D candles for swing trading (per-ticker cache, 12 hours)
+                let candles1d = null;
+                const cached1d = tradingBotLoop._swing1dCache.get(ticker);
+                if (cached1d && (now4h - cached1d.ts) < 720 * 60 * 1000) {
+                  candles1d = cached1d.data;
+                } else {
                   try {
                     candles1d = await getMarketData(ticker, '1D', 100) || [];
-                    _mtfCache1d = { data: candles1d, ts: now4h };
+                    tradingBotLoop._swing1dCache.set(ticker, { data: candles1d, ts: now4h });
                   } catch (err) { candles1d = []; }
                 }
 
