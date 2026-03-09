@@ -3542,6 +3542,27 @@ async function tradingBotLoop() {
                     mtfConfidenceAdj = getMTFConfidencePoints(mtfScore.alignmentScore);
                 }
 
+                // Feature 3B: 5m/15m RSI entry refinement
+                // Oversold on 5m/15m = high-confidence bounce setup; overbought = reduce confidence
+                let shortTfAdj = 0;
+                if (mtfScore?.details) {
+                    const rsi5m = mtfScore.details['5m']?.rsiVal;
+                    const rsi15m = mtfScore.details['15m']?.rsiVal;
+                    if (rsi5m !== undefined) {
+                        if (rsi5m < 25) shortTfAdj += 12;       // Deep oversold on 5m = strong bounce
+                        else if (rsi5m < 30) shortTfAdj += 8;   // Oversold
+                        else if (rsi5m < 35) shortTfAdj += 4;   // Approaching oversold
+                        else if (rsi5m > 75) shortTfAdj -= 8;   // Overbought: reduce entry confidence
+                        else if (rsi5m > 70) shortTfAdj -= 4;
+                    }
+                    if (rsi15m !== undefined) {
+                        if (rsi15m < 30) shortTfAdj += 6;       // 15m oversold confirmation
+                        else if (rsi15m < 35) shortTfAdj += 3;
+                        else if (rsi15m > 75) shortTfAdj -= 6;  // 15m overbought warning
+                    }
+                }
+                mtfConfidenceAdj += shortTfAdj;
+
                 // Feature 8: Funding rate adjustment + entry gate
                 let fundingAdj = 0;
                 try {
