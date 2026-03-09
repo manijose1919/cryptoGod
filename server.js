@@ -34,6 +34,7 @@ import {
     initializeDatabase,
     closeDatabase,
     insertCandlesBatch,
+    insertTrade,
     setSetting,
     getSetting,
     insertSystemLog,
@@ -2565,8 +2566,13 @@ async function checkTickExit(ticker, price) {
                     if (!position._originalQuantity) position._originalQuantity = position.quantity;
                     position._pyramidCount++;
                     position._pyramidCooldown = true;
-                    // Cooldown: don't pyramid again for 30 minutes
-                    setTimeout(() => { if (portfolio.positions[ticker]) portfolio.positions[ticker]._pyramidCooldown = false; }, 30 * 60 * 1000);
+                    // Cooldown: don't pyramid again for 30 minutes (clear old timer if any)
+                    if (!tradingBotLoop._pyramidTimers) tradingBotLoop._pyramidTimers = new Map();
+                    if (tradingBotLoop._pyramidTimers.has(ticker)) clearTimeout(tradingBotLoop._pyramidTimers.get(ticker));
+                    tradingBotLoop._pyramidTimers.set(ticker, setTimeout(() => {
+                        if (portfolio.positions[ticker]) portfolio.positions[ticker]._pyramidCooldown = false;
+                        tradingBotLoop._pyramidTimers.delete(ticker);
+                    }, 30 * 60 * 1000));
 
                     addLog(`[PYRAMID] Adding $${pyramidNotional.toFixed(2)} to ${ticker} (pyramid #${position._pyramidCount}, +${pnlPct.toFixed(1)}%, TC=${tcScore})`, 'BUY');
                     try {
@@ -3484,7 +3490,7 @@ async function tradingBotLoop() {
                       });
                     }
                   } catch (swingErr) {
-                    // Non-critical — swing evaluation error
+                    if (Math.random() < 0.02) console.warn(`[SWING] Error for ${ticker}: ${swingErr.message}`);
                   }
                 }
             }
@@ -3500,11 +3506,12 @@ async function tradingBotLoop() {
                     return { ticker: c.ticker, change: prev > 0 ? ((recent - prev) / prev) * 100 : 0 };
                 });
                 const avgChange = priceChanges.reduce((s, p) => s + p.change, 0) / priceChanges.length;
+                const changeMap = new Map(priceChanges.map(p => [p.ticker, p.change]));
                 for (const cand of candidates) {
-                    const pc = priceChanges.find(p => p.ticker === cand.ticker);
-                    if (pc) {
+                    const change = changeMap.get(cand.ticker);
+                    if (change !== undefined) {
                         // Relative strength = how much better than average
-                        const relStrength = pc.change - avgChange;
+                        const relStrength = change - avgChange;
                         // Boost up to +5 points for relative outperformers, penalize -3 for underperformers
                         const rsBoost = Math.max(-3, Math.min(5, relStrength * 2));
                         cand.score.compositeScore += rsBoost;
@@ -5758,6 +5765,11 @@ const handleSell = async (position, price, reason) => {
         portfolio.cash += (position.quantity * avgPrice) - sellFee;
         delete portfolio.positions[position.ticker];
         exitLevelCache.delete(position.ticker); // Clean RT exit cache
+        // Clean up pyramid timer to prevent orphaned setTimeout
+        if (tradingBotLoop._pyramidTimers?.has(position.ticker)) {
+            clearTimeout(tradingBotLoop._pyramidTimers.get(position.ticker));
+            tradingBotLoop._pyramidTimers.delete(position.ticker);
+        }
 
         // Clean up profit method internal state for this ticker
         cleanupProfitMethodState(position.ticker, position.entryStrategy);
@@ -5780,14 +5792,28 @@ const handleSell = async (position, price, reason) => {
         timeOfDayTracker.recordTrade(position.entryTime || Date.now(), pnl);
         tickerLossCooldown.recordTrade(position.ticker, pnl);
 
+        // Persist trade to SQLite (survives restarts, feeds analytics/ML)
+        try {
+            insertTrade({
+                ticker: position.ticker, strategy: position.entryStrategy || 'TREND',
+                entryPrice: position.openPrice, exitPrice: avgPrice,
+                quantity: position.quantity, pnl, pnlPercent: ((avgPrice - position.openPrice) / position.openPrice) * 100,
+                outcome: pnl >= 0 ? 'WIN' : 'LOSS', reason,
+                entryTime: position.entryTime ? new Date(position.entryTime).toISOString() : new Date().toISOString(),
+                exitTime: new Date().toISOString(),
+            });
+        } catch (dbErr) {
+            console.warn('[DB] Failed to persist trade:', dbErr.message);
+        }
+
         // Feed trade outcome to ML self-teaching loop
         // Use fee-adjusted pnlPercent so thin-margin trades aren't mislabeled
         const feeAdjustedPnlPct = ((pnl) / (position.openPrice * position.quantity)) * 100;
 
         // Capture exit context for richer ML feedback
         let exitRegime = 'UNKNOWN';
-        try { exitRegime = getMarketRegime(position.ticker)?.regime || 'UNKNOWN'; } catch (e) {}
-        const exitVelocity = priceVelocityTracker.getMetrics(position.ticker);
+        try { exitRegime = botState._lastRegime || 'UNKNOWN'; } catch (e) {}
+        const exitVelocity = priceVelocityTracker?.getMetrics?.(position.ticker) || { velocity: 0, acceleration: 0 };
         let exitOrderBookImbalance = 0;
         try {
             if (orderBookMicro?.analyze) {
@@ -7306,7 +7332,10 @@ const startServer = async () => {
                 console.log('[Reconciler] Positions match exchange — all clear');
             }
         } catch (e) {
-            console.warn('[Reconciler] Startup reconciliation failed:', e.message);
+            // Only log once, suppress auth failures (Crypto.com without keys)
+            if (!e.message?.includes('Authentication') && !e.message?.includes('40101')) {
+                console.warn('[Reconciler] Startup reconciliation failed:', e.message);
+            }
         }
     }
 
@@ -7525,6 +7554,16 @@ function gracefulShutdown(signal) {
     } catch (e) {
         console.warn('[Server] DB batcher flush error:', e.message);
     }
+
+    // Clear all intervals to prevent orphaned timers
+    try {
+        if (botInterval) clearInterval(botInterval);
+        // Clear pyramid timers
+        if (tradingBotLoop._pyramidTimers) {
+            for (const timer of tradingBotLoop._pyramidTimers.values()) clearTimeout(timer);
+            tradingBotLoop._pyramidTimers.clear();
+        }
+    } catch (e) {}
 
     // Stop health monitor
     try {

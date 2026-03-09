@@ -53,18 +53,25 @@ function isDomainDead(domain) {
   return deadDomains.has(domain);
 }
 
+let _deadLoggedDomains = new Set();
 function recordDomainFailure(domain, status) {
   const count = (domainFailCounts.get(domain) || 0) + 1;
   domainFailCounts.set(domain, count);
   if (count >= DEAD_THRESHOLD && !deadDomains.has(domain)) {
     deadDomains.set(domain, { permanent: true });
-    console.warn(`${LOG} Permanently disabling ${domain} this session after ${count} failures (HTTP ${status})`);
+    if (!_deadLoggedDomains.has(domain)) {
+      _deadLoggedDomains.add(domain);
+      console.warn(`${LOG} Permanently disabling ${domain} this session after ${count} failures (HTTP ${status})`);
+    }
   }
 }
 
 function recordDomainSuccess(domain) {
-  domainFailCounts.delete(domain);
-  deadDomains.delete(domain);
+  // Only reset fail counts if domain is NOT permanently dead
+  // (permanent means repeated auth failures — won't self-heal)
+  if (!deadDomains.has(domain)) {
+    domainFailCounts.delete(domain);
+  }
 }
 
 // --- Fetch with retry + dead domain check ---
