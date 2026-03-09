@@ -3309,11 +3309,21 @@ async function tradingBotLoop() {
         // Match beastMode regime names: UPTREND / SIDEWAYS / DOWNTREND
         // SIM mode gets lower floors to generate training data
         const isSim = botState.tradingMode === 'SIMULATION';
+        // In Extreme Fear, raise SIM thresholds — no point entering 10 losers for "training data"
+        let simFearBoost = 0;
+        if (isSim && fearGreedGate) {
+            try {
+                const fgVal = fearGreedGate.getFearGreedIndex?.()?.value ?? 50;
+                if (fgVal < 10) simFearBoost = 12;       // Extreme Fear: +12 pts (very selective)
+                else if (fgVal < 20) simFearBoost = 6;   // Fear: +6 pts
+                else if (fgVal > 80) simFearBoost = 4;   // Extreme Greed: +4 pts (bubble caution)
+            } catch (e) {}
+        }
         const regimeScoreFloors = {
-            'UPTREND': isSim ? 12 : 30,     // Lowered: catch more trend entries
-            'SIDEWAYS': isSim ? 14 : 32,     // Lowered from 42: SIDEWAYS scores max ~36, was blocking everything
-            'DOWNTREND': isSim ? 18 : 45,    // Lowered slightly: still cautious in bearish
-            'UNKNOWN': isSim ? 15 : 35,      // Lowered: don't miss opportunities due to regime uncertainty
+            'UPTREND': (isSim ? 12 : 30) + simFearBoost,
+            'SIDEWAYS': (isSim ? 14 : 32) + simFearBoost,
+            'DOWNTREND': (isSim ? 18 : 45) + simFearBoost,
+            'UNKNOWN': (isSim ? 15 : 35) + simFearBoost,
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || (isSim ? 18 : 50);
