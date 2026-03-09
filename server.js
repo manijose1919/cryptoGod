@@ -1774,8 +1774,11 @@ function checkLiquidity(candles, ticker) {
     }
     const avgUsdVol = totalUsdVol / recent.length;
     const isSimMode = typeof botState !== 'undefined' && botState.tradingMode === 'SIMULATION';
-    const baseMinVol = isSimMode ? 200 : CONFIG.MIN_AVG_CANDLE_USD_VOLUME; // Lower bar in SIM for training
-    const minVolume = (ticker && isNewListing && isNewListing(ticker)) ? 100 : baseMinVol;
+    // WS 1m candles have very low volume for altcoins ($0-200/candle typical)
+    // SIM mode: $50 min allows most tradeable Kraken pairs through for ML training
+    // REAL mode: $500 min ensures adequate liquidity for actual order fills
+    const baseMinVol = isSimMode ? 50 : CONFIG.MIN_AVG_CANDLE_USD_VOLUME;
+    const minVolume = (ticker && isNewListing && isNewListing(ticker)) ? 20 : baseMinVol;
 
     if (avgUsdVol < minVolume) {
         // Log first few failures for debugging
