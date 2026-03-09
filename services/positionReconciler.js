@@ -149,13 +149,19 @@ export async function reconcilePositions(portfolio, sessionId) {
     console.log(`[Reconciler] Reconciliation complete: ${result.orphanedPositions.length} orphans, ${result.ghostBalances.length} ghosts, ${result.quantityMismatches.length} mismatches`);
 
   } catch (err) {
-    // Rate-limit: only log once per 10 min per error message
-    const errKey = err.message?.slice(0, 50) || 'unknown';
-    if (!reconcilePositions._errCooldowns) reconcilePositions._errCooldowns = {};
-    const now = Date.now();
-    if (!reconcilePositions._errCooldowns[errKey] || now - reconcilePositions._errCooldowns[errKey] > 600_000) {
-      console.warn('[Reconciler] Reconciliation failed:', err.message);
-      reconcilePositions._errCooldowns[errKey] = now;
+    // Suppress auth failures (Crypto.com without keys) — these are expected
+    const msg = err.message || '';
+    if (msg.includes('Authentication') || msg.includes('40101') || msg.includes('not configured')) {
+      // Silently skip — this is a known configuration issue, not a bug
+    } else {
+      // Rate-limit: only log once per 10 min per error message
+      const errKey = msg.slice(0, 50) || 'unknown';
+      if (!reconcilePositions._errCooldowns) reconcilePositions._errCooldowns = {};
+      const now = Date.now();
+      if (!reconcilePositions._errCooldowns[errKey] || now - reconcilePositions._errCooldowns[errKey] > 600_000) {
+        console.warn('[Reconciler] Reconciliation failed:', msg);
+        reconcilePositions._errCooldowns[errKey] = now;
+      }
     }
     result.actionsRequired.push('RECONCILIATION_ERROR');
   }
