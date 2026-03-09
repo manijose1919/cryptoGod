@@ -3010,11 +3010,13 @@ async function tradingBotLoop() {
         }
         // Regime-adaptive entry thresholds: lower bar in strong trends, higher bar in choppy markets
         // Match beastMode regime names: UPTREND / SIDEWAYS / DOWNTREND
+        // SIM mode gets lower floors to generate training data
+        const isSim = botState.tradingMode === 'SIMULATION';
         const regimeScoreFloors = {
-            'UPTREND': 35,     // Ride the wave — accept weaker signals
-            'SIDEWAYS': 48,    // Moderate conviction — was 60, which blocked everything
-            'DOWNTREND': 55,   // Only strong setups in bearish markets
-            'UNKNOWN': 45,     // Moderate default
+            'UPTREND': isSim ? 25 : 35,     // Ride the wave — accept weaker signals
+            'SIDEWAYS': isSim ? 30 : 42,     // SIM: low bar for learning, REAL: moderate
+            'DOWNTREND': isSim ? 38 : 50,    // Only strong setups in bearish markets
+            'UNKNOWN': isSim ? 28 : 40,      // Moderate default
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || 50;
