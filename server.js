@@ -3186,41 +3186,13 @@ async function tradingBotLoop() {
             console.log(`[BotLoop] ${posCount} pos, $${totalValue.toFixed(0)} total, dd=${drawdownPct}%, unrealized=$${unrealizedPnl.toFixed(2)}, ${sessionTrades} trades (${sessionWR}% WR), regime=${botState._lastRegime || 'UNKNOWN'}`);
         }
 
-        // --- CIRCUIT BREAKER FAST PATH ---
-        // When paused, skip all entry prep (regime detection, MTF scoring, candidate scoring,
-        // threshold computation, ML predictions) — saves ~80% of per-loop CPU.
-        // Exits, position updates, and equity snapshots still run below.
-        if (pauseCheck.paused) {
-            // Still update position prices for accurate PnL tracking
-            for (const [ticker, pos] of Object.entries(portfolio.positions)) {
-                const latestPrice = getLatestPrice(ticker);
-                if (latestPrice > 0) {
-                    pos.currentPrice = latestPrice;
-                    if (latestPrice > (pos.highestPrice || 0)) pos.highestPrice = latestPrice;
-                    if (latestPrice < (pos.lowestPrice || Infinity)) pos.lowestPrice = latestPrice;
-                }
-            }
-            recordEquitySnapshot(portfolio);
-            try {
-                if (getFlag('CORRELATION_ENGINE_ENABLED') && portfolioCorrelationEngine.isMatrixStale() && marketDataMap.size >= 2) {
-                    portfolioCorrelationEngine.updateCorrelationMatrix(marketDataMap);
-                }
-            } catch (e) {}
-            saveSessionState();
-            return; // Skip all entry logic — exits already handled above
-        }
-
-        // --- ENTRY LOGIC ---
-        // Determine current market regime — prefer BTC as primary market regime indicator
-        // BTC leads the crypto market; using a random ticker's candles can give misleading regime signals
+        // --- REGIME DETECTION (runs even during circuit breaker pause for tracking/alerts) ---
         const currentRegime = (() => {
             try {
-                // Primary: use BTC candles (market leader — most reliable regime signal)
                 const btcCandles = marketDataMap.get('BTCUSD');
                 if (btcCandles && btcCandles.length >= 35) {
                     return getMarketRegime(btcCandles, 'BTCUSD') || 'UNKNOWN';
                 }
-                // Fallback: ETH or first available
                 const ethCandles = marketDataMap.get('ETHUSD');
                 if (ethCandles && ethCandles.length >= 35) {
                     return getMarketRegime(ethCandles, 'ETHUSD') || 'UNKNOWN';
@@ -3241,17 +3213,39 @@ async function tradingBotLoop() {
             if (telegramEnabled()) {
                 alertRegimeTransition(botState._lastRegime, currentRegime);
             }
-            // Track regime change time — used for entry cooldown after transitions
             botState._regimeChangeTime = Date.now();
             botState._lastRegime = currentRegime;
         } else if (currentRegime !== 'UNKNOWN') {
             botState._lastRegime = currentRegime;
         }
-
-        // Update circuit breaker with current regime for adaptive thresholds
         if (currentRegime !== 'UNKNOWN') {
             cbSetRegime(currentRegime);
         }
+
+        // --- CIRCUIT BREAKER FAST PATH ---
+        // When paused, skip all entry prep (MTF scoring, candidate scoring,
+        // threshold computation, ML predictions) — saves ~80% of per-loop CPU.
+        // Exits, position updates, and equity snapshots still run below.
+        if (pauseCheck.paused) {
+            for (const [ticker, pos] of Object.entries(portfolio.positions)) {
+                const latestPrice = getLatestPrice(ticker);
+                if (latestPrice > 0) {
+                    pos.currentPrice = latestPrice;
+                    if (latestPrice > (pos.highestPrice || 0)) pos.highestPrice = latestPrice;
+                    if (latestPrice < (pos.lowestPrice || Infinity)) pos.lowestPrice = latestPrice;
+                }
+            }
+            recordEquitySnapshot(portfolio);
+            try {
+                if (getFlag('CORRELATION_ENGINE_ENABLED') && portfolioCorrelationEngine.isMatrixStale() && marketDataMap.size >= 2) {
+                    portfolioCorrelationEngine.updateCorrelationMatrix(marketDataMap);
+                }
+            } catch (e) {}
+            saveSessionState();
+            return; // Skip all entry logic — exits already handled above
+        }
+
+        // --- ENTRY LOGIC ---
 
         // --- TIMEFRAME STRATEGY: detect market speed + get active profile ---
         // Cache market speed for 30s — O(N) computation on 21 candles doesn't need to run every 2s
