@@ -875,7 +875,7 @@ const CONFIG = {
     MIN_CANDLES_REQUIRED: 30,          // Need sufficient data for reliable indicators
 
     // Liquidity filter: reject tickers with insufficient volume
-    MIN_AVG_CANDLE_USD_VOLUME: 5000,   // $5K avg per-candle USD volume (from recent 20 candles)
+    MIN_AVG_CANDLE_USD_VOLUME: 500,    // $500 avg per-candle USD volume (was $5K — too restrictive for 1m candles, blocked all tickers)
     MIN_PRICE: 0.01,                   // Skip sub-penny tokens
 };
 
@@ -1773,9 +1773,17 @@ function checkLiquidity(candles, ticker) {
         totalUsdVol += (c.v || 0) * typicalPrice;
     }
     const avgUsdVol = totalUsdVol / recent.length;
-    const minVolume = (ticker && isNewListing && isNewListing(ticker)) ? 1000 : CONFIG.MIN_AVG_CANDLE_USD_VOLUME;
+    const isSimMode = typeof botState !== 'undefined' && botState.tradingMode === 'SIMULATION';
+    const baseMinVol = isSimMode ? 200 : CONFIG.MIN_AVG_CANDLE_USD_VOLUME; // Lower bar in SIM for training
+    const minVolume = (ticker && isNewListing && isNewListing(ticker)) ? 100 : baseMinVol;
 
     if (avgUsdVol < minVolume) {
+        // Log first few failures for debugging
+        if (!checkLiquidity._logCount) checkLiquidity._logCount = 0;
+        if (checkLiquidity._logCount < 5) {
+            console.log(`[Liquidity] ${ticker} FAIL: avgVol=$${avgUsdVol.toFixed(0)} < min=$${minVolume} (${recent.length} candles, price=$${lastPrice})`);
+            checkLiquidity._logCount++;
+        }
         return { pass: false, avgUsdVol, reason: `avg candle vol $${avgUsdVol.toFixed(0)} < $${minVolume}` };
     }
 
