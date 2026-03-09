@@ -64,6 +64,7 @@ class StakingEngine {
 
   // Adapters will be injected
   private adapters: Map<string, unknown> = new Map();
+  private _lastErrLog: Map<string, number> = new Map();
 
   constructor() {
     console.log('[StakingEngine] Initialized with', STAKING_PRODUCTS.filter(p => p.active).length, 'products');
@@ -186,7 +187,13 @@ class StakingEngine {
           });
         }
       } catch (err) {
-        console.error(`[StakingEngine] Error evaluating ${exchangeId}:`, err);
+        // Rate-limit error logging per exchange (10min cooldown)
+        const errMsg = (err as Error).message || String(err);
+        const lastLog = this._lastErrLog.get(exchangeId) || 0;
+        if (Date.now() - lastLog > 600_000) {
+          console.error(`[StakingEngine] Error evaluating ${exchangeId}:`, errMsg);
+          this._lastErrLog.set(exchangeId, Date.now());
+        }
       }
     }
   }
