@@ -443,6 +443,20 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
+  // Quick-profit scalping: if profitable above fees after 15-60 min with fading momentum,
+  // take the profit rather than risk reversal in choppy markets
+  if (holdMinutes >= 15 && holdMinutes <= 120 && feeAdjustedPnl >= 0.5) {
+    // Check if price is retreating from peak (losing more than 40% of peak gain)
+    const peakRetracement = highPnl > 0 ? (highPnl - pnlPercent) / highPnl : 0;
+    if (peakRetracement > 0.4 && feeAdjustedPnl < targets.takeProfitPct * 0.6) {
+      return {
+        shouldExit: true,
+        reason: `[BEAST-SCALP] +${feeAdjustedPnl.toFixed(2)}% (retreating ${(peakRetracement*100).toFixed(0)}% from peak +${highPnl.toFixed(2)}%, hold=${holdMinutes.toFixed(0)}min)`,
+        pnlPercent,
+      };
+    }
+  }
+
   // --- TRAILING STOP ---
   // Best seed uses activation at ~8% with 20% giveback from peak
   // Scale activation based on TP target: activate at 60% of TP (e.g., TP=8% → activate at 4.8%)
@@ -453,12 +467,20 @@ export function checkDynamicExit(position, currentPrice, candles) {
 
   if (highFeeAdj >= trailActivation) {
     // Trail giveback = 20% of peak gain (best seed), minimum 0.8%
-    const trailPct = Math.max(0.8, highPnl * 0.20);
+    // Time-weighted tightening: as hold time increases, reduce giveback to lock in more profit
+    // 0-30min: 20% giveback, 30-120min: 15%, 2-8h: 12%, 8h+: 8%
+    let givebackPct;
+    if (holdMinutes < 30) givebackPct = 0.20;
+    else if (holdMinutes < 120) givebackPct = 0.15;
+    else if (holdMinutes < 480) givebackPct = 0.12;
+    else givebackPct = 0.08;
+
+    const trailPct = Math.max(0.6, highPnl * givebackPct);
     const trailLevel = highestPrice * (1 - trailPct / 100);
     if (currentPrice <= trailLevel) {
       return {
         shouldExit: true,
-        reason: `[BEAST-TRAIL] price ${currentPrice.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${highestPrice.toFixed(4)}, locked +${feeAdjustedPnl.toFixed(2)}%)`,
+        reason: `[BEAST-TRAIL] price ${currentPrice.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${highestPrice.toFixed(4)}, locked +${feeAdjustedPnl.toFixed(2)}%, hold=${holdMinutes.toFixed(0)}min, giveback=${(givebackPct*100).toFixed(0)}%)`,
         pnlPercent,
       };
     }
