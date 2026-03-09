@@ -767,13 +767,15 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
         await trainModel();
       }
     } else {
-      // Rate-limit globally: max 3 warnings per 5min (was per-ticker — still flooded logs with 30+ tickers)
-      if (!recordTradeOutcome._globalWarnCount) recordTradeOutcome._globalWarnCount = { count: 0, windowStart: Date.now() };
+      // Rate-limit globally: max 3 warnings per 5min, dedup same ticker+entryTime
+      if (!recordTradeOutcome._globalWarnCount) recordTradeOutcome._globalWarnCount = { count: 0, windowStart: Date.now(), lastKey: '' };
       const gw = recordTradeOutcome._globalWarnCount;
       const now = Date.now();
       if (now - gw.windowStart > 300_000) { gw.count = 0; gw.windowStart = now; }
-      if (gw.count < 3) {
+      const dedupKey = `${ticker}_${entryTime}`;
+      if (gw.lastKey !== dedupKey && gw.count < 3) {
         gw.count++;
+        gw.lastKey = dedupKey;
         console.warn(`[ML Prediction] No matching feature for ${ticker} within 10min of entry (${new Date(entryTime).toISOString()})`);
       }
     }

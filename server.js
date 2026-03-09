@@ -2697,8 +2697,7 @@ async function tradingBotLoop() {
         let maxConcurrentTrades = tier.maxConcurrentTrades;
         if (fearGreedGate) {
             try {
-                const fgi = fearGreedGate.getFearGreedIndex?.();
-                const fgValue = fgi?.value ?? 50;
+                const fgValue = fearGreedGate.getFearGreedIndex?.() ?? 50;
                 if (fgValue < 15) {
                     maxConcurrentTrades = Math.max(3, Math.floor(maxConcurrentTrades * 0.5));
                 } else if (fgValue < 25) {
@@ -3373,7 +3372,9 @@ async function tradingBotLoop() {
         let simFearBoost = 0;
         if (isSim && fearGreedGate) {
             try {
-                const fgVal = fearGreedGate.getFearGreedIndex?.()?.value ?? 50;
+                // getFearGreedIndex() returns a raw number (0-100), not an object
+                const fgRaw = fearGreedGate.getFearGreedIndex?.();
+                const fgVal = (typeof fgRaw === 'number' && !isNaN(fgRaw)) ? fgRaw : 50;
                 if (fgVal < 10) simFearBoost = 12;       // Extreme Fear: +12 pts (very selective)
                 else if (fgVal < 20) simFearBoost = 6;   // Fear: +6 pts
                 else if (fgVal > 80) simFearBoost = 4;   // Extreme Greed: +4 pts (bubble caution)
@@ -3727,8 +3728,7 @@ async function tradingBotLoop() {
                                     if (sig) mlOpts.derivativesData = sig;
                                 }
                                 if (fearGreedGate) {
-                                    const fgi = fearGreedGate.getFearGreedIndex?.();
-                                    mlOpts.sentimentData = { fearGreedIndex: fgi?.value || 50 };
+                                    mlOpts.sentimentData = { fearGreedIndex: fearGreedGate.getFearGreedIndex?.() || 50 };
                                 }
                                 if (orderBookMicro) {
                                     const analysis = orderBookMicro.getAnalysis?.(cand.ticker);
@@ -3852,8 +3852,8 @@ async function tradingBotLoop() {
                     // positive close signals capitulation exhaustion → mean-reversion bounce
                     if (currentRegime === 'SIDEWAYS' && candles.length >= 25) {
                         try {
-                            const fgVal = fearGreedGate?.getFearGreedIndex?.()?.value ?? 50;
-                            if (fgVal < 20) {
+                            const fgVal = fearGreedGate?.getFearGreedIndex?.() ?? 50;
+                            if (typeof fgVal === 'number' && fgVal < 20) {
                                 const recentVols = candles.slice(-20).map(c => c.v || 0);
                                 const avgVol = recentVols.reduce((s, v) => s + v, 0) / recentVols.length;
                                 const lastCandle = candles[candles.length - 1];
@@ -4334,10 +4334,10 @@ async function tradingBotLoop() {
                                 if (sig) mlOptions.derivativesData = sig;
                             }
                             if (fearGreedGate) {
-                                const fgi = fearGreedGate.getFearGreedIndex?.();
+                                const fgStatus = fearGreedGate.getFearGreedStatus?.() || {};
                                 mlOptions.sentimentData = {
-                                    fearGreedIndex: fgi?.value || 50,
-                                    fearGreedClassification: fgi?.classification || 'Neutral',
+                                    fearGreedIndex: fgStatus.index ?? 50,
+                                    fearGreedClassification: fgStatus.classification || 'Neutral',
                                     newsSentiment: sentimentCache.get(ticker) || 0,
                                 };
                             }
@@ -5133,7 +5133,7 @@ async function tradingBotLoop() {
                             pipelineSizeMultiplier: pipelineResult?.sizeMultiplier || 1,
                             metaRLActions: metaRLParams ? { positionSizeMult: metaRLParams.positionSizeMult, slMult: metaRLParams.slMult, tpMult: metaRLParams.tpMult, entryThreshMult: metaRLParams.entryThreshMult } : null,
                             entryType: sniperCandidate ? 'SNIPER' : 'STANDARD',
-                            fearGreedAtEntry: fearGreedGate?.getFearGreedIndex?.()?.value ?? null,
+                            fearGreedAtEntry: fearGreedGate?.getFearGreedIndex?.() ?? null,
                             atrPct: candles.length >= 15 ? ((calculateATRFromCandles(candles, 14) / currentPrice) * 100) : null,
                         });
                     }
@@ -5172,7 +5172,7 @@ async function tradingBotLoop() {
             const overallRegime = botState._lastRegime || 'UNKNOWN';
             // Also evaluate shorts in SIDEWAYS when Fear & Greed is Extreme Fear (<15)
             // because SIDEWAYS with F&G=8 is functionally bearish even if price is range-bound
-            const fgForShort = fearGreedGate?.getFearGreedIndex?.()?.value ?? 50;
+            const fgForShort = fearGreedGate?.getFearGreedIndex?.() ?? 50;
             const bearishRegimes = ['DOWNTREND', 'DOWN', 'STRONG_DOWN'];
             const isBearishEnough = bearishRegimes.includes(overallRegime) ||
                 (overallRegime === 'SIDEWAYS' && fgForShort < 15);

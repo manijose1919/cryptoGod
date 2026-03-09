@@ -81,6 +81,10 @@ export async function makeSignedRequest(method, params = {}, sessionId = null) {
     }
 
     if (!apiKey || !secretKey) {
+        if (!makeSignedRequest._noCredsWarn) {
+            makeSignedRequest._noCredsWarn = true;
+            console.warn('[Crypto.com] No API credentials — private API calls disabled');
+        }
         throw new Error('API credentials not available. Please authenticate first.');
     }
 
