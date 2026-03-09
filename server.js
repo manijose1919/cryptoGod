@@ -3338,6 +3338,29 @@ async function tradingBotLoop() {
                 }
             }
 
+            // Relative Strength Ranking: In bearish markets, boost tickers that are
+            // falling less than peers. This selects the most resilient assets.
+            if (candidates.length >= 3) {
+                const priceChanges = candidates.map(c => {
+                    const cls = c.candles;
+                    if (cls.length < 20) return { ticker: c.ticker, change: 0 };
+                    const recent = cls[cls.length - 1].c;
+                    const prev = cls[cls.length - 20].c;
+                    return { ticker: c.ticker, change: prev > 0 ? ((recent - prev) / prev) * 100 : 0 };
+                });
+                const avgChange = priceChanges.reduce((s, p) => s + p.change, 0) / priceChanges.length;
+                for (const cand of candidates) {
+                    const pc = priceChanges.find(p => p.ticker === cand.ticker);
+                    if (pc) {
+                        // Relative strength = how much better than average
+                        const relStrength = pc.change - avgChange;
+                        // Boost up to +5 points for relative outperformers, penalize -3 for underperformers
+                        const rsBoost = Math.max(-3, Math.min(5, relStrength * 2));
+                        cand.score.compositeScore += rsBoost;
+                    }
+                }
+            }
+
             candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
             // Diagnostic: log scan summary every 5 iterations, with actual scores
