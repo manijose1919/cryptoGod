@@ -2959,6 +2959,14 @@ async function tradingBotLoop() {
             return;
         }
 
+        // --- PERIODIC STATUS LOG (even when all slots full) ---
+        if (!tradingBotLoop._statusLogTime || Date.now() - tradingBotLoop._statusLogTime > 60000) {
+            tradingBotLoop._statusLogTime = Date.now();
+            const posCount = Object.keys(portfolio.positions).length;
+            const drawdownPct = peakValue > 0 ? ((peakValue - totalValue) / peakValue * 100).toFixed(2) : '0.00';
+            console.log(`[BotLoop] Status: ${posCount} positions, cash=$${portfolio.cash.toFixed(2)}, total=$${totalValue.toFixed(2)}, drawdown=${drawdownPct}%`);
+        }
+
         // --- ENTRY LOGIC ---
         // Determine current market regime for strategy filtering
         const currentRegime = (() => {
