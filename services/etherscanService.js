@@ -84,7 +84,8 @@ async function getGasPrice() {
     const json = await rateLimitedFetch(
       `${BASE_URL}?module=gastracker&action=gasoracle&apikey=${API_KEY}`
     );
-    const r = json.result;
+    const r = json?.result;
+    if (!r || typeof r !== 'object') return null; // API returned null/error
     const data = {
       low: parseFloat(r.SafeGasPrice),
       average: parseFloat(r.ProposeGasPrice),
@@ -94,7 +95,11 @@ async function getGasPrice() {
     setCache(cacheKey, data, CACHE_TTL.GAS);
     return data;
   } catch (err) {
-    console.log(`[Etherscan] getGasPrice error: ${err.message}`);
+    // Suppress recurring errors (v1 API deprecation, rate limits)
+    if (!getGasPrice._lastErr || Date.now() - getGasPrice._lastErr > 300000) {
+      getGasPrice._lastErr = Date.now();
+      console.log(`[Etherscan] getGasPrice error: ${err.message}`);
+    }
     return null;
   }
 }
