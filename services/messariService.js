@@ -4,13 +4,12 @@ const API_KEY = process.env.MESSARI_API_KEY;
 const BASE_URL = 'https://data.messari.io/api';
 const HEADERS = API_KEY ? { 'x-messari-api-key': API_KEY } : {};
 
-// Dead flag: suppress after repeated 401 errors for 30 min
-let _deadUntil = 0;
-const DEAD_TTL = 30 * 60 * 1000;
-function isDead() { return Date.now() < _deadUntil; }
+// Dead flag: permanently suppress after auth errors (only resets on restart)
+let _dead = false;
+function isDead() { return _dead; }
 function markDead(status) {
-  if (!_deadUntil) console.warn(`[Messari] Suppressing for 30min after HTTP ${status}`);
-  _deadUntil = Date.now() + DEAD_TTL;
+  if (!_dead) console.warn(`[Messari] Permanently disabled this session after HTTP ${status}`);
+  _dead = true;
 }
 
 if (!API_KEY) {

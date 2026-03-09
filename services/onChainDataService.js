@@ -47,26 +47,18 @@ async function enforceRateLimit(domain) {
 // --- Dead domain tracker (suppress calls after repeated auth/server errors) ---
 const deadDomains = new Map();
 const domainFailCounts = new Map();
-const DEAD_DOMAIN_TTL_MS = 30 * 60 * 1000; // suppress for 30 min
 const DEAD_THRESHOLD = 3;
 
 function isDomainDead(domain) {
-  const entry = deadDomains.get(domain);
-  if (!entry) return false;
-  if (Date.now() > entry.until) {
-    deadDomains.delete(domain);
-    domainFailCounts.delete(domain);
-    return false;
-  }
-  return true;
+  return deadDomains.has(domain);
 }
 
 function recordDomainFailure(domain, status) {
   const count = (domainFailCounts.get(domain) || 0) + 1;
   domainFailCounts.set(domain, count);
-  if (count >= DEAD_THRESHOLD) {
-    deadDomains.set(domain, { until: Date.now() + DEAD_DOMAIN_TTL_MS });
-    console.warn(`${LOG} Suppressing ${domain} for 30min after ${count} failures (HTTP ${status})`);
+  if (count >= DEAD_THRESHOLD && !deadDomains.has(domain)) {
+    deadDomains.set(domain, { permanent: true });
+    console.warn(`${LOG} Permanently disabling ${domain} this session after ${count} failures (HTTP ${status})`);
   }
 }
 

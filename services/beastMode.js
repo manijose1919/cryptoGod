@@ -486,20 +486,32 @@ export function checkDynamicExit(position, currentPrice, candles) {
     }
   }
 
-  // --- TRAILING STOP ---
-  // Best seed uses activation at ~8% with 20% giveback from peak
-  // Scale activation based on TP target: activate at 60% of TP (e.g., TP=8% → activate at 4.8%)
+  // --- TRAILING STOP (ATR-aware) ---
+  // Scale activation based on TP target: activate at 60% of TP
   const trailActivation = Math.max(1.5, targets.takeProfitPct * 0.6);
 
   if (highFeeAdj >= trailActivation) {
-    // Trail giveback = 20% of peak gain (best seed), minimum 0.8%
-    // Time-weighted tightening: as hold time increases, reduce giveback to lock in more profit
-    // 0-30min: 20% giveback, 30-120min: 15%, 2-8h: 12%, 8h+: 8%
+    // Trail giveback: time-weighted + ATR-aware
+    // Time tightening: as hold time increases, reduce giveback to lock in more profit
     let givebackPct;
     if (holdMinutes < 30) givebackPct = 0.20;
     else if (holdMinutes < 120) givebackPct = 0.15;
     else if (holdMinutes < 480) givebackPct = 0.12;
     else givebackPct = 0.08;
+
+    // ATR-aware adjustment: in high-volatility environments, widen trailing slightly
+    // to avoid being stopped out by normal noise. Use position's candles if available.
+    if (position.atrPct) {
+      if (position.atrPct > 3.0) givebackPct *= 1.4; // High vol: widen trail 40%
+      else if (position.atrPct > 2.0) givebackPct *= 1.2; // Med-high: widen 20%
+      else if (position.atrPct < 0.5) givebackPct *= 0.7; // Low vol: tighten 30%
+    }
+
+    // Profit-tier tightening: the more profit we have, the tighter we hold
+    // If we're at 3x TP, use half the giveback to protect big winners
+    const profitMultiple = highFeeAdj / targets.takeProfitPct;
+    if (profitMultiple >= 3.0) givebackPct *= 0.5;
+    else if (profitMultiple >= 2.0) givebackPct *= 0.7;
 
     const trailPct = Math.max(0.6, highPnl * givebackPct);
     const trailLevel = highestPrice * (1 - trailPct / 100);
