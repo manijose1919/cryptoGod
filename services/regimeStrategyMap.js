@@ -3,13 +3,15 @@
  * Maps market regimes to enabled strategies for smarter entry filtering.
  */
 
-// LOCKED: Only TREND is profitable — validated via walk-forward backtesting
-// All other strategies lose money. Do NOT re-enable without OOS proof.
+// TREND is the only validated profitable strategy (walk-forward backtesting).
+// Allow TREND in SIDEWAYS too — otherwise the bot sits idle for days/weeks
+// in choppy markets, generating zero data and zero profits.
+// Higher score floors in SIDEWAYS compensate for the weaker signals.
 const REGIME_STRATEGY_MAP = {
   UPTREND:    ['TREND'],
-  SIDEWAYS:   [],  // Sit out — no profitable strategy
-  DOWNTREND:  [],  // Sit out — short selling TBD
-  VOLATILE:   [],  // Sit out
+  SIDEWAYS:   ['TREND'],  // Allow TREND with high-conviction signals
+  DOWNTREND:  ['TREND'],  // Allow TREND for counter-trend bounces (strict filters apply)
+  VOLATILE:   ['TREND'],  // Allow TREND — volatility = opportunity if managed
   UNKNOWN:    ['TREND'],  // Default to TREND only
 };
 
