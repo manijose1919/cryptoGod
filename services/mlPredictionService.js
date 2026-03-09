@@ -192,6 +192,45 @@ const featureSequenceBuffer = new Map(); // ticker -> array of feature vectors
 const LSTM_SEQUENCE_LENGTH = 30;
 
 /**
+ * Convert legacy named-object features (from training_ml_samples) to numeric array.
+ * Maps known feature names to approximate positions in the 109-feature vector.
+ */
+function convertNamedFeaturesToArray(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  const arr = new Array(FEATURE_COUNT).fill(0);
+  // Map named features to approximate indices in the feature vector
+  const mapping = {
+    tc_value: 0,
+    momentum_value: 1,
+    breakout_value: 2,
+    composite_score: 3,
+    price_change_20: 5,
+    volatility_20: 6,
+    volume_ratio: 7,
+    high_low_range: 8,
+    fear_greed: 82,
+    hour: 103,
+    day_of_week: 104,
+  };
+  // Normalize tc_value, momentum, breakout (0-100) to -1..1 range
+  if (obj.tc_value !== undefined) arr[0] = (obj.tc_value - 50) / 50;
+  if (obj.momentum_value !== undefined) arr[1] = (obj.momentum_value - 50) / 50;
+  if (obj.breakout_value !== undefined) arr[2] = (obj.breakout_value - 50) / 50;
+  if (obj.composite_score !== undefined) arr[3] = (obj.composite_score - 50) / 50;
+  if (obj.price_change_20 !== undefined) arr[5] = obj.price_change_20;
+  if (obj.volatility_20 !== undefined) arr[6] = obj.volatility_20;
+  if (obj.volume_ratio !== undefined) arr[7] = Math.log(Math.max(0.01, obj.volume_ratio));
+  if (obj.high_low_range !== undefined) arr[8] = obj.high_low_range;
+  if (obj.fear_greed !== undefined) arr[82] = obj.fear_greed / 100;
+  if (obj.hour !== undefined) arr[103] = Math.sin(2 * Math.PI * obj.hour / 24);
+  if (obj.day_of_week !== undefined) arr[104] = Math.sin(2 * Math.PI * obj.day_of_week / 7);
+  // Regime encoding
+  if (obj.regime === 'UPTREND' || obj.regime === 'STRONG_UP' || obj.regime === 'UP') arr[9] = 1;
+  else if (obj.regime === 'DOWNTREND' || obj.regime === 'STRONG_DOWN' || obj.regime === 'DOWN') arr[9] = -1;
+  return arr;
+}
+
+/**
  * Initialize ML system - load saved model or train initial model
  */
 export async function initializeML() {
@@ -872,17 +911,34 @@ export async function trainModel() {
   try {
     if (!mlEngine || !db || !db.getLabeledFeatures) {
       console.warn('[ML Prediction] Cannot train - missing dependencies');
-      return false;
+      return { success: false, error: 'Missing dependencies (mlEngine or db)' };
     }
 
     console.log('[ML Prediction] Starting model training...');
     const startTime = Date.now();
 
-    // Fetch all labeled features
-    const labeledSamples = db.getLabeledFeatures();
+    // Fetch all labeled features from ml_features table
+    let labeledSamples = db.getLabeledFeatures();
+
+    // Fallback: if not enough labeled ml_features, also pull from training_ml_samples
+    if (labeledSamples.length < MIN_SAMPLES_TO_TRAIN && db.getDb) {
+      try {
+        const rawDb = db.getDb();
+        const trainingSamples = rawDb.prepare(
+          'SELECT id, features_json, label, label_value FROM training_ml_samples WHERE label IS NOT NULL ORDER BY time DESC LIMIT 10000'
+        ).all();
+        if (trainingSamples.length > 0) {
+          console.log(`[ML Prediction] Supplementing with ${trainingSamples.length} training_ml_samples`);
+          labeledSamples = [...labeledSamples, ...trainingSamples];
+        }
+      } catch (e) {
+        console.warn('[ML Prediction] Could not read training_ml_samples:', e.message);
+      }
+    }
+
     if (labeledSamples.length < MIN_SAMPLES_TO_TRAIN) {
       console.warn(`[ML Prediction] Not enough samples to train: ${labeledSamples.length} < ${MIN_SAMPLES_TO_TRAIN}`);
-      return false;
+      return { success: false, error: `Not enough samples: ${labeledSamples.length}/${MIN_SAMPLES_TO_TRAIN}` };
     }
 
     // Parse features and labels (V2: with profit-tier sample weights)
@@ -893,8 +949,17 @@ export async function trainModel() {
     for (const sample of labeledSamples) {
       try {
         const features = JSON.parse(sample.features_json);
-        if (features.length === FEATURE_COUNT) {
-          features2D.push(features);
+        // Accept any array with at least 15 features (handles 103, 109, or 146-length vectors)
+        // Pad short vectors with zeros, truncate long vectors to FEATURE_COUNT
+        if (Array.isArray(features) && features.length >= 15) {
+          let normalizedFeatures;
+          if (features.length >= FEATURE_COUNT) {
+            normalizedFeatures = features.slice(0, FEATURE_COUNT);
+          } else {
+            // Pad with zeros to reach FEATURE_COUNT
+            normalizedFeatures = [...features, ...new Array(FEATURE_COUNT - features.length).fill(0)];
+          }
+          features2D.push(normalizedFeatures);
           labels.push(sample.label === 'UP' || sample.label === 'WIN' ? 1 : 0);
 
           // V2: Weight samples by profit magnitude (BIG_WIN/BIG_LOSS weighted 3x)
@@ -904,6 +969,14 @@ export async function trainModel() {
           } else {
             sampleWeights.push(1.0);
           }
+        } else if (typeof features === 'object' && !Array.isArray(features)) {
+          // Handle legacy named-object format from training_ml_samples
+          const featureArray = convertNamedFeaturesToArray(features);
+          if (featureArray) {
+            features2D.push(featureArray);
+            labels.push(sample.label === 'UP' || sample.label === 'WIN' ? 1 : 0);
+            sampleWeights.push(1.0);
+          }
         }
       } catch (err) {
         console.warn(`[ML Prediction] Failed to parse sample #${sample.id}:`, err.message);
@@ -911,8 +984,8 @@ export async function trainModel() {
     }
 
     if (features2D.length < MIN_SAMPLES_TO_TRAIN) {
-      console.warn(`[ML Prediction] Not enough valid samples after parsing: ${features2D.length}`);
-      return false;
+      console.warn(`[ML Prediction] Not enough valid samples after parsing: ${features2D.length} (from ${labeledSamples.length} labeled samples)`);
+      return { success: false, error: `Not enough valid samples: ${features2D.length}/${MIN_SAMPLES_TO_TRAIN}` };
     }
 
     // Batch 4A: Try worker thread training first (keeps main loop responsive)
@@ -929,7 +1002,7 @@ export async function trainModel() {
       const workerResult = await trainOnWorker(features2D, labels, workerConfig, labeledSamples);
       if (workerResult) {
         console.log(`[ML Prediction] Worker training succeeded in ${Date.now() - startTime}ms`);
-        return true;
+        return { success: true, modelType: 'ensemble_worker', sampleCount: features2D.length };
       }
       console.log('[ML Prediction] Worker training failed, falling back to main thread');
     }
@@ -1199,11 +1272,11 @@ export async function trainModel() {
     lastTrainTime = Date.now();
     samplesSinceLastTrain = 0;
 
-    return true;
+    return { success: true, modelType: 'ensemble', sampleCount: features2D.length };
 
   } catch (err) {
     console.error('[ML Prediction] trainModel error:', err);
-    return false;
+    return { success: false, error: err.message || 'Unknown training error' };
   }
 }
 

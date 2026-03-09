@@ -3024,10 +3024,10 @@ async function tradingBotLoop() {
         // SIM mode gets lower floors to generate training data
         const isSim = botState.tradingMode === 'SIMULATION';
         const regimeScoreFloors = {
-            'UPTREND': isSim ? 15 : 35,     // SIM: very low bar for learning
-            'SIDEWAYS': isSim ? 18 : 42,     // SIM: allow trades in all conditions for ML training
-            'DOWNTREND': isSim ? 22 : 50,    // SIM: even bearish trades generate valuable data
-            'UNKNOWN': isSim ? 18 : 40,      // SIM: learn in uncertainty
+            'UPTREND': isSim ? 12 : 30,     // Lowered: catch more trend entries
+            'SIDEWAYS': isSim ? 14 : 32,     // Lowered from 42: SIDEWAYS scores max ~36, was blocking everything
+            'DOWNTREND': isSim ? 18 : 45,    // Lowered slightly: still cautious in bearish
+            'UNKNOWN': isSim ? 15 : 35,      // Lowered: don't miss opportunities due to regime uncertainty
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || (isSim ? 18 : 50);

@@ -200,9 +200,13 @@ export async function onTradeComplete(tradeData) {
         holdTime: tradeData.exitTime - tradeData.entryTime,
         timestamp: tradeData.exitTime
       };
-      adaptiveThresholds.updateFromTrade(thresholdUpdate);
+      if (adaptiveThresholds.recordTradeForAdaptation) {
+        adaptiveThresholds.recordTradeForAdaptation(thresholdUpdate);
+      } else if (adaptiveThresholds.updateFromTrade) {
+        adaptiveThresholds.updateFromTrade(thresholdUpdate);
+      }
     } else {
-      console.warn('[SelfTeach] Adaptive thresholds service not available');
+      // Not critical — adaptive thresholds is optional
     }
 
     // 3. Feed to ML Pipeline systems
@@ -298,7 +302,11 @@ export async function checkAndRetrain() {
     }
 
     // Retrain the model
-    const retrainResult = await mlPredictionService.trainModel();
+    const rawResult = await mlPredictionService.trainModel();
+    // Normalize: trainModel may return boolean (legacy) or {success, error, modelType}
+    const retrainResult = typeof rawResult === 'object' && rawResult !== null
+      ? rawResult
+      : { success: !!rawResult, error: rawResult ? undefined : 'Training returned false' };
 
     if (!retrainResult.success) {
       console.error('[SelfTeach] Model retrain failed:', retrainResult.error);
