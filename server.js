@@ -3118,7 +3118,7 @@ async function tradingBotLoop() {
             const sessionTrades = portfolio.tradeLog?.length || 0;
             const sessionWins = portfolio.tradeLog?.filter(t => t.pnl >= 0).length || 0;
             const sessionWR = sessionTrades > 0 ? ((sessionWins / sessionTrades) * 100).toFixed(0) : 'N/A';
-            console.log(`[BotLoop] ${posCount} pos, $${totalValue.toFixed(0)} total, dd=${drawdownPct}%, unrealized=$${unrealizedPnl.toFixed(2)}, ${sessionTrades} trades (${sessionWR}% WR), regime=${currentRegime}`);
+            console.log(`[BotLoop] ${posCount} pos, $${totalValue.toFixed(0)} total, dd=${drawdownPct}%, unrealized=$${unrealizedPnl.toFixed(2)}, ${sessionTrades} trades (${sessionWR}% WR), regime=${botState._lastRegime || 'UNKNOWN'}`);
         }
 
         // --- ENTRY LOGIC ---
