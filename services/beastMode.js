@@ -499,6 +499,38 @@ export function checkDynamicExit(position, currentPrice, candles) {
     };
   }
 
+  // SIDEWAYS regime: tighter time-based exits since positions mean-revert
+  // In ranging markets, if profit hasn't materialized in 2h, it likely won't
+  if (targets.regime === 'LOW_VOL' || targets.regime === 'NORMAL') {
+    // Quick stale exit: cut losers after 90 min in sideways conditions
+    if (holdMinutes > 90 && feeAdjustedPnl < -0.3) {
+      return {
+        shouldExit: true,
+        reason: `[BEAST-SIDEWAYS-CUT] ${feeAdjustedPnl.toFixed(2)}% after fees, ${holdMinutes.toFixed(0)}min (SIDEWAYS time limit)`,
+        pnlPercent,
+      };
+    }
+    // Breakeven timeout: if position hasn't moved after 3h, free the slot
+    if (holdMinutes > 180 && Math.abs(feeAdjustedPnl) < 0.5) {
+      return {
+        shouldExit: true,
+        reason: `[BEAST-SIDEWAYS-FLAT] ${feeAdjustedPnl.toFixed(2)}% after ${holdMinutes.toFixed(0)}min — freeing slot`,
+        pnlPercent,
+      };
+    }
+    // Lower scalp threshold in SIDEWAYS: take any profit above fees + 0.2%
+    if (holdMinutes >= 10 && feeAdjustedPnl >= 0.2) {
+      const peakRetracement = highPnl > 0 ? (highPnl - pnlPercent) / highPnl : 0;
+      if (peakRetracement > 0.3) {
+        return {
+          shouldExit: true,
+          reason: `[BEAST-MICRO-SCALP] +${feeAdjustedPnl.toFixed(2)}% (retreating ${(peakRetracement*100).toFixed(0)}% from peak, hold=${holdMinutes.toFixed(0)}min)`,
+          pnlPercent,
+        };
+      }
+    }
+  }
+
   // Time-based exit: stale positions - exit if losing after 24h OR breakeven after 48h
   // Best seed uses 168h (7d) max hold — allow trades time to develop
   if ((holdMinutes > 1440 && pnlPercent < -0.5) || (holdMinutes > 2880 && feeAdjustedPnl < 0.1)) {
