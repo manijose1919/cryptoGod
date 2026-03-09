@@ -3077,16 +3077,9 @@ async function tradingBotLoop() {
 
                 if (score.compositeScore > tickerMinScore) candidates.push({ ticker, score, candles, sniperCandidate });
 
-                // Debug: log top scores to understand why candidates=0
-                if (!tradingBotLoop._scoreLog) tradingBotLoop._scoreLog = [];
-                tradingBotLoop._scoreLog.push({ t: ticker, s: score.compositeScore, m: tickerMinScore });
-                if (tradingBotLoop._scoreLog.length >= scanBatch.length) {
-                    if (tradingBotLoop._diagCount && tradingBotLoop._diagCount % 10 === 1) {
-                        const sorted = tradingBotLoop._scoreLog.sort((a, b) => b.s - a.s).slice(0, 5);
-                        console.log(`[BotLoop:Scores] Top scores: ${sorted.map(x => `${x.t}:${x.s}(min=${x.m})`).join(', ')}`);
-                    }
-                    tradingBotLoop._scoreLog = [];
-                }
+                // Debug: track scores per iteration
+                if (!tradingBotLoop._iterScores) tradingBotLoop._iterScores = [];
+                tradingBotLoop._iterScores.push({ t: ticker, s: score.compositeScore, m: tickerMinScore });
 
                 // === SWING STRATEGY: 4h + 1D candle fetch and evaluation ===
                 const now4h = Date.now();
@@ -3169,12 +3162,15 @@ async function tradingBotLoop() {
 
             candidates.sort((a, b) => b.score.compositeScore - a.score.compositeScore);
 
-            // Diagnostic: log scan summary every 5 iterations
+            // Diagnostic: log scan summary every 5 iterations, with actual scores
             if (!tradingBotLoop._diagCount) tradingBotLoop._diagCount = 0;
             tradingBotLoop._diagCount++;
+            const _allScores = tradingBotLoop._iterScores || [];
+            tradingBotLoop._iterScores = []; // reset for next iteration
             if (tradingBotLoop._diagCount % 5 === 1) {
                 const topScores = candidates.slice(0, 5).map(c => `${c.ticker}:${c.score.compositeScore}`).join(', ');
-                console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}${candidates.length > 0 ? `, top=[${topScores}]` : ''}, positions=${Object.keys(portfolio.positions).length}`);
+                const topRaw = _allScores.sort((a, b) => b.s - a.s).slice(0, 5).map(x => `${x.t}=${x.s}`).join(', ');
+                console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}, positions=${Object.keys(portfolio.positions).length}${candidates.length > 0 ? `, top=[${topScores}]` : topRaw ? `, rawTop=[${topRaw}]` : ''}`);
             }
 
             // --- SENTIMENT ENRICHMENT (Tiered) ---
