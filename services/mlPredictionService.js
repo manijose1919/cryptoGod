@@ -614,7 +614,12 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
       rlPrediction ? `RL=${rlPrediction.action}` : null,
       warRoomResult ? `WR=${warRoomResult.action}` : null,
     ].filter(Boolean).join(', ');
-    console.log(`[ML Prediction] ${ticker} ${strategy}: take=${take}, confidence=${confidence.toFixed(1)}%, direction=${finalDirection}, anomaly=${anomalyResult.severity}${modelInfo ? ` | ${modelInfo}` : ''}`);
+    // Rate-limit ML prediction logs: only log every 30th call per ticker to reduce noise
+    if (!shouldTradeML._logCount) shouldTradeML._logCount = {};
+    shouldTradeML._logCount[ticker] = (shouldTradeML._logCount[ticker] || 0) + 1;
+    if (shouldTradeML._logCount[ticker] % 30 === 1) {
+      console.log(`[ML Prediction] ${ticker} ${strategy}: take=${take}, confidence=${confidence.toFixed(1)}%, direction=${finalDirection}, anomaly=${anomalyResult.severity}${modelInfo ? ` | ${modelInfo}` : ''}`);
+    }
 
     return {
       take,
