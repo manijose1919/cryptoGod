@@ -2658,6 +2658,13 @@ async function tradingBotLoop() {
             }
         }
 
+        // C7b: Filter out non-USD tickers (Canadian compliance: no USDT/USDC/PERP pairs)
+        for (const ticker of marketDataMap.keys()) {
+            if (/_USDT|_USDC|USDT$|USDC$|-PERP$/i.test(ticker)) {
+                marketDataMap.delete(ticker);
+            }
+        }
+
         // C8: Candle gap validation — skip tickers with stale data
         for (const [ticker, candles] of marketDataMap) {
             if (candles.length < 3) continue;
