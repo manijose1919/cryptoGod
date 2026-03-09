@@ -52,7 +52,7 @@ function checkRateLimit() {
   // Respect 429 backoff period
   if (now < backoffUntil) {
     const waitSec = Math.ceil((backoffUntil - now) / 1000);
-    if (waitSec % 30 === 0 || waitSec > 60) { // Log sparingly during backoff
+    if (waitSec % 30 === 0) { // Log every 30s during backoff
       console.log(`[CoinGecko] In 429 backoff, ${waitSec}s remaining`);
     }
     return false;
