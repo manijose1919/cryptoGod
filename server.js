@@ -2762,7 +2762,9 @@ async function tradingBotLoop() {
                             addLog(`[RECONCILE] Applied ${fixes.actionsCount} fixes`, 'WARN');
                         }
                     }
-                } catch (e) {}
+                } catch (e) {
+                    if (Math.random() < 0.1) console.warn('[Reconciler] Error during periodic reconciliation:', e.message);
+                }
             }
         }
 
@@ -2811,7 +2813,9 @@ async function tradingBotLoop() {
                 maxDrawdownBlocking = true;
                 if (Math.random() < 0.05) addLog(ddCheck.reason, 'WARN');
             }
-        } catch (e) {}
+        } catch (e) {
+            if (Math.random() < 0.01) console.warn('[MaxDrawdown] Check failed:', e.message);
+        }
 
         // --- MULTI-TIMEFRAME DATA (5m, 15m, 1h alongside 1m) ---
         // Fix #23 (Tier 3): Cache MTF data with TTL matching timeframe period
@@ -2907,11 +2911,15 @@ async function tradingBotLoop() {
             if (mtf15mStale && data15m) { _mtfCache15m = { data: data15m, ts: now }; }
             if (mtf1hStale && data1h) { _mtfCache1h = { data: data1h, ts: now }; }
 
+            // Build Maps for O(1) lookups (was 3× O(n) .find() per ticker)
+            const map5m = new Map((data5m || []).map(d => [d.ticker, d]));
+            const map15m = new Map((data15m || []).map(d => [d.ticker, d]));
+            const map1h = new Map((data1h || []).map(d => [d.ticker, d]));
             for (const ticker of mtfTickers) {
                 const candles1m = marketDataMap.get(ticker);
-                const entry5m = data5m.find(d => d.ticker === ticker);
-                const entry15m = data15m.find(d => d.ticker === ticker);
-                const entry1h = data1h.find(d => d.ticker === ticker);
+                const entry5m = map5m.get(ticker);
+                const entry15m = map15m.get(ticker);
+                const entry1h = map1h.get(ticker);
                 if (candles1m) {
                     mtfDataMap.set(ticker, {
                         '1m': candles1m,
@@ -2923,7 +2931,9 @@ async function tradingBotLoop() {
                     data1hMap.set(ticker, entry1h.candles);
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            if (Math.random() < 0.02) console.warn('[MTF] Data fetch error:', e.message);
+        }
 
         // --- MTF CONFLUENCE SCORING ---
         const mtfScores = new Map();
@@ -3174,6 +3184,30 @@ async function tradingBotLoop() {
             const sessionWins = portfolio.tradeLog?.filter(t => t.pnl >= 0).length || 0;
             const sessionWR = sessionTrades > 0 ? ((sessionWins / sessionTrades) * 100).toFixed(0) : 'N/A';
             console.log(`[BotLoop] ${posCount} pos, $${totalValue.toFixed(0)} total, dd=${drawdownPct}%, unrealized=$${unrealizedPnl.toFixed(2)}, ${sessionTrades} trades (${sessionWR}% WR), regime=${botState._lastRegime || 'UNKNOWN'}`);
+        }
+
+        // --- CIRCUIT BREAKER FAST PATH ---
+        // When paused, skip all entry prep (regime detection, MTF scoring, candidate scoring,
+        // threshold computation, ML predictions) — saves ~80% of per-loop CPU.
+        // Exits, position updates, and equity snapshots still run below.
+        if (pauseCheck.paused) {
+            // Still update position prices for accurate PnL tracking
+            for (const [ticker, pos] of Object.entries(portfolio.positions)) {
+                const latestPrice = getLatestPrice(ticker);
+                if (latestPrice > 0) {
+                    pos.currentPrice = latestPrice;
+                    if (latestPrice > (pos.highestPrice || 0)) pos.highestPrice = latestPrice;
+                    if (latestPrice < (pos.lowestPrice || Infinity)) pos.lowestPrice = latestPrice;
+                }
+            }
+            recordEquitySnapshot(portfolio);
+            try {
+                if (getFlag('CORRELATION_ENGINE_ENABLED') && portfolioCorrelationEngine.isMatrixStale() && marketDataMap.size >= 2) {
+                    portfolioCorrelationEngine.updateCorrelationMatrix(marketDataMap);
+                }
+            } catch (e) {}
+            saveSessionState();
+            return; // Skip all entry logic — exits already handled above
         }
 
         // --- ENTRY LOGIC ---
@@ -5109,7 +5143,7 @@ async function tradingBotLoop() {
         // --- SHORT SELLING EVALUATION (Core V2) ---
         // Only evaluate shorts in bearish regimes for sim mode learning
         try {
-            const overallRegime = getMarketRegime();
+            const overallRegime = botState._lastRegime || 'UNKNOWN';
             // Also evaluate shorts in SIDEWAYS when Fear & Greed is Extreme Fear (<15)
             // because SIDEWAYS with F&G=8 is functionally bearish even if price is range-bound
             const fgForShort = fearGreedGate?.getFearGreedIndex?.()?.value ?? 50;
@@ -7465,6 +7499,12 @@ const startServer = async () => {
         setThoughtSessionId(simSessionId);
         fullResetCircuitBreaker();
         fullResetBeastMode(portfolio.cash);
+        // Clear stale cooldowns from previous session
+        if (tradingBotLoop._reEntryCooldowns) tradingBotLoop._reEntryCooldowns.clear();
+        if (tradingBotLoop._pyramidTimers) {
+            for (const timer of tradingBotLoop._pyramidTimers.values()) clearTimeout(timer);
+            tradingBotLoop._pyramidTimers.clear();
+        }
 
         if (botInterval) clearInterval(botInterval);
         botInterval = setInterval(tradingBotLoop, CONFIG.BOT_INTERVAL_MS);

@@ -767,11 +767,13 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
         await trainModel();
       }
     } else {
-      // Rate-limit this warning per ticker (10min cooldown)
-      if (!recordTradeOutcome._warnCooldowns) recordTradeOutcome._warnCooldowns = {};
+      // Rate-limit globally: max 3 warnings per 5min (was per-ticker — still flooded logs with 30+ tickers)
+      if (!recordTradeOutcome._globalWarnCount) recordTradeOutcome._globalWarnCount = { count: 0, windowStart: Date.now() };
+      const gw = recordTradeOutcome._globalWarnCount;
       const now = Date.now();
-      if (!recordTradeOutcome._warnCooldowns[ticker] || now - recordTradeOutcome._warnCooldowns[ticker] > 600_000) {
-        recordTradeOutcome._warnCooldowns[ticker] = now;
+      if (now - gw.windowStart > 300_000) { gw.count = 0; gw.windowStart = now; }
+      if (gw.count < 3) {
+        gw.count++;
         console.warn(`[ML Prediction] No matching feature for ${ticker} within 10min of entry (${new Date(entryTime).toISOString()})`);
       }
     }

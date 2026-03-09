@@ -106,6 +106,12 @@ export default function createSessionsRouter(ctx) {
             ctx.fullResetCircuitBreaker();
             ctx.fullResetBeastMode(ctx.portfolio.cash);
             ctx.fullResetWeights();
+            // Clear stale per-ticker cooldowns from previous session
+            if (ctx.tradingBotLoop?._reEntryCooldowns) ctx.tradingBotLoop._reEntryCooldowns.clear();
+            if (ctx.tradingBotLoop?._pyramidTimers) {
+                for (const timer of ctx.tradingBotLoop._pyramidTimers.values()) clearTimeout(timer);
+                ctx.tradingBotLoop._pyramidTimers.clear();
+            }
             ctx.setDailyBalance(ctx.portfolio.cash);
             ctx.peakValue = ctx.portfolio.cash;
 
