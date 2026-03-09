@@ -85,9 +85,13 @@ class FeatureScaler {
   }
 
   transformRow(row) {
-    return row.map((val, i) => {
+    // Truncate row to scaler's trained dimensions if longer (e.g., 109 features → 103 scaler)
+    const scalerLen = this.means.length;
+    const slice = row.length > scalerLen ? row.slice(0, scalerLen) : row;
+    return slice.map((val, i) => {
       const cleaned = isNaN(val) || !isFinite(val) ? 0 : val;
-      return (cleaned - this.means[i]) / this.stds[i];
+      const std = this.stds[i];
+      return std > 0 ? (cleaned - this.means[i]) / std : 0;
     });
   }
 
