@@ -4017,7 +4017,7 @@ async function tradingBotLoop() {
                         }
 
                         if (pipelineResult && !pipelineResult.proceed) {
-                            console.log(`[GateBlock] ${ticker}: tier=${pipelineResult.tier}, conf=${pipelineResult.confidence?.toFixed(1)}%, reason=${pipelineResult.reason?.slice(0,80)}`);
+                            if (tradingBotLoop._diagCount % 10 === 0) console.log(`[GateBlock] ${ticker}: tier=${pipelineResult.tier}, conf=${pipelineResult.confidence?.toFixed(1)}%`);
                             logThought({
                                 type: 'SKIP', ticker, action: 'ML_GATEKEEPER_BLOCKED',
                                 confidence: pipelineResult.confidence,
@@ -4026,7 +4026,6 @@ async function tradingBotLoop() {
                             });
                             entryStrategy = null;
                         } else if (pipelineResult) {
-                            console.log(`[GatePass] ${ticker}: tier=${pipelineResult.tier}, conf=${pipelineResult.confidence?.toFixed(1)}%, size×${pipelineResult.sizeMultiplier?.toFixed(2)}`);
 
                             // Upgrade #12: SHAP explanation for trade entries
                             let shapReason = '';
