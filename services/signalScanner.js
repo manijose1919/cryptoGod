@@ -480,25 +480,48 @@ export class SignalScanner {
   }
 
   /**
-   * Phase 3B: Fast-track scan — evaluates a single ticker on 1m timeframe only.
-   * ~5x faster than full 5-timeframe scan. Called when velocity > 0.5%/min.
-   * Returns { shouldEnter, confidence, pattern, score }
+   * Phase 3B: Fast-track scan — evaluates a single ticker on 1m + 5m timeframes.
+   * ~3x faster than full 5-timeframe scan. Called when velocity > 0.5%/min.
+   * 5m confirmation reduces false positives from 1m noise.
+   * Returns { shouldEnter, confidence, pattern, score, timeframe }
    */
   async fastScan(ticker) {
     try {
-      const candles = await this.fetchMarketData(ticker, '1m');
-      if (!candles || candles.length < 50) return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };
+      // Fetch 1m and 5m in parallel for speed
+      const [candles1m, candles5m] = await Promise.all([
+        this.fetchMarketData(ticker, '1m'),
+        this.fetchMarketData(ticker, '5m'),
+      ]);
+      if (!candles1m || candles1m.length < 50) return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };
 
-      const analysis = analyzeCandles(candles, ticker);
-      if (!analysis || !analysis.signal) return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };
+      const analysis1m = analyzeCandles(candles1m, ticker);
+      if (!analysis1m || !analysis1m.signal) return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };
 
-      const shouldEnter = analysis.signal === 'BUY' && analysis.score >= MIN_SCORE_BUY;
+      let score = analysis1m.score;
+      let confidence = Math.min(100, Math.round(score * 10));
+      let timeframe = '1m';
+
+      // 5m confirmation: boost confidence if 5m agrees, penalize if it disagrees
+      if (candles5m && candles5m.length >= 30) {
+        const analysis5m = analyzeCandles(candles5m, ticker);
+        if (analysis5m?.signal === 'BUY') {
+          score += 1.5;  // 5m confirms the 1m signal
+          confidence = Math.min(100, confidence + 15);
+          timeframe = '1m+5m';
+        } else if (analysis5m?.signal === 'SELL') {
+          score -= 2;    // 5m disagrees — likely noise on 1m
+          confidence = Math.max(0, confidence - 20);
+        }
+      }
+
+      const shouldEnter = analysis1m.signal === 'BUY' && score >= MIN_SCORE_BUY;
       return {
         shouldEnter,
-        confidence: Math.min(100, Math.round(analysis.score * 10)),
-        pattern: analysis.details?.[0] || null,
-        score: analysis.score,
-        signal: analysis.signal,
+        confidence,
+        pattern: analysis1m.details?.[0] || null,
+        score,
+        signal: analysis1m.signal,
+        timeframe,
       };
     } catch (e) {
       return { shouldEnter: false, confidence: 0, pattern: null, score: 0 };

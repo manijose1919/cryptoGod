@@ -33,6 +33,17 @@
 /** @type {TimeframeDef[]} */
 export const TIMEFRAME_DEFINITIONS = [
   {
+    id: '5m',
+    minutes: 5,
+    krakenInterval: 5,
+    profitTarget: 0.35,    // Tight scalp target — must exceed 0.52% Kraken round-trip fees
+    stopLoss: 0.20,        // Tight stop — quick in/out
+    positionSize: 22,      // Larger position, shorter hold = same risk budget
+    minConfidence: 25,     // Lower bar — speed matters more than conviction
+    minOppScore: 18,       // Low floor — momentum signals are time-sensitive
+    maxHoldMs: 5 * 60 * 1000 * 4,  // Max 20 minutes (4x the candle)
+  },
+  {
     id: '15m',
     minutes: 15,
     krakenInterval: 15,
@@ -195,6 +206,7 @@ const FAST_PROFIT_METHODS = ['Swing', 'DCA'];
  * swing.  These act as a *base* that gets intersected with the speed pool.
  */
 const TF_STRATEGY_BIAS = {
+  '5m':   ['MOMENTUM', 'BREAKOUT', 'TREND', 'ADAPTIVE'],  // Pure speed plays
   '15m':  ['BREAKOUT', 'MOMENTUM', 'TREND', 'RANGE', 'MEAN_REVERSION', 'ADAPTIVE'],
   '30m':  ['BREAKOUT', 'MOMENTUM', 'TREND', 'RANGE', 'MEAN_REVERSION', 'ADAPTIVE'],
   '1h':   ['TREND', 'MOMENTUM', 'BREAKOUT', 'CONFLUENCE', 'RANGE', 'ADAPTIVE', 'DIVERGENCE'],
@@ -214,6 +226,7 @@ const TF_STRATEGY_BIAS = {
  * longer TFs favour Swing / DCA.
  */
 const TF_PROFIT_METHOD_BIAS = {
+  '5m':   ['Grid', 'MarketMaking'],   // Ultra-short: grid scalping
   '15m':  ['Grid', 'MarketMaking', 'DCA'],
   '30m':  ['Grid', 'MarketMaking', 'DCA'],
   '1h':   ['Grid', 'MarketMaking', 'DCA', 'Swing'],
@@ -414,7 +427,7 @@ export function getBestTimeframe(candles, marketSpeed) {
 
   if (!candles || candles.length < 21) {
     return {
-      timeframeId: speed === 'SLOW' ? '1h' : '15m',
+      timeframeId: speed === 'SLOW' ? '1h' : '5m',
       reason: 'Insufficient candle data; defaulting to safe timeframe.',
     };
   }
@@ -507,7 +520,7 @@ export function getActiveProfilesForBot(marketSpeed) {
 
   const ids = speed === 'SLOW'
     ? ['1h', '6h', '1d', '3d']
-    : ['15m', '1h', '6h'];
+    : ['5m', '15m', '1h', '6h'];
 
   return ids.map(id => getTimeframeProfile(id, speed));
 }
