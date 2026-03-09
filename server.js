@@ -3611,6 +3611,26 @@ async function tradingBotLoop() {
                         const strength = (trendEntryThreshold - tcValue) / trendEntryThreshold;
                         stratCandidates.push({ strategy: 'TREND', value: tcValue, strength, sniperEntry: sniperCandidate && trendEntryThreshold > optParams.TREND_BULLISH_ENTRY });
                     }
+                    // VOLUME-SPIKE BOUNCE: In Extreme Fear, a volume spike (>3x avg) with a
+                    // positive close signals capitulation exhaustion → mean-reversion bounce
+                    if (currentRegime === 'SIDEWAYS' && candles.length >= 25) {
+                        try {
+                            const fgVal = fearGreedGate?.getFearGreedIndex?.()?.value ?? 50;
+                            if (fgVal < 20) {
+                                const recentVols = candles.slice(-20).map(c => c.v || 0);
+                                const avgVol = recentVols.reduce((s, v) => s + v, 0) / recentVols.length;
+                                const lastCandle = candles[candles.length - 1];
+                                const prevCandle = candles[candles.length - 2];
+                                const isGreenCandle = lastCandle.c > lastCandle.o;
+                                const isVolSpike = (lastCandle.v || 0) > avgVol * 3;
+                                const isPrevRed = prevCandle.c < prevCandle.o; // Reversal pattern: red → green
+                                if (isVolSpike && isGreenCandle && isPrevRed) {
+                                    const strength = Math.min(1, ((lastCandle.v || 0) / avgVol - 3) / 5) * 0.6 + 0.4;
+                                    stratCandidates.push({ strategy: 'ADAPTIVE', value: tcValue, strength, volumeBounce: true });
+                                }
+                            }
+                        } catch (e) { /* fail open */ }
+                    }
                     // MEAN_REVERSION in SIDEWAYS: enter when TC is extremely bearish (>80) expecting bounce
                     // Only in SIDEWAYS regime where mean-reversion is the dominant dynamic
                     if (currentRegime === 'SIDEWAYS' && (profileStrategies.includes('ADAPTIVE') || profileStrategies.includes('TREND'))) {
