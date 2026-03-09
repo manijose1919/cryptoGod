@@ -448,6 +448,19 @@ export function checkDynamicExit(position, currentPrice, candles) {
   const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
   const highFeeAdj = highPnl - roundTripFeePercent;
 
+  // Bear-market micro-profit: In extreme fear, take ANY profit above fees after 5min.
+  // Bounces in capitulation markets are brief — grab what you can.
+  if (holdMinutes >= 5 && feeAdjustedPnl >= 0.08 && position.fearGreedAtEntry != null && position.fearGreedAtEntry < 15) {
+    const peakRetracement = highPnl > 0 ? (highPnl - pnlPercent) / highPnl : 0;
+    if (peakRetracement > 0.2 || holdMinutes >= 30) {
+      return {
+        shouldExit: true,
+        reason: `[BEAST-FEAR-SCALP] +${feeAdjustedPnl.toFixed(2)}% in Extreme Fear (F&G=${position.fearGreedAtEntry}), hold=${holdMinutes.toFixed(0)}min`,
+        pnlPercent,
+      };
+    }
+  }
+
   // Quick-profit scalping: if profitable above fees after 15-120 min with fading momentum,
   // take the profit rather than risk reversal in choppy markets
   if (holdMinutes >= 15 && holdMinutes <= 120 && feeAdjustedPnl >= 0.5) {

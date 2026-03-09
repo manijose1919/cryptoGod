@@ -4796,6 +4796,7 @@ async function tradingBotLoop() {
                             pipelineSizeMultiplier: pipelineResult?.sizeMultiplier || 1,
                             metaRLActions: metaRLParams ? { positionSizeMult: metaRLParams.positionSizeMult, slMult: metaRLParams.slMult, tpMult: metaRLParams.tpMult, entryThreshMult: metaRLParams.entryThreshMult } : null,
                             entryType: sniperCandidate ? 'SNIPER' : 'STANDARD',
+                            fearGreedAtEntry: fearGreedGate?.getFearGreedIndex?.()?.value ?? null,
                         });
                     }
                 }
@@ -5240,6 +5241,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 mlConfidence: entryMeta.mlConfidence || 0,
                 mlDirection: entryMeta.mlDirection || null,
                 metaRLActions: entryMeta.metaRLActions || null,
+                fearGreedAtEntry: entryMeta.fearGreedAtEntry ?? null,
             };
         }
         portfolio.cash -= (actualCost + buyFee);
