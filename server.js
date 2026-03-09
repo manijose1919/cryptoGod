@@ -5246,6 +5246,15 @@ async function tradingBotLoop() {
 const MAX_TICKER_ALLOCATION = 0.10; // 10% max of portfolio in any single ticker
 
 const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = {}) => {
+    // Guard: validate inputs before attempting buy
+    if (!ticker || !price || isNaN(price) || price <= 0) {
+        console.warn(`[BUY] Invalid input — ticker=${ticker}, price=${price}`);
+        return;
+    }
+    if (!notional || isNaN(notional) || notional <= 0) {
+        console.warn(`[BUY] Invalid notional ${notional} for ${ticker}`);
+        return;
+    }
     // Per-ticker cap: reject if this ticker already exceeds max allocation
     const totalValue = portfolio.cash + Object.values(portfolio.positions).reduce(
         (sum, p) => sum + (p.quantity * (p.currentPrice || p.openPrice)), 0);
@@ -5711,6 +5720,15 @@ let _sellsInWindow = 0;
 const SELL_WINDOW_MS = 3000;
 
 const handleSell = async (position, price, reason) => {
+    // Guard: validate position data before attempting sell
+    if (!position || !position.ticker || !position.quantity || position.quantity <= 0) {
+        console.warn(`[SELL] Invalid position data — skipping sell. ticker=${position?.ticker}, qty=${position?.quantity}`);
+        return;
+    }
+    if (!price || isNaN(price) || price <= 0) {
+        console.warn(`[SELL] Invalid price ${price} for ${position.ticker} — skipping sell`);
+        return;
+    }
     // Throttle cascade sells — if 3+ sells in 3s, stagger by 500ms each
     const now = Date.now();
     if (now - _lastSellTime < SELL_WINDOW_MS) {
