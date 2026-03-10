@@ -407,17 +407,18 @@ export function getDynamicTargets(candles) {
   // Fee-aware minimum: target must exceed round-trip fee + margin
   const feeFloor = roundTripFeePercent + 0.30;
 
-  // ATR-proportional targets: TP should be achievable within the market's actual volatility.
-  // Previous fixed targets (3-6%) were unrealistic for 0.5-1.5% ATR markets.
-  // Now: TP = 3-5× ATR (achievable in 3-5 candles), SL = 1.5-2× ATR.
-  // This gives R:R of 2:1 while keeping targets within the market's actual range.
+  // ATR-proportional targets optimized for 5m/15m scalping.
+  // Reduced from 3-5× ATR to 1.5-2.5× ATR — achievable in 2-3 candles instead of 5-10.
+  // Key insight: on 5m candles, ATR ≈ 0.3-0.8%. Old 3-5× targets (1-4%) took hours to hit.
+  // New targets are reachable within 15-30 minutes, producing more frequent wins.
+  // R:R still ~2:1 (TP ~2× ATR, SL ~1× ATR).
   let regime, baseTp, baseSl;
   if (atrPercent > 1.5) {
-    regime = 'HIGH_VOL'; baseTp = Math.min(atrPercent * 3.0, 8.0); baseSl = Math.min(atrPercent * 1.5, 4.0);
+    regime = 'HIGH_VOL'; baseTp = Math.min(atrPercent * 1.5, 5.0); baseSl = Math.min(atrPercent * 1.0, 3.0);
   } else if (atrPercent > 0.5) {
-    regime = 'NORMAL'; baseTp = Math.max(atrPercent * 4.0, 2.0); baseSl = Math.max(atrPercent * 2.0, 1.2);
+    regime = 'NORMAL'; baseTp = Math.max(atrPercent * 2.0, 1.2); baseSl = Math.max(atrPercent * 1.2, 0.8);
   } else {
-    regime = 'LOW_VOL'; baseTp = Math.max(atrPercent * 5.0, 1.5); baseSl = Math.max(atrPercent * 2.5, 1.0);
+    regime = 'LOW_VOL'; baseTp = Math.max(atrPercent * 2.5, 1.0); baseSl = Math.max(atrPercent * 1.5, 0.7);
   }
 
   let tp = baseTp;
@@ -435,8 +436,9 @@ export function getDynamicTargets(candles) {
     }
   }
 
-  // Defense-in-depth: SL must never be tighter than fees + 0.8% breathing room
-  const minSL = roundTripFeePercent + 0.8;
+  // Defense-in-depth: SL must never be tighter than fees + 0.5% breathing room.
+  // Reduced from 0.8% to 0.5% for scalping — tighter SL gives better R:R on 5m entries.
+  const minSL = roundTripFeePercent + 0.5;
   return { takeProfitPct: Math.max(tp, feeFloor), stopLossPct: Math.max(sl, minSL), regime, optimized };
 }
 
@@ -491,11 +493,39 @@ export function checkDynamicExit(position, currentPrice, candles) {
   const highPnl = ((highestPrice - position.openPrice) / position.openPrice) * 100;
   const highFeeAdj = highPnl - roundTripFeePercent;
 
+  // ═══ BREAK-EVEN STOP ═══
+  // Once price moves +0.4% raw (covers most of the round-trip fees), move SL to breakeven.
+  // This turns potential losers into scratches — critical for scalping win rate.
+  // Only activates after 3 min hold (avoid noise) and when price is retreating.
+  if (holdMinutes >= 3 && highPnl >= 0.4 && pnlPercent < 0.15 && pnlPercent > -0.1) {
+    return {
+      shouldExit: true,
+      reason: `[BEAST-BREAKEVEN] Price retreated from +${highPnl.toFixed(2)}% to +${pnlPercent.toFixed(2)}% — protecting capital (hold=${holdMinutes.toFixed(0)}min)`,
+      pnlPercent,
+    };
+  }
+
+  // ═══ FAST SCALP EXIT ═══
+  // For 5m/15m trading: take any profit above fees + 0.15% after 5 min.
+  // Don't wait for full TP — small consistent wins beat rare large wins.
+  // Triggers when: (a) profitable above fees, (b) momentum fading (price retreating from peak)
+  if (holdMinutes >= 5 && holdMinutes <= 60 && feeAdjustedPnl >= 0.15) {
+    const peakRetracement = highPnl > 0 ? (highPnl - pnlPercent) / highPnl : 0;
+    // Take profit if retreating >25% from peak OR held >20 min with decent profit
+    if (peakRetracement > 0.25 || (holdMinutes >= 20 && feeAdjustedPnl >= 0.3)) {
+      return {
+        shouldExit: true,
+        reason: `[BEAST-FAST-SCALP] +${feeAdjustedPnl.toFixed(2)}% after fees (peak +${highPnl.toFixed(2)}%, retrace ${(peakRetracement*100).toFixed(0)}%, hold=${holdMinutes.toFixed(0)}min)`,
+        pnlPercent,
+      };
+    }
+  }
+
   // Bear-market micro-profit: In extreme fear, take ANY profit above fees after 5min.
   // Bounces in capitulation markets are brief — grab what you can.
   if (holdMinutes >= 5 && feeAdjustedPnl >= 0.08 && position.fearGreedAtEntry != null && position.fearGreedAtEntry < 15) {
     const peakRetracement = highPnl > 0 ? (highPnl - pnlPercent) / highPnl : 0;
-    if (peakRetracement > 0.2 || holdMinutes >= 30) {
+    if (peakRetracement > 0.2 || holdMinutes >= 20) {
       return {
         shouldExit: true,
         reason: `[BEAST-FEAR-SCALP] +${feeAdjustedPnl.toFixed(2)}% in Extreme Fear (F&G=${position.fearGreedAtEntry}), hold=${holdMinutes.toFixed(0)}min`,
@@ -504,12 +534,12 @@ export function checkDynamicExit(position, currentPrice, candles) {
     }
   }
 
-  // Quick-profit scalping: if profitable above fees after 15-120 min with fading momentum,
+  // Quick-profit scalping: if profitable above fees after 10-120 min with fading momentum,
   // take the profit rather than risk reversal in choppy markets
-  if (holdMinutes >= 15 && holdMinutes <= 120 && feeAdjustedPnl >= 0.5) {
-    // Check if price is retreating from peak (losing more than 40% of peak gain)
+  if (holdMinutes >= 10 && holdMinutes <= 120 && feeAdjustedPnl >= 0.3) {
+    // Check if price is retreating from peak (losing more than 30% of peak gain)
     const peakRetracement = highPnl > 0 ? (highPnl - pnlPercent) / highPnl : 0;
-    if (peakRetracement > 0.4 && feeAdjustedPnl < targets.takeProfitPct * 0.6) {
+    if (peakRetracement > 0.3 && feeAdjustedPnl < targets.takeProfitPct * 0.7) {
       return {
         shouldExit: true,
         reason: `[BEAST-SCALP] +${feeAdjustedPnl.toFixed(2)}% (retreating ${(peakRetracement*100).toFixed(0)}% from peak +${highPnl.toFixed(2)}%, hold=${holdMinutes.toFixed(0)}min)`,
@@ -519,8 +549,8 @@ export function checkDynamicExit(position, currentPrice, candles) {
   }
 
   // --- TRAILING STOP (ATR-aware) ---
-  // Scale activation based on TP target: activate at 60% of TP
-  const trailActivation = Math.max(1.5, targets.takeProfitPct * 0.6);
+  // Scale activation based on TP target: activate at 40% of TP (was 60% — too late for scalps)
+  const trailActivation = Math.max(0.8, targets.takeProfitPct * 0.4);
 
   if (highFeeAdj >= trailActivation) {
     // Trail giveback: time-weighted + ATR-aware
