@@ -394,16 +394,17 @@ export function getDynamicTargets(candles) {
   // Fee-aware minimum: target must exceed round-trip fee + margin
   const feeFloor = roundTripFeePercent + 0.30;
 
-  // Time Machine training (5yr backtest) learned: SL=-2%, TP=+10% (5:1 R:R) is optimal.
-  // Wider stops let trades develop; tight stops cause death by a thousand cuts.
-  // Minimum R:R of 2:1 enforced across all regimes.
+  // ATR-proportional targets: TP should be achievable within the market's actual volatility.
+  // Previous fixed targets (3-6%) were unrealistic for 0.5-1.5% ATR markets.
+  // Now: TP = 3-5× ATR (achievable in 3-5 candles), SL = 1.5-2× ATR.
+  // This gives R:R of 2:1 while keeping targets within the market's actual range.
   let regime, baseTp, baseSl;
   if (atrPercent > 1.5) {
-    regime = 'HIGH_VOL'; baseTp = 6.0; baseSl = 3.0;    // R:R 2:1, wide for vol
+    regime = 'HIGH_VOL'; baseTp = Math.min(atrPercent * 3.0, 8.0); baseSl = Math.min(atrPercent * 1.5, 4.0);
   } else if (atrPercent > 0.5) {
-    regime = 'NORMAL'; baseTp = 4.0; baseSl = 2.0;      // R:R 2:1, trained optimum
+    regime = 'NORMAL'; baseTp = Math.max(atrPercent * 4.0, 2.0); baseSl = Math.max(atrPercent * 2.0, 1.2);
   } else {
-    regime = 'LOW_VOL'; baseTp = 3.0; baseSl = 2.0;     // R:R 1.5:1, min 2% SL
+    regime = 'LOW_VOL'; baseTp = Math.max(atrPercent * 5.0, 1.5); baseSl = Math.max(atrPercent * 2.5, 1.0);
   }
 
   let tp = baseTp;
@@ -440,13 +441,22 @@ export function checkDynamicExit(position, currentPrice, candles) {
   const holdTimeMs = Date.now() - position.entryTime;
   const holdMinutes = holdTimeMs / 60000;
 
-  // Quick-kill: If position drops below -0.7% (fee-adjusted) in first 10 minutes,
-  // exit immediately. This catches bad entries before they become big losses.
-  // The 0.7% threshold is Kraken round-trip fee + 0.18% buffer.
-  if (holdMinutes <= 10 && feeAdjustedPnl <= -0.7) {
+  // Quick-kill: Cut bad entries early before they become big losses.
+  // Tiered: tighter in bear regimes where recoveries are unlikely.
+  const quickKillThreshold = targets.regime === 'HIGH_VOL' ? -0.9
+    : (targets.regime === 'LOW_VOL' ? -0.5 : -0.7);
+  if (holdMinutes <= 10 && feeAdjustedPnl <= quickKillThreshold) {
     return {
       shouldExit: true,
       reason: `[BEAST-QUICK-KILL] ${feeAdjustedPnl.toFixed(2)}% loss in ${holdMinutes.toFixed(0)}min — bad entry, cutting early`,
+      pnlPercent,
+    };
+  }
+  // Extended quick-kill: if still underwater after 20 minutes, exit at a smaller loss
+  if (holdMinutes > 10 && holdMinutes <= 20 && feeAdjustedPnl <= -0.4) {
+    return {
+      shouldExit: true,
+      reason: `[BEAST-QUICK-KILL-2] ${feeAdjustedPnl.toFixed(2)}% loss after ${holdMinutes.toFixed(0)}min — not recovering, cutting`,
       pnlPercent,
     };
   }

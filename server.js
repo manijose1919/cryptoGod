@@ -2008,10 +2008,12 @@ function refreshExitLevels(marketDataMap) {
 
         const adjustedATR = atrPct * regimeMultiplier * volRegimeMultiplier;
 
-        // Stage 1: exit 25% at 1.0× ATR profit
-        const stage1Price = openPrice * (1 + adjustedATR * 1.0 + fees.roundTrip);
-        // Stage 2: exit 35% at 2.0× ATR profit
-        const stage2Price = openPrice * (1 + adjustedATR * 2.0 + fees.roundTrip);
+        // Stage 1: exit 25% at 1.5× ATR profit (raised from 1.0× — 1.0× often doesn't cover fees)
+        // Minimum: fee floor (0.92%) ensures stage-1 exit always nets profit after round-trip
+        const stage1Raw = adjustedATR * 1.5 + fees.roundTrip;
+        const stage1Price = openPrice * (1 + Math.max(stage1Raw, fees.roundTrip + 0.004)); // min 0.4% net profit
+        // Stage 2: exit 35% at 2.5× ATR profit (raised from 2.0×)
+        const stage2Price = openPrice * (1 + adjustedATR * 2.5 + fees.roundTrip);
         // Stage 3: trail remaining at 1.5× ATR below high-water mark
         const trailATRPct = adjustedATR * 1.5;
 
@@ -3388,11 +3390,13 @@ async function tradingBotLoop() {
                 else if (fgVal > 80) simFearBoost = 4;   // Extreme Greed: +4 pts (bubble caution)
             } catch (e) {}
         }
+        // SIM floors significantly raised — entering on scores of 12-22 generated 88% LOSS labels
+        // Minimum viable signal is ~30 (at least some indicator agreement)
         const regimeScoreFloors = {
-            'UPTREND': (isSim ? 12 : 30) + simFearBoost,
-            'SIDEWAYS': (isSim ? 14 : 32) + simFearBoost,
-            'DOWNTREND': (isSim ? 22 : 45) + simFearBoost,   // SIM raised 18→22 to reduce loss-only training data
-            'UNKNOWN': (isSim ? 16 : 35) + simFearBoost,
+            'UPTREND': (isSim ? 25 : 30) + simFearBoost,
+            'SIDEWAYS': (isSim ? 30 : 32) + simFearBoost,
+            'DOWNTREND': (isSim ? 38 : 45) + simFearBoost,
+            'UNKNOWN': (isSim ? 32 : 35) + simFearBoost,
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || (isSim ? 18 : 50);
@@ -3485,7 +3489,7 @@ async function tradingBotLoop() {
                         tickerMinScore -= 15; // Micro volume burst — fast entry
                         sniperCandidate = true;
                     }
-                    tickerMinScore = Math.max(isSim ? 10 : 20, tickerMinScore); // Lower floor in SIM for training data
+                    tickerMinScore = Math.max(isSim ? 20 : 25, tickerMinScore); // Raised from 10/20 — too-low scores = garbage entries
                 }
 
                 if (score.compositeScore > tickerMinScore) candidates.push({ ticker, score, candles, sniperCandidate });
@@ -4142,12 +4146,15 @@ async function tradingBotLoop() {
                         }
                         // Scale position size by fear/greed multiplier
                         fearGreedSizeMultiplier = fearGreedGate.getPositionMultiplier();
-                        // Extreme fear is bullish for entries
+                        // Fear & Greed score adjustment — penalize extremes, reward neutrality
+                        // "Buy the fear" is a multi-week contrarian strategy; on 5m candles,
+                        // extreme fear = active dump = falling knife entries that hit SL immediately
                         const fgIndex = fearGreedGate.getFearGreedIndex();
-                        if (fgIndex <= 20) fearGreedAdj += 8;
-                        else if (fgIndex <= 35) fearGreedAdj += 3;
-                        else if (fgIndex >= 80) fearGreedAdj -= 8;
-                        else if (fgIndex >= 65) fearGreedAdj -= 3;
+                        if (fgIndex <= 15) fearGreedAdj -= 8;      // Extreme fear: PENALIZE (crash in progress)
+                        else if (fgIndex <= 25) fearGreedAdj -= 3;  // Fear: mild penalty
+                        else if (fgIndex >= 80) fearGreedAdj -= 8;  // Extreme greed: PENALIZE (bubble top)
+                        else if (fgIndex >= 65) fearGreedAdj -= 3;  // Greed: mild penalty
+                        else if (fgIndex >= 40 && fgIndex <= 60) fearGreedAdj += 3; // Neutral: slight boost (stable market)
                     } catch (e) {}
                 }
 
@@ -7595,7 +7602,7 @@ const startServer = async () => {
         botState.settings = {
             ...botState.settings,
             riskAmount: botState.settings.riskAmount || 0.15,
-            maxConcurrentTrades: botState.settings.maxConcurrentTrades || 5,
+            maxConcurrentTrades: botState.settings.maxConcurrentTrades || 3,  // Reduced from 5 to 3 — concentrate capital on best signals
             sessionProfitGoal: botState.settings.sessionProfitGoal || (simBudget * 2),
         };
         if (portfolio.cash <= 0) {
