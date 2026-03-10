@@ -268,22 +268,82 @@ export async function initializeML() {
       console.warn('[ML Prediction] Failed to load saved model:', err.message);
     }
 
-    // If no saved model, kick off training in background (don't block server startup)
+    // If no saved model, do a FAST bootstrap train first (30s), then full CV in background
     if (!mlEngine.getModelStatus().isTrained) {
       try {
         if (db && db.getLabeledFeatures) {
           const labeledSamples = db.getLabeledFeatures();
-          console.log(`[ML Prediction] Found ${labeledSamples.length} labeled samples`);
+          // Also pull from training_ml_samples as fallback
+          let allSamples = [...labeledSamples];
+          if (allSamples.length < MIN_SAMPLES_TO_TRAIN && db.getDb) {
+            try {
+              const rawDb = db.getDb();
+              const trainingSamples = rawDb.prepare(
+                'SELECT id, features_json, label, label_value FROM training_ml_samples WHERE label IS NOT NULL ORDER BY time DESC LIMIT 10000'
+              ).all();
+              if (trainingSamples.length > 0) allSamples = [...allSamples, ...trainingSamples];
+            } catch (e) {}
+          }
+          console.log(`[ML Prediction] Found ${allSamples.length} labeled samples`);
 
-          if (labeledSamples.length >= MIN_SAMPLES_TO_TRAIN) {
-            console.log('[ML Prediction] Starting background model training (non-blocking)...');
+          if (allSamples.length >= MIN_SAMPLES_TO_TRAIN) {
+            // BOOTSTRAP: Quick single-split train with small models (~30s)
+            // Makes ML gatekeeper available immediately instead of waiting 10-30min for full CV
+            console.log('[ML Prediction] Bootstrap training (fast mode, ~30s)...');
+            const bootStart = Date.now();
+            try {
+              const features2D = [];
+              const bootLabels = [];
+              for (const sample of allSamples) {
+                try {
+                  const features = JSON.parse(sample.features_json);
+                  if (Array.isArray(features) && features.length >= 15) {
+                    let normalized = features.length >= FEATURE_COUNT
+                      ? features.slice(0, FEATURE_COUNT)
+                      : [...features, ...new Array(FEATURE_COUNT - features.length).fill(0)];
+                    features2D.push(normalized);
+                    bootLabels.push(sample.label === 'UP' || sample.label === 'WIN' ? 1 : 0);
+                  }
+                } catch {}
+              }
+              if (features2D.length >= MIN_SAMPLES_TO_TRAIN) {
+                // Use small config: 30 trees, 80 estimators, no CV (single split)
+                const bootEngine = new MLEngine({
+                  nTrees: 30, maxDepth: 8, nEstimators: 80, learningRate: 0.15
+                });
+                const bootMetrics = bootEngine.train(features2D, bootLabels, {
+                  crossValidate: false, // Single 80/20 split — fast
+                  nFolds: 1,
+                });
+                if (bootEngine.isTrained) {
+                  // Replace the untrained engine with the bootstrap model
+                  mlEngine = bootEngine;
+                  console.log(`[ML Prediction] ✓ Bootstrap complete in ${((Date.now() - bootStart) / 1000).toFixed(1)}s — acc=${bootMetrics?.accuracy?.toFixed(1)}%, ${features2D.length} samples`);
+                  // Save bootstrap model to DB as v2 for instant restore on next restart
+                  try {
+                    const modelData = mlEngine.serialize();
+                    if (db.saveMLModel) {
+                      const modelId = db.saveMLModel(modelData, bootMetrics?.accuracy || 0, 0, features2D.length);
+                      if (modelId) currentModelId = modelId;
+                    }
+                  } catch (saveErr) {
+                    console.warn('[ML Prediction] Failed to save bootstrap model:', saveErr.message);
+                  }
+                }
+              }
+            } catch (bootErr) {
+              console.warn('[ML Prediction] Bootstrap training failed:', bootErr.message);
+            }
+
+            // FULL CV in background: replaces bootstrap model with properly validated one
+            console.log('[ML Prediction] Starting full CV training in background...');
             trainModel().then(() => {
-              console.log('[ML Prediction] Background training complete');
+              console.log('[ML Prediction] Full CV training complete — model upgraded');
             }).catch(err => {
-              console.warn('[ML Prediction] Background training failed:', err.message);
+              console.warn('[ML Prediction] Full CV training failed:', err.message);
             });
           } else {
-            console.log(`[ML Prediction] Need ${MIN_SAMPLES_TO_TRAIN - labeledSamples.length} more samples to train initial model`);
+            console.log(`[ML Prediction] Need ${MIN_SAMPLES_TO_TRAIN - allSamples.length} more samples to train initial model`);
           }
         }
       } catch (err) {
