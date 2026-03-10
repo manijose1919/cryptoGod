@@ -3228,24 +3228,37 @@ async function tradingBotLoop() {
         }
 
         // --- REGIME DETECTION (runs even during circuit breaker pause for tracking/alerts) ---
-        const currentRegime = (() => {
-            try {
-                const btcCandles = marketDataMap.get('BTCUSD');
-                if (btcCandles && btcCandles.length >= 35) {
-                    return getMarketRegime(btcCandles, 'BTCUSD') || 'UNKNOWN';
-                }
-                const ethCandles = marketDataMap.get('ETHUSD');
-                if (ethCandles && ethCandles.length >= 35) {
-                    return getMarketRegime(ethCandles, 'ETHUSD') || 'UNKNOWN';
-                }
-                const firstTicker = marketDataMap.keys().next().value;
-                const firstCandles = firstTicker ? marketDataMap.get(firstTicker) : null;
-                if (firstCandles && firstCandles.length >= 35) {
-                    return getMarketRegime(firstCandles, firstTicker) || 'UNKNOWN';
-                }
-            } catch (e) {}
-            return 'UNKNOWN';
-        })();
+        // Bot-loop-level cache: only recompute regime every 90 seconds.
+        // The per-function cache in beastMode was insufficient — regimeCache kept
+        // getting invalidated, causing SIDEWAYS↔UPTREND/DOWNTREND flip-flopping every 2s.
+        // This outer cache guarantees regime stability for at least 90s.
+        if (!tradingBotLoop._regimeCache) tradingBotLoop._regimeCache = { regime: 'UNKNOWN', ts: 0 };
+        let currentRegime;
+        if (Date.now() - tradingBotLoop._regimeCache.ts < 90000 && tradingBotLoop._regimeCache.regime !== 'UNKNOWN') {
+            currentRegime = tradingBotLoop._regimeCache.regime;
+        } else {
+            currentRegime = (() => {
+                try {
+                    const btcCandles = marketDataMap.get('BTCUSD');
+                    if (btcCandles && btcCandles.length >= 35) {
+                        return getMarketRegime(btcCandles, 'BTCUSD') || 'UNKNOWN';
+                    }
+                    const ethCandles = marketDataMap.get('ETHUSD');
+                    if (ethCandles && ethCandles.length >= 35) {
+                        return getMarketRegime(ethCandles, 'ETHUSD') || 'UNKNOWN';
+                    }
+                    const firstTicker = marketDataMap.keys().next().value;
+                    const firstCandles = firstTicker ? marketDataMap.get(firstTicker) : null;
+                    if (firstCandles && firstCandles.length >= 35) {
+                        return getMarketRegime(firstCandles, firstTicker) || 'UNKNOWN';
+                    }
+                } catch (e) {}
+                return 'UNKNOWN';
+            })();
+            if (currentRegime !== 'UNKNOWN') {
+                tradingBotLoop._regimeCache = { regime: currentRegime, ts: Date.now() };
+            }
+        }
 
         // Regime transition Telegram alert + cooldown tracking
         if (!botState._lastRegime) botState._lastRegime = currentRegime;
