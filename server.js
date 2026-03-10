@@ -2714,9 +2714,9 @@ async function tradingBotLoop() {
             try {
                 const fgValue = fearGreedGate.getFearGreedIndex?.() ?? 50;
                 if (fgValue < 15) {
-                    maxConcurrentTrades = Math.max(1, Math.floor(maxConcurrentTrades * 0.3)); // Extreme Fear: 1 max
+                    maxConcurrentTrades = 1; // Extreme Fear: hard cap at 1 — preserve capital
                 } else if (fgValue < 25) {
-                    maxConcurrentTrades = Math.max(2, Math.floor(maxConcurrentTrades * 0.5)); // Fear: 2 max
+                    maxConcurrentTrades = Math.min(2, maxConcurrentTrades); // Fear: hard cap at 2
                 }
             } catch (e) { /* fail open */ }
         }
@@ -3437,8 +3437,10 @@ async function tradingBotLoop() {
         const profileStrategies = activeProfile?.activeStrategies || null;
         const profilePosSize = activeProfile?.positionSizePercent ?? null;
 
+        // Re-check circuit breaker after exits — exits may have triggered it mid-loop
+        const freshPauseCheck = shouldPauseTrading(botState.tradingMode);
         const openSlots = maxConcurrentTrades - Object.keys(portfolio.positions).length;
-        if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && !flashCrashBlocking && !maxDrawdownBlocking && !mcRiskBlocking && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
+        if (openSlots > 0 && portfolio.cash > CONFIG.MIN_TRADE_SIZE && !freshPauseCheck.paused && !flashCrashBlocking && !maxDrawdownBlocking && !mcRiskBlocking && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
 
             // Calculate Opportunity Scores for current batch (with liquidity filter)
             const candidates = [];
@@ -5182,7 +5184,7 @@ async function tradingBotLoop() {
         }
 
         // --- PROFIT METHOD ENTRIES ---
-        if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !pauseCheck.paused && !flashCrashBlocking && !maxDrawdownBlocking && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
+        if (portfolio.cash > CONFIG.MIN_TRADE_SIZE && !freshPauseCheck.paused && !flashCrashBlocking && !maxDrawdownBlocking && (botState.tradingMode === 'SIMULATION' || drawdown <= tier.maxDrawdownLimit)) {
             const qualityForPM = availableTickers.filter(t => QUALITY_TICKERS.includes(t));
             const pmTickers = qualityForPM.length > 0 ? qualityForPM : availableTickers.slice(0, 50);
             const pmEntries = runProfitMethods(marketDataMap, portfolio, pmTickers, CONFIG.MIN_TRADE_SIZE);

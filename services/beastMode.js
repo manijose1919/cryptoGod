@@ -455,18 +455,21 @@ export function checkDynamicExit(position, currentPrice, candles) {
   const holdMinutes = holdTimeMs / 60000;
 
   // Quick-kill: Cut bad entries early before they become big losses.
-  // Tiered: tighter in bear regimes where recoveries are unlikely.
-  const quickKillThreshold = targets.regime === 'HIGH_VOL' ? -0.9
-    : (targets.regime === 'LOW_VOL' ? -0.5 : -0.7);
-  if (holdMinutes <= 10 && feeAdjustedPnl <= quickKillThreshold) {
+  // IMPORTANT: feeAdjustedPnl already includes -0.52% round-trip fees, so at entry
+  // the PnL is already -0.52%. Thresholds must be wide enough to allow normal
+  // bid-ask bounce (0.3-0.5% for crypto) before triggering.
+  // Minimum 3 minutes hold — sub-minute exits are just noise, not bad entries.
+  const quickKillThreshold = targets.regime === 'HIGH_VOL' ? -1.5
+    : (targets.regime === 'LOW_VOL' ? -1.0 : -1.2);
+  if (holdMinutes >= 3 && holdMinutes <= 15 && feeAdjustedPnl <= quickKillThreshold) {
     return {
       shouldExit: true,
       reason: `[BEAST-QUICK-KILL] ${feeAdjustedPnl.toFixed(2)}% loss in ${holdMinutes.toFixed(0)}min — bad entry, cutting early`,
       pnlPercent,
     };
   }
-  // Extended quick-kill: if still underwater after 20 minutes, exit at a smaller loss
-  if (holdMinutes > 10 && holdMinutes <= 20 && feeAdjustedPnl <= -0.4) {
+  // Extended quick-kill: if still underwater after 20 minutes, exit at a tighter loss
+  if (holdMinutes > 15 && holdMinutes <= 30 && feeAdjustedPnl <= -0.8) {
     return {
       shouldExit: true,
       reason: `[BEAST-QUICK-KILL-2] ${feeAdjustedPnl.toFixed(2)}% loss after ${holdMinutes.toFixed(0)}min — not recovering, cutting`,
