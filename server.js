@@ -3383,16 +3383,16 @@ async function tradingBotLoop() {
                 // getFearGreedIndex() returns a raw number (0-100), not an object
                 const fgRaw = fearGreedGate.getFearGreedIndex?.();
                 const fgVal = (typeof fgRaw === 'number' && !isNaN(fgRaw)) ? fgRaw : 50;
-                if (fgVal < 10) simFearBoost = 12;       // Extreme Fear: +12 pts (very selective)
-                else if (fgVal < 20) simFearBoost = 6;   // Fear: +6 pts
+                if (fgVal < 15) simFearBoost = 15;       // Extreme Fear: +15 pts (very selective, was +12)
+                else if (fgVal < 25) simFearBoost = 8;   // Fear: +8 pts (was +6)
                 else if (fgVal > 80) simFearBoost = 4;   // Extreme Greed: +4 pts (bubble caution)
             } catch (e) {}
         }
         const regimeScoreFloors = {
             'UPTREND': (isSim ? 12 : 30) + simFearBoost,
             'SIDEWAYS': (isSim ? 14 : 32) + simFearBoost,
-            'DOWNTREND': (isSim ? 18 : 45) + simFearBoost,
-            'UNKNOWN': (isSim ? 15 : 35) + simFearBoost,
+            'DOWNTREND': (isSim ? 22 : 45) + simFearBoost,   // SIM raised 18→22 to reduce loss-only training data
+            'UNKNOWN': (isSim ? 16 : 35) + simFearBoost,
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || (isSim ? 18 : 50);
@@ -5271,7 +5271,7 @@ async function tradingBotLoop() {
         // Phase timing breakdown (log every ~30 iterations to avoid spam)
         if (!tradingBotLoop._phaseLogCount) tradingBotLoop._phaseLogCount = 0;
         tradingBotLoop._phaseLogCount++;
-        if (tradingBotLoop._phaseLogCount % 5 === 1) {
+        if (tradingBotLoop._phaseLogCount % 30 === 1) {
             const end = Date.now();
             const total = end - _loopPhaseTimers.start;
             const p = _loopPhaseTimers;
@@ -7546,6 +7546,28 @@ const startServer = async () => {
             console.log('[Server] Bot auto-resumed from previous session');
             addLog('[SESSION] Bot auto-resumed after restart', 'INFO');
 
+            // Pre-warm swing candle caches in background (parallel, non-blocking)
+            try {
+                const swingTickers = availableTickers.slice(0, 20);
+                const swingPromises = swingTickers.flatMap(t => [
+                    getMarketData(t, '4h', 100).then(d => ({ ticker: t, tf: '4h', data: d })).catch(() => null),
+                    getMarketData(t, '1D', 100).then(d => ({ ticker: t, tf: '1D', data: d })).catch(() => null),
+                ]);
+                Promise.allSettled(swingPromises).then(results => {
+                    if (!tradingBotLoop._swing4hCache) tradingBotLoop._swing4hCache = new Map();
+                    if (!tradingBotLoop._swing1dCache) tradingBotLoop._swing1dCache = new Map();
+                    const now = Date.now();
+                    for (const r of results) {
+                        if (r.status === 'fulfilled' && r.value?.data) {
+                            const { ticker: t, tf, data } = r.value;
+                            if (tf === '4h') tradingBotLoop._swing4hCache.set(t, { data, ts: now });
+                            else tradingBotLoop._swing1dCache.set(t, { data, ts: now });
+                        }
+                    }
+                    console.log(`[Server] Swing caches pre-warmed: ${tradingBotLoop._swing4hCache.size} x 4h, ${tradingBotLoop._swing1dCache.size} x 1d`);
+                });
+            } catch (e) { /* non-critical */ }
+
             // Persist session ID for next restart
             try {
                 const db = getDb();
@@ -7598,6 +7620,29 @@ const startServer = async () => {
 
         addLog(`[SESSION] Auto-started SIM session: $${simBudget} budget, ${availableTickers.length} tickers`, 'INFO');
         console.log(`[Server] Auto-started SIM session ${simSessionId} ($${simBudget} budget)`);
+
+        // Pre-warm swing candle caches (4h + 1d) in parallel to avoid 30s first-iteration penalty
+        try {
+            const swingTickers = availableTickers.slice(0, 20);
+            console.log(`[Server] Pre-warming swing caches for ${swingTickers.length} tickers...`);
+            const swingPromises = swingTickers.flatMap(t => [
+                getMarketData(t, '4h', 100).then(d => ({ ticker: t, tf: '4h', data: d })).catch(() => null),
+                getMarketData(t, '1D', 100).then(d => ({ ticker: t, tf: '1D', data: d })).catch(() => null),
+            ]);
+            Promise.allSettled(swingPromises).then(results => {
+                if (!tradingBotLoop._swing4hCache) tradingBotLoop._swing4hCache = new Map();
+                if (!tradingBotLoop._swing1dCache) tradingBotLoop._swing1dCache = new Map();
+                const now = Date.now();
+                for (const r of results) {
+                    if (r.status === 'fulfilled' && r.value?.data) {
+                        const { ticker: t, tf, data } = r.value;
+                        if (tf === '4h') tradingBotLoop._swing4hCache.set(t, { data, ts: now });
+                        else tradingBotLoop._swing1dCache.set(t, { data, ts: now });
+                    }
+                }
+                console.log(`[Server] Swing caches pre-warmed: ${tradingBotLoop._swing4hCache.size} x 4h, ${tradingBotLoop._swing1dCache.size} x 1d`);
+            });
+        } catch (e) { /* non-critical */ }
 
         try {
             const db = getDb();
