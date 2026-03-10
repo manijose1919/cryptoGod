@@ -164,7 +164,7 @@ export function shouldPauseTrading(tradingMode = 'REAL') {
   // Prevents bleeding through entire losing streaks while still generating varied training data
   if (tradingMode === 'SIMULATION') {
     if (Date.now() < pausedUntil) {
-      const SIM_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+      const SIM_COOLDOWN_MS = 15 * 60 * 1000; // 15 min (was 5 — too short, bot resumed losing immediately)
       const pauseStartedAt = pausedUntil - (CIRCUIT_BREAKER_CONFIG.PAUSE_DURATION_MS * pauseCount || 3600000);
       const simPauseEnd = pauseStartedAt + SIM_COOLDOWN_MS;
       if (Date.now() < simPauseEnd) {

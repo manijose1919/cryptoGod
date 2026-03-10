@@ -46,7 +46,7 @@ export function setRoundTripFee(fee) {
 
 // Per-ticker regime cache
 const regimeCache = new Map(); // ticker -> { regime, timestamp, ema10, ema30, rsi, prevRegime, ... }
-const REGIME_CACHE_TTL = 20000; // 20s cache — faster regime detection (was 60s — too slow for 1m candles)
+const REGIME_CACHE_TTL = 60000; // 60s cache — 20s was too fast, caused regime flip-flopping at boundary
 
 // Regime transition history — stores last 5 regimes per ticker for transition detection
 const regimeHistory = new Map(); // ticker -> [{ regime, timestamp, ema10Slope }]
@@ -142,13 +142,26 @@ export function getMarketRegime(candles, ticker = '') {
   const ema10Slope = ema10Prev !== 0 ? (ema10Now - ema10Prev) / ema10Prev * 100 : 0;
   const spread = ema30Now !== 0 ? (ema10Now - ema30Now) / ema30Now * 100 : 0;
 
+  // Hysteresis: require stronger signals to CHANGE regime vs STAY in it
+  // This prevents flip-flopping at boundary (e.g., spread oscillating around -0.2%)
+  const prevRegime = ticker ? (regimeCache.get(ticker)?.regime || 'SIDEWAYS') : 'SIDEWAYS';
   let regime;
-  if (spread > 0.2 && ema10Slope > 0.05 && rsi > 50) {
-    regime = 'UPTREND';
-  } else if (spread < -0.2 && ema10Slope < -0.05 && rsi < 50) {
-    regime = 'DOWNTREND';
+
+  if (prevRegime === 'UPTREND') {
+    // Already UPTREND — stay unless clearly reversed (wider band to exit)
+    if (spread < -0.1 && rsi < 45) regime = 'DOWNTREND';
+    else if (spread < 0.05 || rsi < 45) regime = 'SIDEWAYS';
+    else regime = 'UPTREND';
+  } else if (prevRegime === 'DOWNTREND') {
+    // Already DOWNTREND — stay unless clearly reversed (wider band to exit)
+    if (spread > 0.4 && ema10Slope > 0.1 && rsi > 55) regime = 'UPTREND';
+    else if (spread > 0.0 && rsi > 52) regime = 'SIDEWAYS';
+    else regime = 'DOWNTREND';
   } else {
-    regime = 'SIDEWAYS';
+    // SIDEWAYS — require stronger signal to enter a trend
+    if (spread > 0.3 && ema10Slope > 0.08 && rsi > 52) regime = 'UPTREND';
+    else if (spread < -0.3 && ema10Slope < -0.08 && rsi < 48) regime = 'DOWNTREND';
+    else regime = 'SIDEWAYS';
   }
 
   // Cache it + track transition history

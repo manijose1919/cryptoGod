@@ -2702,9 +2702,9 @@ async function tradingBotLoop() {
             try {
                 const fgValue = fearGreedGate.getFearGreedIndex?.() ?? 50;
                 if (fgValue < 15) {
-                    maxConcurrentTrades = Math.max(3, Math.floor(maxConcurrentTrades * 0.5));
+                    maxConcurrentTrades = Math.max(1, Math.floor(maxConcurrentTrades * 0.3)); // Extreme Fear: 1 max
                 } else if (fgValue < 25) {
-                    maxConcurrentTrades = Math.max(4, Math.floor(maxConcurrentTrades * 0.7));
+                    maxConcurrentTrades = Math.max(2, Math.floor(maxConcurrentTrades * 0.5)); // Fear: 2 max
                 }
             } catch (e) { /* fail open */ }
         }
@@ -3392,11 +3392,17 @@ async function tradingBotLoop() {
         }
         // SIM floors significantly raised — entering on scores of 12-22 generated 88% LOSS labels
         // Minimum viable signal is ~30 (at least some indicator agreement)
+        // DOWNTREND: block ALL entries (even SIM) — 5m scalping against the trend is a guaranteed loser
+        // The bot should sit on its hands during downtrends and only trade during UPTREND/SIDEWAYS
+        if (currentRegime === 'DOWNTREND') {
+            recordEquitySnapshot(portfolio);
+            saveSessionState();
+            return; // Skip entire entry logic — no trading in downtrends
+        }
         const regimeScoreFloors = {
             'UPTREND': (isSim ? 25 : 30) + simFearBoost,
-            'SIDEWAYS': (isSim ? 30 : 32) + simFearBoost,
-            'DOWNTREND': (isSim ? 38 : 45) + simFearBoost,
-            'UNKNOWN': (isSim ? 32 : 35) + simFearBoost,
+            'SIDEWAYS': (isSim ? 35 : 40) + simFearBoost,
+            'UNKNOWN': (isSim ? 38 : 42) + simFearBoost,
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || (isSim ? 18 : 50);
@@ -3428,7 +3434,8 @@ async function tradingBotLoop() {
                 }
 
                 // Regime transition cooldown: wait 3 minutes after regime change before new entries
-                if (botState._regimeChangeTime && botState.tradingMode !== 'SIMULATION') {
+                // Applies to BOTH real and SIM — regime instability means bad entries
+                if (botState._regimeChangeTime) {
                     const sinceRegimeChange = Date.now() - botState._regimeChangeTime;
                     if (sinceRegimeChange < 3 * 60 * 1000) {
                         continue; // Skip all candidates during regime transition cooldown
@@ -6090,11 +6097,13 @@ const handleSell = async (position, price, reason) => {
             } catch (e) {}
         }
 
-        // Re-entry cooldown: after a losing trade, prevent re-entering same ticker for 10 min
+        // Re-entry cooldown: after a losing trade, prevent re-entering same ticker
         // Prevents revenge trading and entering the same failing setup
         if (pnl < 0) {
             if (!tradingBotLoop._reEntryCooldowns) tradingBotLoop._reEntryCooldowns = new Map();
-            tradingBotLoop._reEntryCooldowns.set(position.ticker, Date.now() + 10 * 60 * 1000);
+            // Scale cooldown by loss severity: bigger loss = longer wait
+            const cooldownMin = Math.abs(pnl) > 1.0 ? 60 : (Math.abs(pnl) > 0.5 ? 30 : 15);
+            tradingBotLoop._reEntryCooldowns.set(position.ticker, Date.now() + cooldownMin * 60 * 1000);
         }
 
         // C6: Signal scanner feedback loop — record outcome for scanner weight adjustment
