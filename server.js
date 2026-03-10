@@ -5271,7 +5271,7 @@ async function tradingBotLoop() {
         // Phase timing breakdown (log every ~30 iterations to avoid spam)
         if (!tradingBotLoop._phaseLogCount) tradingBotLoop._phaseLogCount = 0;
         tradingBotLoop._phaseLogCount++;
-        if (tradingBotLoop._phaseLogCount % 30 === 1) {
+        if (tradingBotLoop._phaseLogCount % 5 === 1) {
             const end = Date.now();
             const total = end - _loopPhaseTimers.start;
             const p = _loopPhaseTimers;
