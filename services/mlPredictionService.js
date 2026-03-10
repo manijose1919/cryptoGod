@@ -306,10 +306,16 @@ export async function initializeML() {
                   }
                 } catch {}
               }
+              // Subsample to 2000 max for fast bootstrap (5000 samples is too slow)
+              if (features2D.length > 2000) {
+                // Keep most recent 2000 samples (most relevant)
+                features2D.splice(0, features2D.length - 2000);
+                bootLabels.splice(0, bootLabels.length - 2000);
+              }
               if (features2D.length >= MIN_SAMPLES_TO_TRAIN) {
-                // Use small config: 30 trees, 80 estimators, no CV (single split)
+                // Use minimal config: 20 trees, 30 GBT estimators, depth 6 (~15-20s)
                 const bootEngine = new MLEngine({
-                  nTrees: 30, maxDepth: 8, nEstimators: 80, learningRate: 0.15
+                  nTrees: 20, maxDepth: 6, nEstimators: 30, learningRate: 0.2
                 });
                 const bootMetrics = bootEngine.train(features2D, bootLabels, {
                   crossValidate: false, // Single 80/20 split — fast
