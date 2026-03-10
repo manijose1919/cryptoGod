@@ -2673,6 +2673,7 @@ async function tradingBotLoop() {
     try {
         // Defensive: ensure botLoopRunning is ALWAYS cleared, even on unexpected errors.
         // The finally block below handles this, but we also have the watchdog as a safety net.
+        const _loopPhaseTimers = { start: Date.now() };
         const _boostEntryMultipliers = {}; // Per-ticker position size boosts from BOOST_ENTRY regime transitions
         const { sessionProfitGoal, riskAmount, profitGoals } = botState.settings;
 
@@ -2753,6 +2754,7 @@ async function tradingBotLoop() {
         if (wsConnected()) wsSubscribeTickers(tickersToFetch);
 
         const allMarketData = await getMultipleMarketData(tickersToFetch);
+        _loopPhaseTimers.afterMarketData = Date.now();
 
         // Create a lookup map
         const marketDataMap = new Map();
@@ -3183,6 +3185,8 @@ async function tradingBotLoop() {
             const exitPrice = candles ? candles[candles.length - 1].c : pos.openPrice;
             await handleSell(pos, exitPrice, exit.reason);
         }
+
+        _loopPhaseTimers.afterExits = Date.now();
 
         // Recalculate total value
         holdingsValue = Object.values(portfolio.positions).reduce((sum, pos) =>
@@ -3616,6 +3620,8 @@ async function tradingBotLoop() {
                 console.log(`[BotLoop] Regime=${currentRegime}, minScore=${minOppScore}, scanned=${scanBatch.length}, candidates=${candidates.length}, positions=${Object.keys(portfolio.positions).length}, skips=pos:${_debugSkips.pos}/noData:${_debugSkips.noCandles}/liq:${_debugSkips.liq}/scored:${_debugSkips.scored}${candidates.length > 0 ? `, top=[${topScores}]` : topRaw ? `, rawTop=[${topRaw}]` : ''}`);
             }
 
+            _loopPhaseTimers.afterScoring = Date.now();
+
             // --- SENTIMENT ENRICHMENT (Tiered) ---
             // Tier 1 (ALL candidates): CryptoPanic news + CoinGecko trending (1 global call each, cached)
             // Tier 2 (top 10):         Reddit + YouTube per-ticker sentiment (rate-limited, cached 5min)
@@ -3753,6 +3759,8 @@ async function tradingBotLoop() {
                     }
                 } catch (e) {}
             }
+
+            _loopPhaseTimers.afterSentimentML = Date.now();
 
             // ═══ ML CONSENSUS GATE ═══
             // When ALL ML predictions unanimously agree DOWN with high confidence,
@@ -5259,6 +5267,23 @@ async function tradingBotLoop() {
                 portfolioCorrelationEngine.updateCorrelationMatrix(marketDataMap);
             }
         } catch (e) {}
+
+        // Phase timing breakdown (log every ~30 iterations to avoid spam)
+        if (!tradingBotLoop._phaseLogCount) tradingBotLoop._phaseLogCount = 0;
+        tradingBotLoop._phaseLogCount++;
+        if (tradingBotLoop._phaseLogCount % 30 === 1) {
+            const end = Date.now();
+            const total = end - _loopPhaseTimers.start;
+            const p = _loopPhaseTimers;
+            const phases = [
+                `data=${(p.afterMarketData||end) - p.start}ms`,
+                `exits=${(p.afterExits||end) - (p.afterMarketData||p.start)}ms`,
+                `scoring=${(p.afterScoring||end) - (p.afterExits||end)}ms`,
+                `sentiment+ML=${(p.afterSentimentML||end) - (p.afterScoring||end)}ms`,
+                `entries=${end - (p.afterSentimentML||end)}ms`,
+            ];
+            console.log(`[LoopTiming] Total=${total}ms | ${phases.join(' | ')}`);
+        }
 
         saveSessionState();
     } catch (error) {

@@ -1514,8 +1514,12 @@ class MLEngine {
     const data = JSON.parse(json);
 
     this.config = data.config;
-    this.scaler.means = data.scaler.means;
-    this.scaler.stds = data.scaler.stds;
+    if (data.scaler?.means && data.scaler?.stds) {
+      this.scaler.means = data.scaler.means;
+      this.scaler.stds = data.scaler.stds;
+    } else {
+      console.warn('[MLEngine] Saved model has no scaler data — will refit on next training');
+    }
     this.modelWeights = data.modelWeights;
     this.featureImportance = data.featureImportance;
     this.accuracy = data.accuracy;
