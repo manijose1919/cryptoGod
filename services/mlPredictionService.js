@@ -712,6 +712,14 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
       return;
     }
 
+    // Skip labeling very short-lived trades (< 60s hold) — noise for ML training
+    // Quick-kills reflect exit logic, not entry quality, so they confuse the model
+    const holdTimeMs = Date.now() - (entryTime || 0);
+    if (holdTimeMs > 0 && holdTimeMs < 60000) {
+      console.log(`[ML Prediction] Skipping label for ${ticker}: held only ${(holdTimeMs/1000).toFixed(0)}s (< 60s min)`);
+      return;
+    }
+
     // Convert outcome to label (V2: use profit labeler if available)
     const label = outcome === 'WIN' ? 'UP' : 'DOWN';
     const labelValue = pnlPercent || 0;
@@ -925,6 +933,7 @@ export async function trainModel() {
     return { success: false, error: 'Training already in progress' };
   }
   _trainingInProgress = true;
+  const _trainingStartTime = Date.now();
   try {
     if (!mlEngine || !db || !db.getLabeledFeatures) {
       console.warn('[ML Prediction] Cannot train - missing dependencies');
@@ -1296,6 +1305,9 @@ export async function trainModel() {
     // Reset counters
     lastTrainTime = Date.now();
     samplesSinceLastTrain = 0;
+
+    const trainDurationSec = ((Date.now() - _trainingStartTime) / 1000).toFixed(1);
+    console.log(`[ML Prediction] ✓ Full training pipeline complete in ${trainDurationSec}s (${features2D.length} samples, acc=${metrics?.accuracy?.toFixed(1)}%)`);
 
     return { success: true, modelType: 'ensemble', sampleCount: features2D.length };
 
