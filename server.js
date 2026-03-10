@@ -2164,19 +2164,31 @@ function refreshExitLevels(marketDataMap) {
             if (!candles || candles.length === 0) continue;
             const currentPrice = candles[candles.length - 1].c;
             if (currentPrice <= simSL.stopPrice) {
-                addLog(`[SIM-SL] Stop-loss TRIGGERED for ${ticker}: price $${currentPrice.toFixed(2)} <= SL $${simSL.stopPrice.toFixed(2)}`, 'WARN');
-                handleSell(position, currentPrice, `SIM_NATIVE_SL (hit $${simSL.stopPrice.toFixed(2)})`);
+                const slFmtT = simSL.stopPrice < 1 ? simSL.stopPrice.toPrecision(4) : simSL.stopPrice.toFixed(2);
+                const priceFmtT = currentPrice < 1 ? currentPrice.toPrecision(4) : currentPrice.toFixed(2);
+                addLog(`[SIM-SL] Stop-loss TRIGGERED for ${ticker}: price $${priceFmtT} <= SL $${slFmtT}`, 'WARN');
+                handleSell(position, currentPrice, `SIM_NATIVE_SL (hit $${slFmtT})`);
                 simNativeStopOrders.delete(ticker);
                 continue;
             }
             // Update SIM SL when computed SL changes significantly (same logic as real mode)
+            // GUARD: Don't tighten SL in first 5 minutes — the emergency 5% SL is there
+            // for breathing room. ATR-based SL can be much tighter (1-2%) and triggers
+            // on normal market noise, causing instant SL-triggered exits.
             const cached = exitLevelCache.get(ticker);
-            if (cached && Math.abs(simSL.stopPrice - cached.slPrice) / cached.slPrice > 0.01) {
-                simNativeStopOrders.set(ticker, {
-                    stopPrice: cached.slPrice,
-                    volume: position.quantity,
-                    placedAt: Date.now(),
-                });
+            const holdMs = Date.now() - (position.entryTime || 0);
+            if (cached && holdMs > 5 * 60 * 1000 && Math.abs(simSL.stopPrice - cached.slPrice) / cached.slPrice > 0.01) {
+                // Only tighten SL (raise stopPrice) if position is in profit
+                const pnl = ((currentPrice - position.openPrice) / position.openPrice) * 100;
+                if (cached.slPrice > simSL.stopPrice && pnl < 0.5) {
+                    // Don't tighten SL while position is losing — keep the wider emergency SL
+                } else {
+                    simNativeStopOrders.set(ticker, {
+                        stopPrice: cached.slPrice,
+                        volume: position.quantity,
+                        placedAt: Date.now(),
+                    });
+                }
             }
         }
     }
@@ -5662,7 +5674,8 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 volume: parseFloat(quantity),
                 placedAt: Date.now(),
             });
-            addLog(`[SIM-SL] Placed simulated stop-loss for ${ticker} @ $${slPrice.toFixed(2)} (-${(emergencySlPct * 100).toFixed(1)}%)`, 'INFO');
+            const slFmt = slPrice < 1 ? slPrice.toPrecision(4) : slPrice.toFixed(2);
+            addLog(`[SIM-SL] Placed simulated stop-loss for ${ticker} @ $${slFmt} (-${(emergencySlPct * 100).toFixed(1)}%)`, 'INFO');
         }
 
         // Place native exchange stop-loss (survives bot crashes)
