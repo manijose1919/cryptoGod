@@ -3565,22 +3565,11 @@ async function tradingBotLoop() {
                     const rsi4h = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
                     if (rsi4h > 30 && rsi4h < 70) swingScore += 20;
 
-                    if (swingScore >= 65) {
-                      candidates.push({
-                        ticker,
-                        strategy: 'SWING',
-                        score: { compositeScore: swingScore / 100, confidence: swingScore },
-                        candles: candles4h,
-                        tradeType: 'SWING',
-                        swingParams: {
-                          stopLoss: -0.06,
-                          takeProfit: 0.20,
-                          maxHoldHours: 14 * 24,
-                          trailingStart: 0.12,
-                          trailingGiveBack: 0.15,
-                        },
-                      });
-                    }
+                    // DISABLED: Swing candidates were bypassing minScore check and mixing
+                    // multi-day swing trades (TP=20%, 14d hold) into a 5-minute scalper.
+                    // Their compositeScore was swingScore/100 (0.65), not a real score.
+                    // TODO: Implement as a separate swing engine with its own entry/exit logic.
+                    // if (swingScore >= 65) { /* push to separate swing queue */ }
                   } catch (swingErr) {
                     if (Math.random() < 0.02) console.warn(`[SWING] Error for ${ticker}: ${swingErr.message}`);
                   }
