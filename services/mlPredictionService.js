@@ -919,9 +919,9 @@ async function trainOnWorker(features2D, labels, config, labeledSamples) {
       const timeout = setTimeout(() => {
         worker.terminate();
         workerTraining = false;
-        console.warn('[ML Prediction] Worker training timed out after 600s');
+        console.warn('[ML Prediction] Worker training timed out after 900s');
         resolve(false);
-      }, 600000);
+      }, 900000);
 
       worker.on('message', (msg) => {
         if (msg.type === 'ready') {
@@ -1091,7 +1091,11 @@ export async function trainModel() {
           if (saved) workerConfig = saved;
         }
       } catch {}
-      workerConfig.nFolds = 7; // Batch 5B: increased from 5
+      workerConfig.nFolds = 5; // Reduced from 7 — 7-fold times out on VPS
+      // Cap model complexity for worker to prevent 600s+ timeout
+      if (workerConfig.nTrees > 60) workerConfig.nTrees = 60;
+      if (workerConfig.nEstimators > 150) workerConfig.nEstimators = 150;
+      if (workerConfig.maxDepth > 12) workerConfig.maxDepth = 12;
       const workerResult = await trainOnWorker(features2D, labels, workerConfig, labeledSamples);
       if (workerResult) {
         console.log(`[ML Prediction] Worker training succeeded in ${Date.now() - startTime}ms`);
@@ -1128,8 +1132,8 @@ export async function trainModel() {
       mlEngine.config.learningRate = trainConfig.learningRate || mlEngine.config.learningRate;
     }
 
-    // Train model with walk-forward cross-validation (Batch 5B: 5→7 folds)
-    const metrics = mlEngine.train(features2D, labels, { crossValidate: true, nFolds: 7, purgeGap: 5 });
+    // Train model with walk-forward cross-validation (5 folds — 7 timed out on VPS)
+    const metrics = mlEngine.train(features2D, labels, { crossValidate: true, nFolds: 5, purgeGap: 5 });
     console.log(`[ML Prediction] Training complete in ${Date.now() - startTime}ms`);
     if (metrics.cvFolds) {
       console.log(`[ML Prediction] CV: ${metrics.cvFolds} folds, avgValAcc=${metrics.validationAccuracy.toFixed(3)}, weights: RF=${metrics.modelWeights.rf.toFixed(3)}, GB=${metrics.modelWeights.gb.toFixed(3)}, LR=${metrics.modelWeights.lr.toFixed(3)}`);
