@@ -23,7 +23,7 @@ const GAE_LAMBDA = 0.95;
 const GAMMA = 0.99;
 const MINI_BATCH_SIZE = 64;
 const PPO_EPOCHS = 4;
-const STATE_DIM = 108; // 103 features + 5 portfolio state
+const STATE_DIM = 114; // 109 features + 5 portfolio state
 const ACTION_DIM = 3;  // BUY, SELL, HOLD
 
 class PPOAgent {
@@ -421,7 +421,12 @@ class TradingEnvironment {
  */
 async function trainRLAgent(agent, candles, features2D, numEpisodes = 100) {
   if (!tf) return null;
-  if (!agent.actor) agent.buildNetworks();
+  // Rebuild networks if feature dimension changed (e.g. FEATURE_COUNT updated)
+  const actualStateDim = (features2D[0]?.length || 0) + 5; // features + 5 portfolio state
+  if (!agent.actor || (agent.actor.inputs[0].shape[1] !== actualStateDim)) {
+    if (agent.actor) console.log(`[RL Agent] Rebuilding networks: ${agent.actor.inputs[0].shape[1]} → ${actualStateDim} state dim`);
+    agent.buildNetworks(actualStateDim);
+  }
 
   const env = new TradingEnvironment(candles, features2D);
   const allRewards = [];

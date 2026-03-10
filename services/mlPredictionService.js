@@ -167,6 +167,7 @@ try {
 }
 let trainingWorker = null;
 let workerTraining = false;
+let _trainingInProgress = false; // Global lock to prevent concurrent trainModel() calls
 
 // State
 let mlEngine = null;
@@ -918,9 +919,16 @@ async function trainOnWorker(features2D, labels, config, labeledSamples) {
  * Train/retrain the ML model
  */
 export async function trainModel() {
+  // Prevent concurrent training — TF.js fit() crashes on overlapping calls
+  if (_trainingInProgress) {
+    console.warn('[ML Prediction] Training already in progress — skipping');
+    return { success: false, error: 'Training already in progress' };
+  }
+  _trainingInProgress = true;
   try {
     if (!mlEngine || !db || !db.getLabeledFeatures) {
       console.warn('[ML Prediction] Cannot train - missing dependencies');
+      _trainingInProgress = false;
       return { success: false, error: 'Missing dependencies (mlEngine or db)' };
     }
 
@@ -1119,7 +1127,14 @@ export async function trainModel() {
       console.warn('[ML Prediction] Regime model training error:', regimeErr.message);
     }
 
-    // Phase 1: Train TF.js LSTM
+    // Helper: timeout-guarded async training (prevents event loop blockage)
+    const withTrainTimeout = (promise, name, timeoutMs = 120000) =>
+      Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`${name} training timed out after ${timeoutMs/1000}s`)), timeoutMs))
+      ]);
+
+    // Phase 1: Train TF.js LSTM (120s timeout)
     try {
       if (tfEngine && getFlag('TF_ENABLED') && features2D.length >= 200) {
         console.log('[ML Prediction] Training TF.js LSTM...');
@@ -1130,7 +1145,7 @@ export async function trainModel() {
           seqLabels.push(labels[i]);
         }
         if (sequences.length >= 100) {
-          await tfEngine.trainLSTM(sequences, seqLabels);
+          await withTrainTimeout(tfEngine.trainLSTM(sequences, seqLabels), 'TF.js LSTM');
           await tfEngine.saveLSTM();
         }
       }
@@ -1151,7 +1166,7 @@ export async function trainModel() {
           multiLabels.h24.push(i + 24 < labels.length ? labels[i + 24] : labels[i]);
         }
         if (sequences.length >= 100) {
-          await tfEngine.trainTFT(sequences, multiLabels);
+          await withTrainTimeout(tfEngine.trainTFT(sequences, multiLabels), 'TFT');
           await tfEngine.saveTFT();
         }
       }
@@ -1175,7 +1190,7 @@ export async function trainModel() {
           v: f[20] || 1, // volume_sma_ratio
         }));
         const episodes = getFlag('RL_TRAINING_EPISODES') || 100;
-        await trainRLAgent(rlAgent, approxCandles, features2D, episodes);
+        await withTrainTimeout(trainRLAgent(rlAgent, approxCandles, features2D, episodes), 'RL Agent', 180000);
       }
     } catch (rlErr) {
       console.warn('[ML Prediction] RL agent training error:', rlErr.message);
@@ -1190,7 +1205,7 @@ export async function trainModel() {
           sequences.push(features2D.slice(i - 30, i));
         }
         if (sequences.length >= 50) {
-          await syntheticEngine.train(sequences, 30);
+          await withTrainTimeout(syntheticEngine.train(sequences, 30), 'Synthetic TimeGAN', 180000);
           const multiplier = getFlag('SYNTHETIC_MULTIPLIER') || 3;
           const syntheticSeqs = syntheticEngine.generate(Math.min(sequences.length * multiplier, 2000));
           const quality = syntheticEngine.validateQuality(sequences.slice(0, 50), syntheticSeqs.slice(0, 50));
@@ -1287,6 +1302,8 @@ export async function trainModel() {
   } catch (err) {
     console.error('[ML Prediction] trainModel error:', err);
     return { success: false, error: err.message || 'Unknown training error' };
+  } finally {
+    _trainingInProgress = false;
   }
 }
 

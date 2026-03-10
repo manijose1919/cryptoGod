@@ -90,7 +90,15 @@ class TimeGAN {
    */
   async train(realSequences, epochs = 50) {
     if (!tf || !realSequences.length) return null;
-    if (!this.embedder) this.buildNetworks();
+    // Detect actual feature dimension from data and rebuild networks if needed
+    const actualDim = realSequences[0]?.[0]?.length || this.featureDim;
+    if (actualDim !== this.featureDim || !this.embedder) {
+      if (actualDim !== this.featureDim) {
+        console.log(`[Synthetic Data] Feature dim changed: ${this.featureDim} → ${actualDim}, rebuilding networks`);
+        this.featureDim = actualDim;
+      }
+      this.buildNetworks();
+    }
 
     const n = realSequences.length;
     console.log(`[Synthetic Data] Training TimeGAN on ${n} sequences, ${epochs} epochs...`);
