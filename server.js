@@ -4920,6 +4920,46 @@ async function tradingBotLoop() {
                     } catch (e) { /* fail open */ }
                 }
 
+                // ═══ PULLBACK-TO-EMA ENTRY BOOST ═══
+                // Highest probability scalp setup: price pulls back to EMA9/21 in uptrend then bounces.
+                // On 5m/15m charts, this catches the exact moment to enter a continuation move.
+                let pullbackAdj = 0;
+                if (entryStrategy && candles && candles.length >= 30) {
+                    try {
+                        const closes = candles.slice(-25).map(c => c.c || c.close);
+                        // Calculate EMA9 and EMA21
+                        let ema9 = closes[0], ema21 = closes[0];
+                        const m9 = 2 / (9 + 1), m21 = 2 / (21 + 1);
+                        for (let i = 1; i < closes.length; i++) {
+                            ema9 = closes[i] * m9 + ema9 * (1 - m9);
+                            ema21 = closes[i] * m21 + ema21 * (1 - m21);
+                        }
+                        const price = closes[closes.length - 1];
+                        const prevPrice = closes[closes.length - 2];
+                        const pricePctAboveEma21 = ((price - ema21) / ema21) * 100;
+                        const pricePctAboveEma9 = ((price - ema9) / ema9) * 100;
+                        const ema9AboveEma21 = ema9 > ema21; // Uptrend confirmed
+
+                        if (ema9AboveEma21 && pricePctAboveEma21 > 0) {
+                            // Price is above EMA21 (uptrend) and EMA9 > EMA21 (golden alignment)
+                            // Check for pullback: price was near/below EMA9 recently, now bouncing
+                            const recentLow = Math.min(...closes.slice(-5));
+                            const lowPctFromEma9 = ((recentLow - ema9) / ema9) * 100;
+
+                            if (lowPctFromEma9 < 0.1 && pricePctAboveEma9 > 0 && price > prevPrice) {
+                                // Price touched/crossed EMA9 and is now bouncing up
+                                pullbackAdj = 10; // Strong pullback bounce signal
+                            } else if (pricePctAboveEma9 < 0.3 && pricePctAboveEma9 > -0.2 && price > prevPrice) {
+                                // Price is near EMA9 and recovering
+                                pullbackAdj = 6; // Moderate pullback signal
+                            }
+                        } else if (!ema9AboveEma21 || pricePctAboveEma21 < -0.5) {
+                            // EMA9 below EMA21 or price below EMA21 — bearish, penalize
+                            pullbackAdj = -5;
+                        }
+                    } catch (e) { /* fail open */ }
+                }
+
                 // Adversarial brains consensus adjustment (from ML gatekeeper pipeline)
                 let adversarialAdj = 0;
                 if (pipelineResult?.adversarialConsensus) {
@@ -4950,12 +4990,12 @@ async function tradingBotLoop() {
 
                 // BTC correlation penalty for altcoins (BTC itself gets no penalty)
                 const btcCorrAdj = (ticker !== 'BTCUSD' && btcDownPenalty > 0) ? -btcDownPenalty : (ticker !== 'BTCUSD' ? -btcDownPenalty : 0);
-                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj + volumeBurstAdj + velocityAdj + regimeTransitionAdj + leadLagAdj + journalAdj + candlestickAdj + onChainAdj + macroCompositeAdj + scannerAdj + derivativesAdj + fearGreedAdj + sweepAdj + mtfConfidenceAdj + obAdj + vwapAdj + stochRSIAdj + deltaVolAdj + adversarialAdj + microBurstAdj + regimeBoostAdj + btcCorrAdj;
+                const adjustedComposite = score.compositeScore + htfAdj + fundingAdj + sentimentAdj + volumeBurstAdj + velocityAdj + regimeTransitionAdj + leadLagAdj + journalAdj + candlestickAdj + onChainAdj + macroCompositeAdj + scannerAdj + derivativesAdj + fearGreedAdj + sweepAdj + mtfConfidenceAdj + obAdj + vwapAdj + stochRSIAdj + deltaVolAdj + adversarialAdj + microBurstAdj + regimeBoostAdj + btcCorrAdj + pullbackAdj;
                 if (entryStrategy && adjustedComposite < optParams.compositeScoreFloor) {
                     logThought({
                         type: 'SKIP', ticker, action: 'LOW_COMPOSITE',
                         confidence: adjustedComposite,
-                        reason: `adjustedComposite ${adjustedComposite} (raw=${score.compositeScore}, htf=${htfAdj}, funding=${fundingAdj}, sent=${sentimentAdj}, candle=${candlestickAdj}, onchain=${onChainAdj}, deriv=${derivativesAdj}, fg=${fearGreedAdj}, sweep=${sweepAdj}, mtf=${mtfConfidenceAdj}, ob=${obAdj}) < ${optParams.compositeScoreFloor} floor`,
+                        reason: `adjustedComposite ${adjustedComposite} (raw=${score.compositeScore}, htf=${htfAdj}, funding=${fundingAdj}, sent=${sentimentAdj}, candle=${candlestickAdj}, onchain=${onChainAdj}, deriv=${derivativesAdj}, fg=${fearGreedAdj}, sweep=${sweepAdj}, mtf=${mtfConfidenceAdj}, ob=${obAdj}, pullback=${pullbackAdj}) < ${optParams.compositeScoreFloor} floor`,
                         regime: currentRegime,
                         indicators: { compositeScore: score.compositeScore, adjustedComposite, htfAdj, fundingAdj, sentimentAdj, candlestickAdj, onChainAdj, entryStrategy },
                     });
