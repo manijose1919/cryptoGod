@@ -2334,9 +2334,9 @@ async function handlePartialSell(position, price, fraction, reason) {
     position.quantity -= sellQty;
     portfolio.cash += (sellQty * avgPrice) - sellFee;
 
-    // Dust cleanup: if remaining position is too small to exit profitably, auto-liquidate
+    // Dust cleanup: if remaining position is zero or too small to exit profitably, auto-liquidate
     const remainingValue = position.quantity * (position.currentPrice || position.openPrice);
-    if (position.quantity > 0 && remainingValue < 2.0) {
+    if (position.quantity <= 0 || remainingValue < 2.0) {
         addLog(`[DUST] Auto-liquidating ${ticker} dust: ${position.quantity.toFixed(8)} ($${remainingValue.toFixed(2)})`, 'INFO');
         portfolio.cash += remainingValue * 0.95; // Assume some slippage on dust
         delete portfolio.positions[ticker];
@@ -2477,6 +2477,7 @@ async function checkTickExit(ticker, price) {
         if (price <= trailLevel) {
             const isRunner = position._stage1Done && position._stage2Done;
             exitReason = `[RT-TRAIL${isRunner ? '-RUNNER' : ''}] price ${price.toFixed(4)} <= trail ${trailLevel.toFixed(4)} (peak ${position.highestPrice.toFixed(4)})`;
+            isStopLoss = true; // Trailing stops must execute immediately — never block by profitability check
         }
     }
 
@@ -3506,12 +3507,12 @@ async function tradingBotLoop() {
                     }
                 }
 
-                // Regime transition cooldown: wait 3 minutes after regime change before new entries
-                // Applies to BOTH real and SIM — regime instability means bad entries
+                // Regime transition cooldown: wait 60s after global regime change before new entries
+                // Reduced from 3min — was blocking ALL tickers for too long on any regime shift
                 if (botState._regimeChangeTime) {
                     const sinceRegimeChange = Date.now() - botState._regimeChangeTime;
-                    if (sinceRegimeChange < 3 * 60 * 1000) {
-                        continue; // Skip all candidates during regime transition cooldown
+                    if (sinceRegimeChange < 60 * 1000) {
+                        continue;
                     }
                 }
 
@@ -5745,7 +5746,12 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 atrPct: entryMeta.atrPct ?? null,
             };
         }
-        portfolio.cash -= (actualCost + buyFee);
+        // Guard against cash going negative (slippage/fee can exceed original estimate)
+        if (actualCost + buyFee > portfolio.cash) {
+            addLog(`[BUY-GUARD] ${ticker}: cost $${(actualCost + buyFee).toFixed(2)} exceeds cash $${portfolio.cash.toFixed(2)} — capping`, 'WARN');
+            // Already bought on exchange — deduct what we have, don't go negative
+        }
+        portfolio.cash = Math.max(0, portfolio.cash - (actualCost + buyFee));
 
         // Emit EventBus entry event for Core V2 modules
         try {
@@ -5950,6 +5956,8 @@ const handleSell = async (position, price, reason) => {
     }
 
     // Cancel native exchange stop-loss before selling (prevent double-sell)
+    // Note: we keep the nativeStopOrders entry until sell succeeds, so if sell fails
+    // we still know the SL exists on the exchange
     const nativeSL = nativeStopOrders.get(position.ticker);
     if (nativeSL && botState.tradingMode !== 'SIMULATION') {
         try {
@@ -5959,7 +5967,7 @@ const handleSell = async (position, price, reason) => {
         } catch (cancelErr) {
             addLog(`[NATIVE-SL] Failed to cancel SL ${nativeSL.orderId}: ${cancelErr.message}`, 'WARN');
         }
-        nativeStopOrders.delete(position.ticker);
+        // Delete tracking only after sell attempt below — moved to post-sell success
     }
 
     try {
@@ -6038,6 +6046,8 @@ const handleSell = async (position, price, reason) => {
         portfolio.cash += (position.quantity * avgPrice) - sellFee;
         delete portfolio.positions[position.ticker];
         exitLevelCache.delete(position.ticker); // Clean RT exit cache
+        nativeStopOrders.delete(position.ticker); // Clean native SL tracking after confirmed sell
+        simNativeStopOrders.delete(position.ticker); // Clean SIM SL tracking
         // Clean up pyramid timer to prevent orphaned setTimeout
         if (tradingBotLoop._pyramidTimers?.has(position.ticker)) {
             clearTimeout(tradingBotLoop._pyramidTimers.get(position.ticker));

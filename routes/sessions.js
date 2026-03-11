@@ -73,6 +73,11 @@ export default function createSessionsRouter(ctx) {
                 ctx.portfolio.positions = {};
                 ctx.portfolio.holdings = {};
                 if (!ctx.portfolio.tradeLog) ctx.portfolio.tradeLog = [];
+            } else {
+                // REAL mode: clear any leftover SIM positions to prevent ghost trades
+                ctx.portfolio.positions = {};
+                ctx.portfolio.holdings = {};
+                ctx.portfolio.tradeLog = [];
             }
 
             ctx.botState.isActive = true;
