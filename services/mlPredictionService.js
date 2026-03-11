@@ -466,6 +466,11 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
     try {
       if (!featureSequenceBuffer.has(ticker)) {
         featureSequenceBuffer.set(ticker, []);
+        // Cap total tickers to prevent unbounded Map growth
+        if (featureSequenceBuffer.size > 30) {
+          const firstKey = featureSequenceBuffer.keys().next().value;
+          featureSequenceBuffer.delete(firstKey);
+        }
       }
       const buffer = featureSequenceBuffer.get(ticker);
       buffer.push(featureArray);

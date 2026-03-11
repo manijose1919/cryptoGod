@@ -173,7 +173,7 @@ export function shouldPauseTrading(tradingMode = 'REAL') {
   if (tradingMode === 'SIMULATION') {
     if (Date.now() < pausedUntil) {
       const SIM_COOLDOWN_MS = 15 * 60 * 1000; // 15 min (was 5 — too short, bot resumed losing immediately)
-      const pauseStartedAt = pausedUntil - (CIRCUIT_BREAKER_CONFIG.PAUSE_DURATION_MS * pauseCount || 3600000);
+      const pauseStartedAt = pausedUntil - (pauseCount > 0 ? CIRCUIT_BREAKER_CONFIG.PAUSE_DURATION_MS * pauseCount : CIRCUIT_BREAKER_CONFIG.PAUSE_DURATION_MS);
       const simPauseEnd = pauseStartedAt + SIM_COOLDOWN_MS;
       if (Date.now() < simPauseEnd) {
         const remaining = Math.ceil((simPauseEnd - Date.now()) / 60000);
@@ -276,7 +276,7 @@ export function calculateKellyFraction(minTrades = 50) {
   // Kelly formula: f* = (bp - q) / b
   // where b = avgWin/avgLoss, p = winRate, q = 1 - winRate
   const b = avgLoss > 0 ? avgWin / avgLoss : 1;
-  const kellyFull = Math.max(0, (b * winRate - (1 - winRate)) / b);
+  const kellyFull = b > 0 ? Math.max(0, (b * winRate - (1 - winRate)) / b) : 0;
   const kellyHalf = kellyFull / 2;
   const kellyQuarter = kellyFull / 4;
 
@@ -373,7 +373,7 @@ export function getStrategyKelly(strategy, portfolioValue) {
   const avgLoss = weightedLosses > 0 ? weightedLossPnl / weightedLosses : 1;
 
   const b = avgLoss > 0 ? avgWin / avgLoss : 1;
-  const kellyFull = Math.max(0, (b * winRate - (1 - winRate)) / b);
+  const kellyFull = b > 0 ? Math.max(0, (b * winRate - (1 - winRate)) / b) : 0;
   // Use half-Kelly for safety (full Kelly is too aggressive)
   const kellyHalf = kellyFull / 2;
   const recommended = Math.min(0.25, kellyHalf);

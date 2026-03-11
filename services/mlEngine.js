@@ -426,7 +426,9 @@ class GradientBoostedTrees {
     // Initial prediction (log odds)
     const positives = labels.reduce((sum, label, i) => sum + label * sampleWeights[i], 0);
     const totalWeight = sampleWeights.reduce((a, b) => a + b, 0);
-    const p = positives / totalWeight;
+    const p = totalWeight > 0
+      ? Math.max(1e-15, Math.min(1 - 1e-15, positives / totalWeight))
+      : 0.5;
     this.initialPrediction = Math.log(p / (1 - p));
 
     // Initialize predictions
@@ -1168,6 +1170,11 @@ class MLEngine {
           for (let j = 0; j < predictions.length; j++) {
             predictions[j] += gbt.learningRate * gbt._predictRegressionTree(rTree, scaledFeatures[j]);
           }
+        }
+
+        // Retire oldest trees if >200 (match RF cap)
+        while (gbt.trees.length > 200) {
+          gbt.trees.shift();
         }
       }
 
