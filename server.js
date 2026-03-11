@@ -50,10 +50,9 @@ import { checkProfitMethodExits, runProfitMethods, getProfitMethodsStatus, expor
 // Phase 2-5 Services
 // WebSocket services are accessed dynamically via getWebSocketService()
 import * as cryptoComWsService from './services/websocketService.js';
-import { analyzeMultiTimeframe, shouldEnterLong, getMultiTimeframeStatus } from './services/multiTimeframe.js';
+// multiTimeframe functions imported dynamically when needed
 import { recordTradeResult as cbRecordTrade, setDailyBalance, setCurrentBalance, setCurrentRegime as cbSetRegime, shouldPauseTrading, resetCircuitBreaker, fullResetCircuitBreaker, calculateKellyFraction, getKellyPositionSize, getStrategyKelly, getCircuitBreakerStatus, exportState as cbExportState, importState as cbImportState } from './services/circuitBreaker.js';
 import { recordStrategyResult, getStrategyWeight, adjustPositionSize, isStrategyThrottled, getAdaptiveWeightsStatus, fullResetWeights, exportState as awExportState, importState as awImportState } from './services/adaptiveWeights.js';
-import { calculateAllIndicators } from './services/advancedIndicators.js';
 import { runBacktest, getAvailableBacktestData, runMultiBacktest, runWalkForward, runParameterSweep } from './services/backtestEngine.js';
 import { getSocialSentimentScore, fetchFearGreedIndex, shouldTradeBasedOnSentiment, fetchCryptoNews, fetchCoinGeckoTrending, getTickerNewsSentiment, isTrendingCoin } from './services/socialSentiment.js';
 import { getPreTradeDecision, getPreTradeAIStatus } from './services/preTradeAI.js';
@@ -65,7 +64,7 @@ import { getMasterSurgeDecision, detectSurge, detectCandlestickPatterns } from '
 import { recordTradeForLearning, shouldTakeTradeAI, getAILearningStatus, restoreFromDatabase as restoreAILearning, getParameterAdjustments } from './services/aiLearningBackend.js';
 import { getOnChainSignals } from './services/onChainBackend.js';
 import { getLearnedState } from './services/historicalTrainingEngine.js';
-import { getTrainingRun, pingDatabase } from './services/database.js';
+import { pingDatabase } from './services/database.js';
 import { getAssetProfile, getStrategyAssetMatch, getBestStrategyForAsset, getPositionSizeForLiquidity, getRiskAdjustedParams } from './services/assetIntelligenceBackend.js';
 import * as CapitalTierManager from './services/capitalTierManager.js';
 import * as SessionManager from './services/sessionManager.js';
@@ -1311,7 +1310,8 @@ app.get('/api/backtest/monte-carlo', async (req, res) => {
         // Get trade history from session trades
         const sessionId = botState.sessionId;
         let tradeHistory = [];
-        if (sessionId && db.getSessionTrades) {
+        const db = getDb();
+        if (sessionId && db && db.getSessionTrades) {
             const trades = db.getSessionTrades(sessionId, 500);
             tradeHistory = trades
                 .filter(t => t.type === 'SELL' && t.pnl !== 0)
@@ -1418,7 +1418,8 @@ setInterval(() => {
 // Daily maintenance: vacuum old data, reanalyze indexes (Upgrade #17)
 setInterval(() => {
     try {
-        db.runMaintenance();
+        const mDb = getDb();
+        if (mDb && mDb.runMaintenance) mDb.runMaintenance();
         console.log('[Maintenance] Daily SQLite maintenance completed.');
     } catch (e) {
         console.error('[Maintenance] Error:', e.message);
@@ -1560,11 +1561,12 @@ const addLog = (message, type = 'INFO') => {
 // Timeout Utility (hang protection)
 // ============================================
 function withTimeout(promise, ms, label = 'operation') {
+    let timer;
     return Promise.race([
-        promise,
-        new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`Timeout: ${label} exceeded ${ms}ms`)), ms)
-        )
+        promise.then(v => { clearTimeout(timer); return v; }, e => { clearTimeout(timer); throw e; }),
+        new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`Timeout: ${label} exceeded ${ms}ms`)), ms);
+        })
     ]);
 }
 
@@ -2192,7 +2194,7 @@ function refreshExitLevels(marketDataMap) {
                 const slFmtT = simSL.stopPrice < 1 ? simSL.stopPrice.toPrecision(4) : simSL.stopPrice.toFixed(2);
                 const priceFmtT = currentPrice < 1 ? currentPrice.toPrecision(4) : currentPrice.toFixed(2);
                 addLog(`[SIM-SL] Stop-loss TRIGGERED for ${ticker}: price $${priceFmtT} <= SL $${slFmtT}`, 'WARN');
-                handleSell(position, currentPrice, `SIM_NATIVE_SL (hit $${slFmtT})`);
+                handleSell(position, currentPrice, `SIM_NATIVE_SL (hit $${slFmtT})`).catch(e => addLog(`[SIM-SL] handleSell error: ${e.message}`, 'ERROR'));
                 simNativeStopOrders.delete(ticker);
                 continue;
             }
@@ -2241,7 +2243,7 @@ function refreshExitLevels(marketDataMap) {
             // >5% drop in 5 min → emergency close (both SIM and REAL)
             if (dropPct <= -0.05) {
                 addLog(`[FLASH-CRASH-TICKER] ${ticker} dropped ${(dropPct * 100).toFixed(2)}% in ${((now - state.prices[0].ts) / 1000).toFixed(0)}s — EMERGENCY CLOSE`, 'WARN');
-                handleSell(position, currentPrice, `PER_TICKER_FLASH_CRASH (${(dropPct * 100).toFixed(1)}% drop)`);
+                handleSell(position, currentPrice, `PER_TICKER_FLASH_CRASH (${(dropPct * 100).toFixed(1)}% drop)`).catch(e => addLog(`[FLASH-CRASH] handleSell error: ${e.message}`, 'ERROR'));
                 perTickerFlashCrash.delete(ticker);
                 continue;
             }

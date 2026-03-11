@@ -79,33 +79,36 @@ export default function createEngineRouter(ctx) {
    * POST /api/engines/:exchange/pause
    */
   router.post('/engines/:exchange/pause', async (req, res) => {
-    const engine = getEngine(ctx, req.params.exchange);
-    if (!engine) return res.status(404).json({ error: 'Engine not found' });
-
-    await engine.pause();
-    res.json({ success: true, status: engine.getStatus() });
+    try {
+      const engine = getEngine(ctx, req.params.exchange);
+      if (!engine) return res.status(404).json({ error: 'Engine not found' });
+      await engine.pause();
+      res.json({ success: true, status: engine.getStatus() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   /**
    * POST /api/engines/:exchange/resume
    */
   router.post('/engines/:exchange/resume', async (req, res) => {
-    const engine = getEngine(ctx, req.params.exchange);
-    if (!engine) return res.status(404).json({ error: 'Engine not found' });
-
-    await engine.resume();
-    res.json({ success: true, status: engine.getStatus() });
+    try {
+      const engine = getEngine(ctx, req.params.exchange);
+      if (!engine) return res.status(404).json({ error: 'Engine not found' });
+      await engine.resume();
+      res.json({ success: true, status: engine.getStatus() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   /**
    * POST /api/engines/:exchange/stop
    */
   router.post('/engines/:exchange/stop', async (req, res) => {
-    const engine = getEngine(ctx, req.params.exchange);
-    if (!engine) return res.status(404).json({ error: 'Engine not found' });
-
-    await engine.stop();
-    res.json({ success: true, status: engine.getStatus() });
+    try {
+      const engine = getEngine(ctx, req.params.exchange);
+      if (!engine) return res.status(404).json({ error: 'Engine not found' });
+      await engine.stop();
+      res.json({ success: true, status: engine.getStatus() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   /**
