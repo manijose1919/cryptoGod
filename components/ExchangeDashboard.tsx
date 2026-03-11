@@ -254,6 +254,80 @@ export function ExchangeDashboard({ exchange }: Props) {
         </div>
       )}
 
+      {/* Trade Stats Summary */}
+      {(status?.tradeStats?.total ?? 0) > 0 && (
+        <div className="ed-trade-stats">
+          <div className="section-header" style={{ marginBottom: '8px' }}>
+            <span>Trade Performance</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+            <div className="ed-stat">
+              <span className="ed-stat-label">Total Trades</span>
+              <span className="ed-stat-value" style={{ fontSize: '16px' }}>{status.tradeStats.total}</span>
+            </div>
+            <div className="ed-stat">
+              <span className="ed-stat-label">Wins / Losses</span>
+              <span className="ed-stat-value" style={{ fontSize: '16px' }}>
+                <span style={{ color: 'var(--green)' }}>{status.tradeStats.wins}</span>
+                {' / '}
+                <span style={{ color: 'var(--red)' }}>{status.tradeStats.losses}</span>
+              </span>
+            </div>
+            <div className="ed-stat">
+              <span className="ed-stat-label">Win Rate</span>
+              <span className={`ed-stat-value ${winRate >= 50 ? 'positive' : 'negative'}`} style={{ fontSize: '16px' }}>
+                {winRate.toFixed(1)}%
+              </span>
+            </div>
+            <div className="ed-stat">
+              <span className="ed-stat-label">Avg P&L</span>
+              <span className={`ed-stat-value ${(status.tradeStats.avgPnl ?? 0) >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '16px' }}>
+                {(status.tradeStats.avgPnl ?? 0) >= 0 ? '+' : ''}{(status.tradeStats.avgPnl ?? 0).toFixed(2)}%
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recent Trades */}
+      {(status?.recentTrades?.length ?? 0) > 0 && (
+        <div className="ed-recent-trades" style={{ marginTop: '12px' }}>
+          <div className="section-header" style={{ marginBottom: '8px' }}>
+            <span>Recent Trades (last {Math.min(status.recentTrades.length, 10)})</span>
+          </div>
+          <table className="trade-table" style={{ width: '100%', fontSize: '12px' }}>
+            <thead>
+              <tr>
+                <th>Ticker</th>
+                <th>Strategy</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>P&L</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody>
+              {status.recentTrades.slice(-10).reverse().map((t: any, i: number) => {
+                const tPnl = t.pnl ?? t.pnlPct ?? 0;
+                const dur = t.holdTime ? `${Math.floor(t.holdTime / 3600000)}h ${Math.floor((t.holdTime % 3600000) / 60000)}m` : '—';
+                return (
+                  <tr key={i}>
+                    <td style={{ fontWeight: 600 }}>{(t.ticker || '').replace('USD', '')}</td>
+                    <td><span className="badge badge-blue" style={{ fontSize: '10px' }}>{t.strategy || t.entryStrategy || '—'}</span></td>
+                    <td>${(t.entryPrice ?? t.openPrice ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td>${(t.exitPrice ?? t.closePrice ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td style={{ color: tPnl >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                      {tPnl >= 0 ? '+' : ''}{tPnl.toFixed(2)}%
+                    </td>
+                    <td style={{ color: 'var(--text-muted)' }}>{dur}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {error && (
         <div className="ed-error">
           Failed to connect to {displayName}: {(error as Error).message}
