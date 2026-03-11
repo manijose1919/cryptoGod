@@ -183,6 +183,15 @@ export function getMarketRegime(candles, ticker = '') {
       slopeAccel: slopeAccel.toFixed(4),
     });
 
+    // Cap cache size to prevent unbounded growth from unique tickers
+    if (regimeCache.size > 50) {
+      const oldest = [...regimeCache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
+      for (let i = 0; i < oldest.length - 50; i++) {
+        regimeCache.delete(oldest[i][0]);
+        regimeHistory.delete(oldest[i][0]);
+      }
+    }
+
     // Maintain regime history for transition detection
     const history = regimeHistory.get(ticker) || [];
     if (history.length === 0 || history[history.length - 1].regime !== regime) {

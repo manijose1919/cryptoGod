@@ -98,10 +98,14 @@ function ensureTables() {
       tablesInitialized = true;
     } catch (e) {
       // Tables may already exist from database.js init — suppress duplicate column warnings
-      if (!e.message?.includes('already exists') && !e.message?.includes('no such column')) {
+      const isSchemaError = e.message?.includes('already exists') || e.message?.includes('no such column');
+      if (!isSchemaError) {
         console.warn('[Training Routes] Table init warning:', e.message);
       }
-      tablesInitialized = true; // Don't retry on known schema differences
+      // Only mark as initialized for schema errors (expected); transient errors should retry
+      if (isSchemaError) {
+        tablesInitialized = true;
+      }
     }
   }
 }

@@ -1085,8 +1085,9 @@ function calculateADX(candles, period = 14) {
   const plusDI = calculateSMA(dms.map(d => d.plus), period) / atr * 100;
   const minusDI = calculateSMA(dms.map(d => d.minus), period) / atr * 100;
 
-  const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100;
-  return dx || 0;
+  const diSum = plusDI + minusDI;
+  const dx = diSum > 0 ? Math.abs(plusDI - minusDI) / diSum * 100 : 0;
+  return dx;
 }
 
 function calculateOBV(candles) {
