@@ -69,7 +69,7 @@ class TFEngine {
     this.isTFTTrained = false;
     this.lstmMetrics = {};
     this.tftMetrics = {};
-    this.featureCount = 103;
+    this.featureCount = 109;
     this.sequenceLength = 30;
   }
 

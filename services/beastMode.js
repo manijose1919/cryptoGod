@@ -84,6 +84,7 @@ function calcRSI(closes, period = 14) {
 function calcATR(candles, period = 14) {
   if (candles.length < period + 1) {
     // Fallback: use average high-low range
+    if (candles.length === 0) return 0;
     const ranges = candles.map(c => c.h - c.l);
     return ranges.reduce((s, r) => s + r, 0) / ranges.length;
   }
@@ -133,10 +134,10 @@ export function getMarketRegime(candles, ticker = '') {
   const ema30 = calcEMA(closes, 30);
   const rsi = calcRSI(closes, 14);
 
-  const ema10Now = ema10[ema10.length - 1];
-  const ema30Now = ema30[ema30.length - 1];
-  const ema10Prev = ema10[ema10.length - 6]; // 5 candles ago
-  const ema30Prev = ema30[ema30.length - 6];
+  const ema10Now = ema10[ema10.length - 1] ?? 0;
+  const ema30Now = ema30[ema30.length - 1] ?? 0;
+  const ema10Prev = ema10[Math.max(0, ema10.length - 6)] ?? ema10Now;
+  const ema30Prev = ema30[Math.max(0, ema30.length - 6)] ?? ema30Now;
 
   // EMA slope: is ema10 rising/falling relative to ema30?
   const ema10Slope = ema10Prev !== 0 ? (ema10Now - ema10Prev) / ema10Prev * 100 : 0;
