@@ -81,21 +81,27 @@ export default function RegimeDashboard() {
       </div>
 
       {/* Derivatives summary */}
-      {derivs && Object.keys(derivs).length > 0 && (
-        <div className="mt-3 pt-3 border-t border-slate-700/50">
-          <span className="text-xs text-slate-400">Derivatives Signals</span>
-          <div className="flex flex-wrap gap-2 mt-1">
-            {Object.entries(derivs).map(([ticker, data]: [string, any]) => (
-              <span key={ticker} className={`badge text-xs ${
-                data?.signal === 'BULLISH' ? 'badge-green' :
-                data?.signal === 'BEARISH' ? 'badge-red' : 'badge-blue'
-              }`}>
-                {ticker.replace('USD', '')}: {data?.signal || 'N/A'}
-              </span>
-            ))}
+      {derivs && (() => {
+        // Filter out non-ticker metadata keys (e.g. "ticker", "error", "enabled")
+        const tickerEntries = Object.entries(derivs).filter(
+          ([key, val]) => val && typeof val === 'object' && 'signal' in (val as Record<string, unknown>)
+        );
+        return tickerEntries.length > 0 ? (
+          <div className="mt-3 pt-3 border-t border-slate-700/50">
+            <span className="text-xs text-slate-400">Derivatives Signals</span>
+            <div className="flex flex-wrap gap-2 mt-1">
+              {tickerEntries.map(([ticker, data]: [string, any]) => (
+                <span key={ticker} className={`badge text-xs ${
+                  data?.signal === 'BULLISH' ? 'badge-green' :
+                  data?.signal === 'BEARISH' ? 'badge-red' : 'badge-blue'
+                }`}>
+                  {ticker.replace('USD', '')}: {data?.signal || 'N/A'}
+                </span>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        ) : null;
+      })()}
 
       {lastUpdated && (
         <div className="text-[10px] text-slate-500 mt-2 text-right">

@@ -140,9 +140,9 @@ export default function TradingIntelligencePanel() {
           {data.abTest && (
             <>
               <Row label="Champion" value={data.abTest.champion?.name || 'N/A'} />
-              <Row label="Champion Acc." value={`${((data.abTest.champion?.accuracy || 0) * 100).toFixed(1)}%`} color="var(--green)" />
+              <Row label="Champion Acc." value={`${(Number.isFinite(data.abTest.champion?.accuracy) ? (data.abTest.champion.accuracy * 100).toFixed(1) : '0.0')}%`} color="var(--green)" />
               <Row label="Challenger" value={data.abTest.challenger?.name || 'N/A'} />
-              <Row label="Challenger Acc." value={`${((data.abTest.challenger?.accuracy || 0) * 100).toFixed(1)}%`} />
+              <Row label="Challenger Acc." value={`${(Number.isFinite(data.abTest.challenger?.accuracy) ? (data.abTest.challenger.accuracy * 100).toFixed(1) : '0.0')}%`} />
               <Row label="Samples" value={`${data.abTest.challenger?.sampleCount || 0}`} />
             </>
           )}
