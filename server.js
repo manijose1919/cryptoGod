@@ -3746,8 +3746,7 @@ async function tradingBotLoop() {
                             const blended = existing !== 0 ? (existing * 0.4 + redditYtScore * 0.6) : redditYtScore;
                             return { ticker, sentiment: blended };
                         })
-                    );
-                      ]),
+                      ),
                       new Promise(resolve => setTimeout(() => resolve([]), remainingMs))
                     ]);
                     for (const r of (Array.isArray(sentimentResults) ? sentimentResults : [])) {
