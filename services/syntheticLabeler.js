@@ -247,6 +247,7 @@ async function processTickerCandles(adapter, ticker, timeframes, maxCandles, hor
         if (!lookAhead || idx + lookAhead >= candles.length) continue;
 
         const futureClose = candles[idx + lookAhead].c;
+        if (currentClose <= 0) continue;
         const priceChange = (futureClose - currentClose) / currentClose;
         const label = priceChange > BREAK_EVEN_THRESHOLD ? 'UP' : 'DOWN';
         const labelValue = priceChange * 100; // As percentage

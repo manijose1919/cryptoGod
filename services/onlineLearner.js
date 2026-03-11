@@ -111,7 +111,7 @@ class ThompsonSampler {
   _sampleBeta(alpha, beta) {
     const x = this._sampleGamma(alpha);
     const y = this._sampleGamma(beta);
-    return x / (x + y || 1);
+    return (x + y) > 0 ? x / (x + y) : 0.5;
   }
 
   /**

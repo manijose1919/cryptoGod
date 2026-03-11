@@ -166,6 +166,15 @@ export function detectNewListings(currentTickers) {
  * Returns signal data object with shouldExitRugPull flag.
  */
 export function updateNewCoinSignals(ticker, price, volume, spread) {
+  // Periodic cleanup: prune listings older than 30 days every 100 calls
+  if (!updateNewCoinSignals._callCount) updateNewCoinSignals._callCount = 0;
+  if (++updateNewCoinSignals._callCount % 100 === 0) {
+    const now = Date.now();
+    for (const [t, l] of newListings.entries()) {
+      if (now - l.firstSeen > MAX_LISTING_AGE_MS) newListings.delete(t);
+    }
+  }
+
   const listing = newListings.get(ticker);
   if (!listing) {
     return { isNewListing: false, rugPullScore: 0, signals: [], shouldExitRugPull: false };
