@@ -849,7 +849,7 @@ export function getBeastModeStatus() {
     },
     regimes,
     recentTrades: streakState.recentTrades.slice(-10).map(t => ({
-      pnl: t.pnl.toFixed(4),
+      pnl: (typeof t.pnl === 'number' ? t.pnl : 0).toFixed(4),
       ticker: t.ticker,
       strategy: t.strategy,
       ageSeconds: Math.round((Date.now() - t.time) / 1000),
