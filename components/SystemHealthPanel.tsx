@@ -36,10 +36,8 @@ const SERVICE_DISPLAY_NAMES: Record<string, string> = {
   beast_mode: 'Beast Mode',
   websocket: 'WebSocket Feed',
   database: 'Database',
-  binance_ws: 'Binance WS',
-  rl_agent: 'RL Agent',
-  sequence_model: 'Sequence Model',
   signal_scanner: 'Signal Scanner',
+  ml_pipeline: 'ML Pipeline',
   multi_exchange: 'Multi-Exchange',
 };
 
@@ -187,7 +185,9 @@ export const SystemHealthPanel: React.FC = () => {
         const hData = await healthRes.value.json();
         setHealth({
           status: hData.status || 'unknown',
-          uptime: hData.uptime ?? hData.uptimeSeconds ?? 0,
+          uptime: typeof hData.uptimeSeconds === 'number' ? hData.uptimeSeconds
+                : typeof hData.uptime === 'number' ? hData.uptime
+                : parseFloat(hData.uptimeSeconds) || parseFloat(hData.uptime) || 0,
           version: hData.version,
           timestamp: hData.timestamp ?? Date.now(),
         });
@@ -219,7 +219,7 @@ export const SystemHealthPanel: React.FC = () => {
             : [];
 
         // Ensure expected services are in the list
-        const expectedServices = ['trading_engine', 'circuit_breaker', 'beast_mode', 'websocket', 'database', 'binance_ws', 'rl_agent', 'sequence_model'];
+        const expectedServices = ['trading_engine', 'circuit_breaker', 'beast_mode', 'websocket', 'database', 'signal_scanner', 'ml_pipeline', 'multi_exchange'];
         for (const svcName of expectedServices) {
           if (!serviceList.find(s => s.name === svcName)) {
             serviceList.push({
