@@ -59,8 +59,8 @@ export default function createSessionsRouter(ctx) {
                 return res.status(400).json({ error: 'A session is already active. Stop it first.' });
             }
 
-            if (mode === 'REAL' && !ctx.botState.sessionId) {
-                return res.status(400).json({ error: 'Real trading requires API authentication. Call /api/login first.' });
+            if (mode === 'REAL' && !process.env.KRAKEN_API_KEY && !process.env.KRAKEN_SECRET) {
+                return res.status(400).json({ error: 'Real trading requires exchange API keys configured in .env' });
             }
 
             const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -183,7 +183,10 @@ export default function createSessionsRouter(ctx) {
                 const currentPrice = ctx.getLatestPrice(ticker) || position.openPrice;
                 try {
                     await ctx.handleSell(position, currentPrice, 'SESSION_STOP: Closing all positions');
-                    closedPositions.push({ ticker, price: currentPrice, pnl: (currentPrice - position.openPrice) * position.quantity });
+                    const fees = ctx.getActiveFees?.() || { perSide: 0.0026 };
+                    const grossPnl = (currentPrice - position.openPrice) * position.quantity;
+                    const roundTripFee = (position.openPrice + currentPrice) * position.quantity * fees.perSide;
+                    closedPositions.push({ ticker, price: currentPrice, pnl: grossPnl - roundTripFee });
                 } catch (e) {
                     ctx.addLog(`Failed to close ${ticker}: ${e.message}`, 'ERROR');
                 }
@@ -206,7 +209,7 @@ export default function createSessionsRouter(ctx) {
                 initialBudget: ctx.portfolio.initialBudget,
                 totalPnl: ctx.portfolio.cash - ctx.portfolio.initialBudget,
                 pnlPercent: ctx.portfolio.initialBudget > 0
-                    ? ((ctx.portfolio.cash - ctx.portfolio.initialBudget) / ctx.portfolio.initialBudget * 100).toFixed(2)
+                    ? parseFloat(((ctx.portfolio.cash - ctx.portfolio.initialBudget) / ctx.portfolio.initialBudget * 100).toFixed(2))
                     : 0,
                 tradeStats: stats,
                 equityCurveLength: equityCurve.length,

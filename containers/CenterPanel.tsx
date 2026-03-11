@@ -104,7 +104,7 @@ export function CenterPanel({ handleRunMonteCarlo }: CenterPanelProps) {
                 <AssetIntelligencePanel
                     profile={currentAssetProfile}
                     sentiment={currentSentiment}
-                    ranking={assetRanking.slice(0, 5)}
+                    ranking={(assetRanking || []).slice(0, 5)}
                 />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
