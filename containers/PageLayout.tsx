@@ -3,6 +3,7 @@
  * Provides consistent nav + back-to-dashboard link for /performance, /risk, etc.
  */
 import React from 'react';
+import { Link, useLocation } from 'react-router-dom';
 
 const NAV_LINKS = [
   { href: '/', label: 'Dashboard' },
@@ -15,6 +16,8 @@ const NAV_LINKS = [
 ];
 
 export function PageLayout({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
+
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
       <nav style={{
@@ -25,9 +28,9 @@ export function PageLayout({ children }: { children: React.ReactNode }) {
         fontSize: '11px',
       }}>
         {NAV_LINKS.map(link => {
-          const isActive = window.location.pathname === link.href;
+          const isActive = location.pathname === link.href;
           return (
-            <a key={link.href} href={link.href} style={{
+            <Link key={link.href} to={link.href} style={{
               padding: '4px 10px',
               borderRadius: '6px',
               textDecoration: 'none',
@@ -37,7 +40,7 @@ export function PageLayout({ children }: { children: React.ReactNode }) {
               transition: 'background 0.15s',
             }}>
               {link.label}
-            </a>
+            </Link>
           );
         })}
       </nav>

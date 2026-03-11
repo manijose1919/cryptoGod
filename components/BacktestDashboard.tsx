@@ -11,11 +11,11 @@ import {
 
 const NAV_LINKS = [
   { to: '/', label: 'Crypto' },
-  { to: '/stocks', label: 'Stocks' },
   { to: '/performance', label: 'Performance' },
   { to: '/backtest', label: 'Backtest' },
   { to: '/replay', label: 'Replay' },
   { to: '/training', label: 'Training' },
+  { to: '/system', label: 'System' },
 ];
 
 const STRATEGIES = ['TREND', 'BREAKOUT', 'MOMENTUM', 'SWING', 'WHALE', 'CONFLUENCE', 'DIVERGENCE', 'ADAPTIVE', 'MA_CROSSOVER', 'MEAN_REVERSION', 'REVERSAL', 'RANGE'];

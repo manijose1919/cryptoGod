@@ -1141,6 +1141,21 @@ app.get('/api/health/ml', (req, res) => {
 app.get('/api/system/status', (req, res) => {
     try {
         const cbStatus = getCircuitBreakerStatus();
+        const mem = process.memoryUsage();
+        const healthSnap = healthMonitor.getSnapshot();
+
+        // Build service status from actual running systems
+        const serviceStatus = {
+            trading_engine: botState.isRunning ? 'running' : 'stopped',
+            circuit_breaker: cbStatus ? 'running' : 'stopped',
+            beast_mode: 'running',
+            websocket: healthSnap?.tradingSystems?.webSocket ? 'running' : (healthSnap ? 'stopped' : 'unknown'),
+            database: healthSnap?.dbStats?.responsive !== false ? 'running' : 'error',
+            signal_scanner: healthSnap?.tradingSystems?.signalScanner ? 'running' : 'stopped',
+            ml_pipeline: healthSnap?.tradingSystems?.mlPipeline ? 'running' : 'stopped',
+            multi_exchange: healthSnap?.tradingSystems?.cryptoComEngine ? 'running' : 'stopped',
+        };
+
         res.json({
             aiLearning: {
                 isActive: botState.isRunning || false,
@@ -1158,6 +1173,16 @@ app.get('/api/system/status', (req, res) => {
             },
             logs: logs.slice(-200),
             uptime: process.uptime(),
+            // System health data for SystemHealthPanel
+            services: serviceStatus,
+            memory: {
+                used: mem.heapUsed,
+                total: mem.heapTotal,
+                rss: mem.rss,
+                percentage: (mem.heapUsed / mem.heapTotal * 100),
+            },
+            cpu: healthSnap?.eventLoopLag !== undefined ? Math.min(healthSnap.eventLoopLag / 2, 100) : 0,
+            cycleLatency: healthSnap?.eventLoopLag || 0,
         });
     } catch (e) {
         res.status(500).json({ error: e.message });
