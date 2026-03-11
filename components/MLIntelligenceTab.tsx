@@ -41,7 +41,10 @@ export default function MLIntelligenceTab() {
     const load = () => {
       fetch('/api/ml/pipeline-status').then(r => r.ok ? r.json() : null).then(d => d && setPipeline(d)).catch(() => {});
       fetch('/api/ml/status').then(r => r.ok ? r.json() : null).then(d => {
-        if (d?.modelHistory) setModels(d.modelHistory.map((m: any) => ({ id: m.id || 0, modelType: m.type, accuracy: m.accuracy, sampleCount: m.samples, trainedAt: m.date })));
+        if (d?.modelHistory) setModels(d.modelHistory.map((m: any, idx: number) => {
+          const rawAcc = Number(m.accuracy) || 0;
+          return { id: m.id || idx + 1, modelType: m.type, accuracy: rawAcc <= 1 ? rawAcc * 100 : rawAcc, sampleCount: m.samples, trainedAt: m.date };
+        }));
       }).catch(() => {});
       fetch('/api/ml/feature-importance').then(r => r.ok ? r.json() : []).then(d => Array.isArray(d) && setFeatures(d)).catch(() => {});
       fetch('/api/ml/thoughts?limit=20').then(r => r.ok ? r.json() : []).then(d => Array.isArray(d) && setThoughts(d)).catch(() => {});
@@ -64,14 +67,14 @@ export default function MLIntelligenceTab() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '16px' }}>
         <StatusCard title="ENSEMBLE (RF+GBT+LR)" status={pipeline?.mlEngine?.isTrained ? 'TRAINED' : 'UNTRAINED'}
           color={pipeline?.mlEngine?.isTrained ? 'var(--green)' : 'var(--red)'}>
-          <div>Accuracy: {(pipeline?.mlEngine?.accuracy || 0).toFixed(1)}%</div>
+          <div>Accuracy: {(() => { const a = pipeline?.mlEngine?.accuracy || 0; return (a <= 1 ? a * 100 : a).toFixed(1); })()}%</div>
           <div>Samples: {pipeline?.mlEngine?.sampleCount || 0}</div>
           <div>Type: {pipeline?.mlEngine?.modelType || 'N/A'}</div>
         </StatusCard>
 
         <StatusCard title="TF.js LSTM" status={pipeline?.tfEngine?.status || 'IDLE'}
           color={pipeline?.tfEngine?.status === 'ready' ? 'var(--green)' : 'var(--text-muted)'}>
-          <div>Accuracy: {(pipeline?.tfEngine?.accuracy || 0).toFixed(1)}%</div>
+          <div>Accuracy: {(() => { const a = pipeline?.tfEngine?.accuracy || 0; return (a <= 1 ? a * 100 : a).toFixed(1); })()}%</div>
           <div>Epochs: {pipeline?.tfEngine?.epochs || 0}</div>
         </StatusCard>
 
