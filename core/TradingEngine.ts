@@ -704,13 +704,16 @@ export class TradingEngine {
       peakEquity: this.peakEquity,
       drawdownPct: ((this.peakEquity - equity) / this.peakEquity) * 100,
       recentTrades: this.trades.slice(-50), // Last 50 trades (raw data)
-      // Trade stats summary for portfolioManager consumption
+      // Trade stats summary for portfolioManager and frontend consumption
       tradeStats: {
         total: this.trades.length,
         wins: this.trades.filter(t => t.pnl > 0).length,
         losses: this.trades.filter(t => t.pnl < 0).length,
         winRate: this.trades.length > 0
           ? (this.trades.filter(t => t.pnl > 0).length / this.trades.length) * 100
+          : 0,
+        avgPnl: this.trades.length > 0
+          ? this.trades.reduce((s, t) => s + t.pnl, 0) / this.trades.length
           : 0,
       },
       uptime: this.sessionStartTime ? Date.now() - this.sessionStartTime : 0,
