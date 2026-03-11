@@ -655,7 +655,7 @@ export class TradingEngine {
     let equity = this.portfolio.cash;
     for (const pos of Object.values(this.portfolio.positions)) {
       // Use last known market price if available, otherwise fall back to entry price
-      const price = this.lastKnownPrices[pos.ticker] || pos.highestPrice || pos.openPrice;
+      const price = this.lastKnownPrices[pos.ticker] ?? pos.highestPrice ?? pos.openPrice;
       equity += price * pos.quantity;
     }
     return equity;
@@ -694,7 +694,7 @@ export class TradingEngine {
       cash: this.portfolio.cash,
       initialBudget: this.portfolio.initialBudget,
       pnlUsd: equity - this.portfolio.initialBudget,
-      pnlPct: ((equity - this.portfolio.initialBudget) / this.portfolio.initialBudget) * 100,
+      pnlPct: this.portfolio.initialBudget > 0 ? ((equity - this.portfolio.initialBudget) / this.portfolio.initialBudget) * 100 : 0,
       positions: posCount,
       positionDetails: this.portfolio.positions,
       tickCount: this.tickCount,

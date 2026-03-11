@@ -196,9 +196,11 @@ export function evaluateEntry(ticker, proposedSize, openPositions, portfolioValu
     const allValues = { ...positionValues, [ticker]: proposedSize };
     const totalVal = Object.values(allValues).reduce((a, b) => a + b, 0);
     let hhi = 0;
-    for (const val of Object.values(allValues)) {
-      const share = val / totalVal;
-      hhi += share * share;
+    if (totalVal > 0) {
+      for (const val of Object.values(allValues)) {
+        const share = val / totalVal;
+        hhi += share * share;
+      }
     }
 
     // 5. Determine size multiplier

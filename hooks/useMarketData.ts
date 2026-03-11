@@ -70,10 +70,10 @@ export function useMarketData() {
                     return;
                 }
 
-                const channel = message.result?.channel || '';
+                const channel = message.result?.channel ?? '';
                 if (message.method === 'subscribe' && (channel.startsWith('candlestick') || channel === 'kline')) {
-                    const instrument = message.result.instrument_name;
-                    const candleData = message.result.data?.[0];
+                    const instrument = message.result?.instrument_name;
+                    const candleData = message.result?.data?.[0];
                     if (!candleData || !instrument) return;
 
                     const symbol = instrument.replace('_', '');

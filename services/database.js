@@ -679,9 +679,9 @@ export function getTrades({ limit = 500, offset = 0, strategy = null } = {}) {
 
 export function getTradeCount(strategy = null) {
   if (strategy) {
-    return getDb().prepare('SELECT COUNT(*) as count FROM trades WHERE strategy = ?').get(strategy).count;
+    return getDb().prepare('SELECT COUNT(*) as count FROM trades WHERE strategy = ?').get(strategy)?.count ?? 0;
   }
-  return getDb().prepare('SELECT COUNT(*) as count FROM trades').get().count;
+  return getDb().prepare('SELECT COUNT(*) as count FROM trades').get()?.count ?? 0;
 }
 
 // --- Trade Memory (AI Learning) ---
@@ -1467,7 +1467,7 @@ export function getHistoricalCandles(ticker, timeframe, startTime, endTime, limi
 export function getHistoricalCandleCount(ticker, timeframe) {
   return getDb().prepare(
     'SELECT COUNT(*) as count FROM historical_candles WHERE ticker = ? AND timeframe = ?'
-  ).get(ticker, timeframe).count;
+  ).get(ticker, timeframe)?.count ?? 0;
 }
 
 export function getHistoricalCandleRange(ticker, timeframe) {
@@ -1496,7 +1496,7 @@ export function getFearGreedForDate(dateStr) {
 }
 
 export function getFearGreedCount() {
-  return getDb().prepare('SELECT COUNT(*) as count FROM historical_fear_greed').get().count;
+  return getDb().prepare('SELECT COUNT(*) as count FROM historical_fear_greed').get()?.count ?? 0;
 }
 
 // --- Historical DeFi TVL ---
@@ -1518,7 +1518,7 @@ export function getDefiTvlForDate(dateStr) {
 }
 
 export function getDefiTvlCount() {
-  return getDb().prepare('SELECT COUNT(*) as count FROM historical_defi_tvl').get().count;
+  return getDb().prepare('SELECT COUNT(*) as count FROM historical_defi_tvl').get()?.count ?? 0;
 }
 
 // --- Download Progress ---
@@ -1685,7 +1685,7 @@ export function getTrainingMLSamples(runId, limit = 5000) {
 export function getTrainingMLSampleCount(runId) {
   return getDb().prepare(
     'SELECT COUNT(*) as count FROM training_ml_samples WHERE run_id = ?'
-  ).get(runId).count;
+  ).get(runId)?.count ?? 0;
 }
 
 // ============================================

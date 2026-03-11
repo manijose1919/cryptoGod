@@ -546,6 +546,7 @@ const microBurstDetector = (() => {
         const latest = buf.snapshots[buf.snapshots.length - 1];
         // Average of previous snapshots (excluding latest)
         const prevSnapshots = buf.snapshots.slice(0, -1);
+        if (prevSnapshots.length === 0) return { burst: false, ratio: 0 };
         const avgVol = prevSnapshots.reduce((s, snap) => s + snap.vol, 0) / prevSnapshots.length;
         if (avgVol <= 0) return { burst: false, ratio: 0 };
 
