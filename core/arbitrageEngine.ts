@@ -143,7 +143,7 @@ class ArbitrageEngine {
               sellPrice: cryptoComPrice.bid,
               spreadPct: spread1 * 100,
               estimatedProfitPct: profitPct * 100,
-              estimatedProfitUsd: profitPct * this.minTradeUsd,
+              estimatedProfitUsd: profitPct * this.simTradeSize,
               timestamp: Date.now(),
             });
           }
@@ -160,7 +160,7 @@ class ArbitrageEngine {
               sellPrice: krakenPrice.bid,
               spreadPct: spread2 * 100,
               estimatedProfitPct: profitPct * 100,
-              estimatedProfitUsd: profitPct * this.minTradeUsd,
+              estimatedProfitUsd: profitPct * this.simTradeSize,
               timestamp: Date.now(),
             });
           }
@@ -247,13 +247,13 @@ class ArbitrageEngine {
     const buyAdapter = this.adapters.get(opp.buyExchange) as Record<string, unknown> | undefined;
     const sellAdapter = this.adapters.get(opp.sellExchange) as Record<string, unknown> | undefined;
 
-    if (buyAdapter && sellAdapter && typeof buyAdapter.placeBuy === 'function' && typeof sellAdapter.placeSell === 'function') {
+    if (buyAdapter && sellAdapter && typeof buyAdapter.placeBuyOrder === 'function' && typeof sellAdapter.placeSellOrder === 'function') {
       try {
         // Simultaneous buy+sell for true arb
         const qty = tradeSize / opp.buyPrice;
         const [buyResult, sellResult] = await Promise.all([
-          (buyAdapter.placeBuy as (t: string, q: number, p: number) => Promise<unknown>)(opp.ticker, qty, opp.buyPrice),
-          (sellAdapter.placeSell as (t: string, q: number, p: number) => Promise<unknown>)(opp.ticker, qty, opp.sellPrice),
+          (buyAdapter.placeBuyOrder as (t: string, n: number, s?: string) => Promise<unknown>)(opp.ticker, tradeSize),
+          (sellAdapter.placeSellOrder as (t: string, q: number, s?: string) => Promise<unknown>)(opp.ticker, qty),
         ]);
         if (buyResult && sellResult) {
           realExecution = true;
@@ -275,6 +275,10 @@ class ArbitrageEngine {
       simulated: !realExecution,
     });
     this.totalArbProfitUsd += profitUsd;
+    // Cap executedArbs to prevent unbounded memory growth
+    if (this.executedArbs.length > 1000) {
+      this.executedArbs = this.executedArbs.slice(-1000);
+    }
 
     if (!realExecution) {
       console.log(`[ArbitrageEngine] SIM ARB: ${opp.ticker} spread=${opp.spreadPct.toFixed(3)}% profit=$${profitUsd.toFixed(2)} (total: $${this.totalArbProfitUsd.toFixed(2)})`);
