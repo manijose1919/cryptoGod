@@ -132,7 +132,7 @@ export function PortfolioOverview() {
             active={!!staking?.enabled}
             detail={staking?.products !== undefined ? `${staking.products} products` : undefined} />
           <RevenueCard title="ARBITRAGE" icon="ARB"
-            status={arb?.enabled ? `${arb.opportunities} OPPS` : 'SCANNING'}
+            status={arb?.enabled ? `${arb.recentOpportunities ?? 0} OPPS` : 'SCANNING'}
             active={!!arb?.enabled} />
           <RevenueCard title="SHORT SELL" icon="SHT"
             status={shorts?.enabled ? `$${(shorts.simBalance || 0).toFixed(0)} | ${shorts.openPositions} OPEN` : 'OFFLINE'}

@@ -73,6 +73,8 @@ export interface GlobalPortfolio {
   totalPositions: number;
   heatScore: number;
   maxDrawdownPct: number;
+  totalTrades?: number;
+  winRate?: number;
 }
 
 export interface SystemLog {

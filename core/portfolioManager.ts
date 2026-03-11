@@ -25,6 +25,8 @@ export interface GlobalPortfolio {
   totalExposurePct: number;
   heatScore: number;         // 0-100 risk heat
   maxDrawdownPct: number;
+  totalTrades: number;
+  winRate: number;
 }
 
 export interface PositionCorrelation {
@@ -107,6 +109,19 @@ class PortfolioManager {
 
     const heatScore = this.calculateHeat(totalExposurePct, maxDrawdownPct, totalPositions);
 
+    // Aggregate trade stats from all engines
+    let totalTrades = 0;
+    let totalWins = 0;
+    for (const [, engine] of this.engines) {
+      const s = engine.getStatus();
+      const trades = s.trades as { total?: number; winRate?: number } | undefined;
+      if (trades?.total) {
+        totalTrades += trades.total;
+        totalWins += Math.round((trades.winRate || 0) / 100 * trades.total);
+      }
+    }
+    const winRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;
+
     return {
       totalEquity,
       totalCash,
@@ -121,6 +136,8 @@ class PortfolioManager {
       totalExposurePct,
       heatScore,
       maxDrawdownPct,
+      totalTrades,
+      winRate,
     };
   }
 

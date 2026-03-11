@@ -62,6 +62,8 @@ export interface GlobalPortfolio {
   totalExposurePct: number;
   heatScore: number;
   maxDrawdownPct: number;
+  totalTrades?: number;
+  winRate?: number;
 }
 
 export interface StakingStatus {
