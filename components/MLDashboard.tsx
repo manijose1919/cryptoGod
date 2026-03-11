@@ -130,8 +130,12 @@ function FeatureBar({ name, value, maxImportance }: { name: string; value: numbe
 }
 
 function formatTime(timestamp: number): string {
+  if (!timestamp || isNaN(timestamp)) return 'N/A';
   const now = Date.now();
-  const diff = now - timestamp;
+  // Handle seconds-based timestamps (if < year 2000 in ms, assume seconds)
+  const ts = timestamp < 1e12 ? timestamp * 1000 : timestamp;
+  const diff = now - ts;
+  if (diff < 0 || isNaN(diff)) return 'N/A';
   const seconds = Math.floor(diff / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
@@ -252,7 +256,9 @@ export function MLDashboard({ ticker, isVisible = true }: MLDashboardProps) {
     );
   }
 
-  const accuracy = Number(mlStatus?.latestModel?.accuracy) || 0;
+  const rawAccuracy = Number(mlStatus?.latestModel?.accuracy) || 0;
+  // API returns accuracy as 0-1 decimal; display as percentage
+  const accuracy = rawAccuracy <= 1 ? rawAccuracy * 100 : rawAccuracy;
   const sampleCount = Number(mlStatus?.latestModel?.sampleCount) || 0;
   const predictionCount = predictions.length;
   const fearGreedValue = Number(fearGreed?.value) || 50;
@@ -375,7 +381,7 @@ export function MLDashboard({ ticker, isVisible = true }: MLDashboardProps) {
                       <td>
                         <span className={predictionBadgeClass}>{p.prediction}</span>
                       </td>
-                      <td className="text-xs">{(Number(p.confidence) * 100).toFixed(0)}%</td>
+                      <td className="text-xs">{(Number(p.confidence) <= 1 ? Number(p.confidence) * 100 : Number(p.confidence)).toFixed(0)}%</td>
                       <td className="text-xs">{p.actual_outcome || '-'}</td>
                       <td className="text-xs">
                         {p.was_correct === 1 ? (

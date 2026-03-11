@@ -136,7 +136,7 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className={`w-3 h-3 rounded-full ${status.sessionActive ? 'bg-green-400 animate-pulse' : 'bg-gray-600'}`} />
-          <h3 className="text-lg font-bold text-white">VPS Monitor</h3>
+          <h3 className="text-lg font-bold gradient-header">VPS Monitor</h3>
           <LastUpdated timestamp={lastFetched} />
         </div>
         <div className="flex items-center gap-2 text-xs">
@@ -151,31 +151,31 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
 
       {/* Key Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-gray-800/50 rounded-lg p-3">
-          <div className="text-xs text-gray-400">Session Uptime</div>
-          <div className="text-sm font-bold text-white">{formatUptime(uptime)}</div>
+        <div className="stat-card">
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Session Uptime</div>
+          <div className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{formatUptime(uptime)}</div>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-3">
-          <div className="text-xs text-gray-400">Portfolio Value</div>
-          <div className="text-sm font-bold text-white">${(portfolio.totalValue || 0).toFixed(2)}</div>
+        <div className="stat-card">
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Portfolio Value</div>
+          <div className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>${(portfolio.totalValue || 0).toFixed(2)}</div>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-3">
-          <div className="text-xs text-gray-400">Total P&L</div>
+        <div className="stat-card">
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Total P&L</div>
           <div className="text-sm font-bold">
             <AnimatedNumber value={portfolio.pnl || 0} showSign />
             <span className="text-xs ml-1">(<AnimatedNumber value={portfolio.pnlPercent || 0} format="percent" showSign />)</span>
           </div>
         </div>
-        <div className="bg-gray-800/50 rounded-lg p-3">
-          <div className="text-xs text-gray-400">Trades Today</div>
-          <div className="text-sm font-bold text-white">{status.session?.totalTrades || 0}</div>
+        <div className="stat-card">
+          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Trades Today</div>
+          <div className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{status.session?.totalTrades || 0}</div>
         </div>
       </div>
 
       {/* Equity Curve (Mini) */}
       {equityCurve.length > 1 && (
-        <div className="bg-gray-800/30 rounded-lg p-3">
-          <div className="text-xs text-gray-400 mb-2">Equity Curve</div>
+        <div className="glass-card-sm p-3">
+          <div className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>Equity Curve</div>
           <div className="flex items-end gap-px h-16">
             {equityCurve.slice(-60).map((point, i) => {
               const height = ((point.value - chartMin) / chartRange) * 100;
@@ -195,17 +195,17 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
 
       {/* Open Positions */}
       {portfolio.positions.length > 0 && (
-        <div className="bg-gray-800/30 rounded-lg p-3">
-          <div className="text-xs text-gray-400 mb-2">Open Positions ({portfolio.positions.length})</div>
+        <div className="glass-card-sm p-3">
+          <div className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>Open Positions ({portfolio.positions.length})</div>
           <div className="space-y-1">
             {portfolio.positions.map((pos: any) => (
-              <div key={pos.ticker} className="flex items-center justify-between text-xs py-1 border-b border-gray-700/30 last:border-0">
+              <div key={pos.ticker} className="flex items-center justify-between text-xs py-1 last:border-0" style={{ borderBottom: '1px solid var(--border-primary)' }}>
                 <div className="flex items-center gap-2">
-                  <span className="text-white font-mono font-bold">{pos.ticker}</span>
-                  <span className="text-gray-500">{pos.entryStrategy}</span>
+                  <span className="font-mono font-bold" style={{ color: 'var(--text-primary)' }}>{pos.ticker}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{pos.entryStrategy}</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-gray-400">${(pos.currentPrice || 0).toFixed(2)}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>${(pos.currentPrice || 0).toFixed(2)}</span>
                   <span className={(pos.unrealizedPnl || 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
                     {(pos.unrealizedPnl || 0) >= 0 ? '+' : ''}${(pos.unrealizedPnl || 0).toFixed(2)}
                     <span className="text-[10px] ml-1">({(pos.unrealizedPnlPercent || 0).toFixed(2)}%)</span>
@@ -219,21 +219,21 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
 
       {/* Bot Health */}
       <div className="grid grid-cols-3 gap-2">
-        <div className="bg-gray-800/30 rounded p-2 text-center">
-          <div className="text-[10px] text-gray-400">Daily Rate</div>
-          <div className={`text-xs font-bold ${dailyRate >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+        <div className="glass-card-sm p-2 text-center">
+          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Daily Rate</div>
+          <div className="text-xs font-bold" style={{ color: dailyRate >= 0 ? 'var(--green)' : 'var(--red)' }}>
             {dailyRate.toFixed(2)}%/day
           </div>
         </div>
-        <div className="bg-gray-800/30 rounded p-2 text-center">
-          <div className="text-[10px] text-gray-400">Est. Double</div>
-          <div className="text-xs font-bold text-cyan-400">
+        <div className="glass-card-sm p-2 text-center">
+          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Est. Double</div>
+          <div className="text-xs font-bold" style={{ color: 'var(--cyan)' }}>
             {estimatedDaysToDouble === Infinity ? '--' : `${estimatedDaysToDouble}d`}
           </div>
         </div>
-        <div className="bg-gray-800/30 rounded p-2 text-center">
-          <div className="text-[10px] text-gray-400">Circuit Breaker</div>
-          <div className={`text-xs font-bold ${status.circuitBreaker?.paused ? 'text-red-400' : 'text-green-400'}`}>
+        <div className="glass-card-sm p-2 text-center">
+          <div className="text-[10px]" style={{ color: 'var(--text-muted)' }}>Circuit Breaker</div>
+          <div className="text-xs font-bold" style={{ color: status.circuitBreaker?.paused ? 'var(--red)' : 'var(--green)' }}>
             {status.circuitBreaker?.paused ? 'PAUSED' : 'OK'}
           </div>
         </div>

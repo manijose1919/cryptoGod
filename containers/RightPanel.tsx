@@ -35,7 +35,7 @@ export function RightPanel() {
     return (
         <div className="lg:col-span-3 space-y-4">
             {tradingMode === 'SIMULATION' && (
-                <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg px-4 py-2 mb-3 text-xs text-yellow-300">
+                <div className="rounded-lg px-4 py-2 mb-3 text-xs font-semibold" style={{ background: 'var(--amber-bg, rgba(245,158,11,0.08))', border: '1px solid var(--amber, #f59e0b)', color: 'var(--amber, #f59e0b)' }}>
                     SIMULATION MODE — Safety limits disabled for maximum ML learning
                 </div>
             )}
