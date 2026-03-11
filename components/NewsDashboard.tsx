@@ -70,25 +70,29 @@ export const NewsDashboard: React.FC<NewsDashboardProps> = ({ ticker }) => {
         return <div className="p-4 text-center text-gray-500 animate-pulse">Loading social intelligence...</div>;
     }
 
+    const hasUrl = (url: string) => url && url !== '#' && url !== '';
+
     return (
-        <div className="bg-gray-800/80 backdrop-blur-md p-5 rounded-2xl border border-gray-700 shadow-xl">
-            <h4 className="text-white font-bold text-lg mb-5 flex items-center gap-2">
-                <span className="text-xl">🌐</span>
+        <div className="glass-card p-5">
+            <div className="section-header mb-4">
                 Social & News Intelligence: {ticker}
-            </h4>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Trending Platforms */}
                 <div>
-                    <h5 className="text-xs text-gray-400 uppercase font-bold mb-3 tracking-wider">Trending Platforms</h5>
+                    <h5 className="text-xs uppercase font-bold mb-3 tracking-wider" style={{ color: 'var(--text-muted)' }}>Trending Platforms</h5>
                     <div className="space-y-3">
+                        {Object.entries(trendingPlatforms || {}).length === 0 && (
+                            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No trending data available</div>
+                        )}
                         {Object.entries(trendingPlatforms || {}).map(([platform, count], idx) => (
-                            <div key={platform} className="bg-gray-900/50 p-2 rounded-lg border border-gray-800 flex items-center justify-between">
+                            <div key={platform} className="glass-card-sm p-2 flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                    <div className={`w-2 h-2 rounded-full ${idx === 0 ? 'bg-cyan-500' : 'bg-gray-600'}`}></div>
-                                    <span className="text-sm text-gray-300 font-medium">{platform}</span>
+                                    <div className={`w-2 h-2 rounded-full ${idx === 0 ? 'bg-cyan-500' : 'bg-gray-400'}`}></div>
+                                    <span className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>{platform}</span>
                                 </div>
-                                <div className="text-xs font-mono text-cyan-400">{count}% Activity</div>
+                                <div className="text-xs font-mono" style={{ color: 'var(--cyan)' }}>{count}% Activity</div>
                             </div>
                         ))}
                     </div>
@@ -96,22 +100,41 @@ export const NewsDashboard: React.FC<NewsDashboardProps> = ({ ticker }) => {
 
                 {/* Latest News */}
                 <div>
-                    <h5 className="text-xs text-gray-400 uppercase font-bold mb-3 tracking-wider">Top Stories</h5>
+                    <h5 className="text-xs uppercase font-bold mb-3 tracking-wider" style={{ color: 'var(--text-muted)' }}>Top Stories</h5>
                     <div className="space-y-3">
-                        {news.slice(0, 4).map((item, i) => (
-                            <div key={i} className="group relative bg-gray-900/30 hover:bg-gray-800/50 transition-colors p-3 rounded-lg border border-gray-800/50">
+                        {news.length === 0 && (
+                            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No news articles available</div>
+                        )}
+                        {news.slice(0, 6).map((item, i) => (
+                            <div key={i} className="group relative glass-card-sm p-3 hover:shadow-md transition-all">
                                 <div className={`absolute left-0 top-3 bottom-3 w-1 rounded-r-sm ${
-                                    item.sentiment === 'positive' ? 'bg-green-500' : 
-                                    item.sentiment === 'negative' ? 'bg-red-500' : 'bg-gray-500'
+                                    item.sentiment === 'positive' ? 'bg-green-500' :
+                                    item.sentiment === 'negative' ? 'bg-red-500' : 'bg-gray-400'
                                 }`}></div>
                                 <div className="pl-3">
-                                    <div className="text-xs text-gray-500 mb-1 flex justify-between">
-                                        <span>{item.source}</span>
+                                    <div className="text-xs mb-1 flex justify-between" style={{ color: 'var(--text-muted)' }}>
+                                        <span className="flex items-center gap-1">
+                                            <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                                                item.sentiment === 'positive' ? 'bg-green-400' :
+                                                item.sentiment === 'negative' ? 'bg-red-400' : 'bg-gray-400'
+                                            }`}></span>
+                                            {item.source}
+                                        </span>
                                         <span>{new Date(item.publishedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                                     </div>
-                                    <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-sm text-gray-300 group-hover:text-cyan-400 transition-colors line-clamp-2">
-                                        {item.title}
-                                    </a>
+                                    {hasUrl(item.url) ? (
+                                        <a href={item.url} target="_blank" rel="noopener noreferrer"
+                                            className="text-sm line-clamp-2 hover:underline flex items-start gap-1"
+                                            style={{ color: 'var(--text-primary)' }}
+                                        >
+                                            <span className="flex-1">{item.title}</span>
+                                            <svg className="w-3 h-3 mt-0.5 flex-shrink-0 opacity-40 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--text-header)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                            </svg>
+                                        </a>
+                                    ) : (
+                                        <span className="text-sm line-clamp-2" style={{ color: 'var(--text-secondary)' }}>{item.title}</span>
+                                    )}
                                 </div>
                             </div>
                         ))}
