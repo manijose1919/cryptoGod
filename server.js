@@ -3415,19 +3415,18 @@ async function tradingBotLoop() {
                 else if (fgVal > 80) simFearBoost = 4;   // Extreme Greed: +4 pts (bubble caution)
             } catch (e) {}
         }
-        // SIM floors significantly raised — entering on scores of 12-22 generated 88% LOSS labels
-        // Minimum viable signal is ~30 (at least some indicator agreement)
-        // DOWNTREND: block ALL entries (even SIM) — 5m scalping against the trend is a guaranteed loser
-        // The bot should sit on its hands during downtrends and only trade during UPTREND/SIDEWAYS
+        // SIM floors raised to match REAL — low-score entries (12-22) generated 88% LOSS labels
+        // Minimum viable signal is ~35 (at least strong indicator agreement)
+        // DOWNTREND: block ALL entries (even SIM) — trading against the trend is a guaranteed loser
         if (currentRegime === 'DOWNTREND') {
             recordEquitySnapshot(portfolio);
             saveSessionState();
             return; // Skip entire entry logic — no trading in downtrends
         }
         const regimeScoreFloors = {
-            'UPTREND': (isSim ? 25 : 30) + simFearBoost,
-            'SIDEWAYS': (isSim ? 35 : 40) + simFearBoost,
-            'UNKNOWN': (isSim ? 38 : 42) + simFearBoost,
+            'UPTREND': (isSim ? 30 : 30) + simFearBoost,
+            'SIDEWAYS': (isSim ? 40 : 40) + simFearBoost,
+            'UNKNOWN': (isSim ? 42 : 42) + simFearBoost,
         };
         const baseMinOppScore = activeProfile?.entry?.minOpportunityScore ?? optParams.minOpportunityScore;
         const regimeFloor = regimeScoreFloors[currentRegime] || (isSim ? 18 : 50);
@@ -3652,12 +3651,16 @@ async function tradingBotLoop() {
             // --- SENTIMENT ENRICHMENT (Tiered) ---
             // Tier 1 (ALL candidates): CryptoPanic news + CoinGecko trending (1 global call each, cached)
             // Tier 2 (top 10):         Reddit + YouTube per-ticker sentiment (rate-limited, cached 5min)
+            // Wrapped in 15s timeout to prevent blocking the bot loop (was causing 60-100s watchdog resets)
             const sentimentCache = new Map();
             let globalNews = [];
+            const sentimentDeadline = Date.now() + 15000; // 15s max for ALL sentiment work
             try {
                 // Tier 1: Fetch global news once, then filter per-ticker locally
                 // Use localNLPService for deeper headline analysis if available
-                globalNews = await fetchCryptoNews();
+                const newsPromise = fetchCryptoNews();
+                const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Sentiment timeout')), 10000));
+                globalNews = await Promise.race([newsPromise, timeoutPromise]).catch(() => []);
                 for (const candidate of candidates) {
                     let newsScore = 0;
                     let sources = 0;
@@ -3712,8 +3715,10 @@ async function tradingBotLoop() {
                     }
                 }
 
-                if (tickersToFetchSentiment.length > 0) {
-                    const sentimentResults = await Promise.allSettled(
+                if (tickersToFetchSentiment.length > 0 && Date.now() < sentimentDeadline) {
+                    const remainingMs = Math.max(sentimentDeadline - Date.now(), 2000);
+                    const sentimentResults = await Promise.race([
+                      Promise.allSettled(
                         tickersToFetchSentiment.map(async (ticker) => {
                             let score = 0;
                             let sources = 0;
@@ -3742,7 +3747,10 @@ async function tradingBotLoop() {
                             return { ticker, sentiment: blended };
                         })
                     );
-                    for (const r of sentimentResults) {
+                      ]),
+                      new Promise(resolve => setTimeout(() => resolve([]), remainingMs))
+                    ]);
+                    for (const r of (Array.isArray(sentimentResults) ? sentimentResults : [])) {
                         if (r.status === 'fulfilled' && r.value) {
                             sentimentCache.set(r.value.ticker, r.value.sentiment);
                             sentimentCachePersistent.set(r.value.ticker, { score: r.value.sentiment, timestamp: now });

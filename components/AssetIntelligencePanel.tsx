@@ -102,9 +102,7 @@ export const AssetIntelligencePanel: React.FC<AssetIntelligencePanelProps> = ({
                                     </span>
                                 </div>
                             </div>
-                            <div className="mt-2 pt-2 border-t border-gray-700 text-xs text-gray-400">
-                                Best for: {currentAssetProfile.bestStrategies.join(', ')}
-                            </div>
+                            {/* Removed duplicate "Best for" display */}
                         </div>
                     ) : (
                         <div className="bg-gray-900/50 p-3 rounded-lg text-center text-gray-500 text-sm">
