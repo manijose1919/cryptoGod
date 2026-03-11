@@ -261,7 +261,7 @@ export function MLDashboard({ ticker, isVisible = true }: MLDashboardProps) {
   const accuracy = rawAccuracy <= 1 ? rawAccuracy * 100 : rawAccuracy;
   const sampleCount = Number(mlStatus?.latestModel?.sampleCount) || 0;
   const predictionCount = predictions.length;
-  const fearGreedValue = Number(fearGreed?.value) || 50;
+  const fearGreedValue = Number(fearGreed?.value) ?? 50;
   const fearGreedClass = fearGreed?.classification || 'Neutral';
 
   let fgColor = 'yellow';

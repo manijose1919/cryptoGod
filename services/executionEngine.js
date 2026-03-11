@@ -474,7 +474,7 @@ async function executeLimitThenMarketBuy(adapter, ticker, notional, sessionId, o
     slippage: {
       estimatedSlippage: estimation.slippagePct,
       actualSlippage: Math.max(0, actualSlippage),
-      fillRate: notional > 0 ? filledNotional / notional : 1,
+      fillRate: notional > 0 ? Math.min(1, filledNotional / notional) : 1,
       executionTimeMs: Date.now() - startTime,
     },
     executionTimeMs: Date.now() - startTime,
@@ -548,7 +548,7 @@ async function executeLimitThenMarketSell(adapter, ticker, quantity, sessionId, 
     slippage: {
       estimatedSlippage: estimation.slippagePct,
       actualSlippage: Math.max(0, actualSlippage),
-      fillRate: quantity > 0 ? filledQty / quantity : 1,
+      fillRate: quantity > 0 ? Math.min(1, filledQty / quantity) : 1,
       executionTimeMs: Date.now() - startTime,
     },
     executionTimeMs: Date.now() - startTime,
