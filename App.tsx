@@ -154,7 +154,7 @@ function AppContent() {
                         onStartNew={() => {
                             setShowReconnect(false);
                             sessionStorage.removeItem('sessionReconnectDismissed');
-                        }
+                        }}
                     />
                 </div>
             )}
