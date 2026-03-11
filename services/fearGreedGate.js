@@ -33,7 +33,7 @@ async function fetchFearGreedIndex() {
 
     if (data?.data?.[0]) {
       previousIndex = currentIndex;
-      currentIndex = parseInt(data.data[0].value);
+      currentIndex = Math.max(0, Math.min(100, parseInt(data.data[0].value) || 50));
       currentClassification = data.data[0].value_classification;
       indexTrend = currentIndex - previousIndex;
       lastFetchTime = Date.now();
