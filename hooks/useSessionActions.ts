@@ -29,6 +29,8 @@ export function useSessionActions() {
                     } else {
                         // Auto-reconnect silently since user already acknowledged
                         setShowReconnect(false);
+                        setIsTradingActive(true);
+                        setIsBotActive(true);
                     }
                 }
             } catch {
@@ -132,6 +134,12 @@ export function useSessionActions() {
                 setIsTradingActive(true);
                 setIsBotActive(true);
                 addLog(`Backend session started: ${data.sessionId}`, 'SPECIAL');
+            } else if (data.error?.includes('already active')) {
+                // Session already running on backend — reconnect to it
+                addLog('Session already active on backend — reconnecting...', 'INFO');
+                setIsTradingActive(true);
+                setIsBotActive(true);
+                setSessionStartTime(Date.now());
             } else {
                 addLog(`Failed to start session: ${data.error}`, 'ERROR');
             }
