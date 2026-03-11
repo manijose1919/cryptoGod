@@ -43,11 +43,15 @@ export default function createEngineRouter(ctx) {
     if (!engine) {
       // Return a "not ready" status instead of 404 to prevent frontend error loops
       return res.json({
-        initialized: false,
-        running: false,
+        state: 'IDLE',
         mode: 'SIMULATION',
         exchange: req.params.exchange,
-        message: 'Engine not yet initialized',
+        equity: 0, cash: 0, initialBudget: 0,
+        pnlUsd: 0, pnlPct: 0, positions: 0,
+        positionDetails: {},
+        dailyPnl: 0, consecutiveLosses: 0, drawdownPct: 0,
+        tradeStats: { total: 0, wins: 0, losses: 0, winRate: 0, avgPnl: 0 },
+        uptime: 0,
       });
     }
     res.json(engine.getStatus());
