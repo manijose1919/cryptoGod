@@ -154,8 +154,9 @@ export function explainPrediction(mlEngine, features, featureNames) {
     }
 
     // Average across trees
-    const avgContributions = totalContributions.map(c => c / numTrees);
-    const avgBaseValue = totalBaseValue / numTrees;
+    const treeCount = numTrees || 1;
+    const avgContributions = totalContributions.map(c => c / treeCount);
+    const avgBaseValue = totalBaseValue / treeCount;
 
     // Build feature explanation objects
     const featureExplanations = avgContributions.map((contribution, idx) => ({
