@@ -2445,11 +2445,13 @@ async function checkTickExit(ticker, price) {
     let exitReason = null;
     let isStopLoss = false; // SL exits always fire (protective); TP/trail exits are profit-checked
 
-    // 1. Per-trade profit goal (on remaining quantity)
+    // 1. Per-trade profit goal (on remaining quantity) — fee-adjusted
     if (levels.profitGoal > 0) {
-        const profit = (price - position.openPrice) * position.quantity;
+        const fees = getActiveFees();
+        const roundTripFee = (position.openPrice + price) * position.quantity * fees.perSide;
+        const profit = (price - position.openPrice) * position.quantity - roundTripFee;
         if (profit >= levels.profitGoal) {
-            exitReason = `[RT] Per-trade profit goal $${levels.profitGoal.toFixed(2)} reached`;
+            exitReason = `[RT] Per-trade profit goal $${levels.profitGoal.toFixed(2)} reached (net $${profit.toFixed(2)})`;
         }
     }
 
