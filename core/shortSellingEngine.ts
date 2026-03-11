@@ -266,6 +266,10 @@ class ShortSellingEngine {
     this.positions.delete(pos.id);
 
     this.tradeHistory.push({ time: Date.now(), pnl, ticker: pos.ticker });
+    // Cap trade history to prevent unbounded memory growth
+    if (this.tradeHistory.length > 500) {
+      this.tradeHistory = this.tradeHistory.slice(-500);
+    }
 
     console.log(
       `[ShortEngine] Closed short: ${pos.ticker} on ${pos.exchange}`,
