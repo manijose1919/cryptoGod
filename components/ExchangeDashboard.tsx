@@ -205,8 +205,8 @@ export function ExchangeDashboard({ exchange }: Props) {
                     <td><span className="badge badge-blue" style={{ fontSize: '10px' }}>{pos.strategy}</span></td>
                     <td>${pos.entryPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                     <td>${pos.currentPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ color: pos.pnlPct >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
-                      {pos.pnlPct >= 0 ? '+' : ''}{pos.pnlPct?.toFixed(2)}%
+                    <td style={{ color: (pos.pnlPct || 0) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                      {(pos.pnlPct || 0) >= 0 ? '+' : ''}{(pos.pnlPct || 0).toFixed(2)}%
                     </td>
                     <td style={{ color: 'var(--text-muted)' }}>{holdHrs}h {holdMin}m</td>
                     <td><span className={`badge ${pos.regime?.includes('UP') ? 'badge-green' : pos.regime?.includes('DOWN') ? 'badge-red' : 'badge-blue'}`} style={{ fontSize: '10px' }}>{pos.regime}</span></td>
@@ -227,7 +227,7 @@ export function ExchangeDashboard({ exchange }: Props) {
               ? 'Circuit breaker active — trading paused'
               : `${cb.consecutiveLosses} consecutive losses — monitoring`}
           </span>
-          <small>Daily P&L: ${cb.dailyPnl?.toFixed(2)} | Drawdown: {cb.drawdownPct?.toFixed(1)}%</small>
+          <small>Daily P&L: ${(cb.dailyPnl ?? 0).toFixed(2)} | Drawdown: {(cb.drawdownPct ?? 0).toFixed(1)}%</small>
         </div>
       )}
 

@@ -97,7 +97,7 @@ export default function SocialSentimentPanel() {
       </div>
 
       {/* Top Headlines */}
-      {data.topHeadlines.length > 0 && (
+      {data.topHeadlines?.length > 0 && (
         <div>
           <div className="text-xs text-slate-400 mb-1">Top Headlines</div>
           <div className="space-y-1">
@@ -106,7 +106,11 @@ export default function SocialSentimentPanel() {
                 <span className={`mt-0.5 ${SENTIMENT_COLORS[h.sentiment]}`}>
                   {h.sentiment === 'positive' ? '+' : h.sentiment === 'negative' ? '-' : '~'}
                 </span>
-                <span className="text-slate-300 leading-tight">{h.title}</span>
+                {h.url ? (
+                  <a href={h.url} target="_blank" rel="noopener noreferrer" className="text-slate-300 leading-tight hover:text-cyan-300 hover:underline transition-colors">{h.title}</a>
+                ) : (
+                  <span className="text-slate-300 leading-tight">{h.title}</span>
+                )}
                 <span className="text-slate-600 shrink-0">{h.source}</span>
               </div>
             ))}
@@ -115,7 +119,7 @@ export default function SocialSentimentPanel() {
       )}
 
       {/* Trending Coins */}
-      {data.trendingCoins.length > 0 && (
+      {data.trendingCoins?.length > 0 && (
         <div>
           <div className="text-xs text-slate-400 mb-1">Trending (CoinGecko)</div>
           <div className="flex flex-wrap gap-1.5">
@@ -161,7 +165,7 @@ export default function SocialSentimentPanel() {
       )}
 
       <div className="text-[10px] text-slate-600 text-right">
-        Updated {new Date(data.lastUpdated).toLocaleTimeString()}
+        Updated {data.lastUpdated ? new Date(data.lastUpdated).toLocaleTimeString() : '--:--'}
       </div>
     </div>
   );

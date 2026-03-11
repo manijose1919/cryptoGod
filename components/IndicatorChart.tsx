@@ -60,7 +60,12 @@ const IndicatorChartComponent: React.FC<IndicatorChartProps> = ({
       ma200: ma200[i]?.value,
   }));
   
-  const priceDomain: [number, number] = [ Math.min(...combinedData.map(d => d.low)) * 0.99, Math.max(...combinedData.map(d => d.high)) * 1.01 ];
+  const lows = combinedData.map(d => d.low).filter((v): v is number => v != null);
+  const highs = combinedData.map(d => d.high).filter((v): v is number => v != null);
+  const priceDomain: [number, number] = [
+    lows.length > 0 ? Math.min(...lows) * 0.99 : 0,
+    highs.length > 0 ? Math.max(...highs) * 1.01 : 1,
+  ];
 
   return (
     <ResponsiveContainer width="100%" height={400}>
