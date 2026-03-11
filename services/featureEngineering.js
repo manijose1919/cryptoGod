@@ -200,7 +200,7 @@ export function getFeatureNames() {
     'exchange_volume_divergence',
     // Surge-specific features (6) — Phase 5A
     'price_velocity',
-    'price_acceleration',
+    'surge_price_acceleration',
     'micro_burst_active',
     'candlestick_signal',
     'surge_type',
@@ -853,7 +853,7 @@ function extractMarketIntelligenceFeatures(marketIntelligence) {
     features[3] = clamp((marketIntelligence.socialScore || 0) / 100, 0, 1);   // social_score_crypto (0-1)
     features[4] = clamp((marketIntelligence.marketCapChange24h || 0) / 10, -1, 1); // market_cap_change % (normalized to ±10%)
     // Composite: weighted avg of all above
-    features[5] = (features[0] * 0.3 + features[3] * 0.3 + (1 - features[2] * 0.2) + features[4] * 0.2);
+    features[5] = (features[0] * 0.3 + features[3] * 0.3 + (1 - features[2]) * 0.2 + features[4] * 0.2);
   } catch (err) {
     console.error('Error extracting market intelligence features:', err);
   }
