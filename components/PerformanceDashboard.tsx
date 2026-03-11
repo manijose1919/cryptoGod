@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
 import {
   computeEquityCurve,
   computeStrategyBreakdown,
@@ -8,86 +7,76 @@ import {
   type Trade,
 } from '../services/performanceService';
 
-const NAV_LINKS = [
-  { to: '/', label: 'Crypto' },
-  { to: '/performance', label: 'Performance' },
-  { to: '/backtest', label: 'Backtest' },
-  { to: '/replay', label: 'Replay' },
-  { to: '/training', label: 'Training' },
-  { to: '/system', label: 'System' },
-];
-
 export const PerformanceDashboard: React.FC = () => {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [initialBudget, setInitialBudget] = useState(1000);
 
   useEffect(() => {
     const load = async () => {
+      let loaded = false;
       try {
-        // Get initial budget from status
+        // Source 1: In-memory tradeLog from /api/status (current session)
         const statusRes = await fetch('/api/status');
         if (statusRes.ok) {
           const statusData = await statusRes.json();
           setInitialBudget(statusData.portfolio?.initialBudget || 1000);
 
-          // Use tradeLog from status — all entries are sell trades (appended in handleSell)
           const tradeLog = statusData.tradeLog || [];
           if (tradeLog.length > 0) {
             setTrades(tradeLog.map((t: any) => ({
               type: 'SELL',
               ticker: t.ticker || '',
-              price: t.price || 0,
+              price: t.exitPrice || t.price || 0,
               quantity: t.quantity || 0,
               strategy: t.strategy || '',
-              timestamp: t.time || t.timestamp || Date.now(),
+              timestamp: t.exitTime || t.time || t.timestamp || Date.now(),
               pnl: t.pnl,
             })));
+            loaded = true;
           }
         }
 
-        // Also try session trades endpoint (active session)
-        const sessionRes = await fetch('/api/session/trades?limit=1000');
-        if (sessionRes.ok) {
-          const sessionData = await sessionRes.json();
-          if (sessionData.trades?.length > 0) {
-            setTrades(sessionData.trades.map((t: any) => ({
-              type: t.type || 'SELL',
-              ticker: t.ticker || '',
-              price: t.price || 0,
-              quantity: t.quantity || 0,
-              strategy: t.strategy || '',
-              timestamp: t.time || t.timestamp || Date.now(),
-              pnl: t.pnl,
-            })));
+        // Source 2: Session trades (active backend session)
+        if (!loaded) {
+          const sessionRes = await fetch('/api/session/trades?limit=1000');
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json();
+            if (sessionData.trades?.length > 0) {
+              setTrades(sessionData.trades.map((t: any) => ({
+                type: t.type || 'SELL',
+                ticker: t.ticker || '',
+                price: t.exitPrice || t.price || 0,
+                quantity: t.quantity || 0,
+                strategy: t.strategy || '',
+                timestamp: t.exitTime || t.time || t.timestamp || Date.now(),
+                pnl: t.pnl,
+              })));
+              loaded = true;
+            }
+          }
+        }
+
+        // Source 3: SQLite persistence DB (historical, snake_case fields)
+        if (!loaded) {
+          const dbRes = await fetch('/api/db/trades?limit=1000');
+          if (dbRes.ok) {
+            const dbData = await dbRes.json();
+            if (dbData.trades?.length > 0) {
+              setTrades(dbData.trades.map((t: any) => ({
+                type: 'SELL',
+                ticker: t.ticker || '',
+                price: t.exit_price || t.price || 0,
+                quantity: t.quantity || 0,
+                strategy: t.strategy || '',
+                timestamp: t.exit_time || t.created_at || t.timestamp || Date.now(),
+                pnl: t.pnl,
+              })));
+            }
           }
         }
       } catch (e) { /* ignore */ }
     };
     load();
-  }, []);
-
-  // Also try loading from persistence DB
-  useEffect(() => {
-    const loadDB = async () => {
-      try {
-        const res = await fetch('/api/db/trades?limit=1000');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.trades && data.trades.length > 0) {
-            setTrades(data.trades.map((t: any) => ({
-              type: t.type,
-              ticker: t.ticker,
-              price: t.price,
-              quantity: t.quantity,
-              strategy: t.strategy,
-              timestamp: t.created_at || t.timestamp,
-              pnl: t.pnl,
-            })));
-          }
-        }
-      } catch (e) { /* ignore */ }
-    };
-    loadDB();
   }, []);
 
   const equityCurve = useMemo(() => computeEquityCurve(trades, initialBudget), [trades, initialBudget]);
@@ -106,19 +95,7 @@ export const PerformanceDashboard: React.FC = () => {
   const equityRange = maxEquity - minEquity || 1;
 
   return (
-    <div className="min-h-screen bg-gray-900 font-sans" style={{ color: 'var(--text-primary)' }}>
-      {/* Nav */}
-      <nav className="flex items-center gap-4 p-4 border-b border-gray-700/50">
-        {NAV_LINKS.map(link => (
-          <Link
-            key={link.to}
-            to={link.to}
-            className={`text-sm px-3 py-1 rounded ${link.to === '/performance' ? 'bg-cyan-800/50 text-cyan-300' : 'text-gray-400 hover:text-white'}`}
-          >
-            {link.label}
-          </Link>
-        ))}
-      </nav>
+    <div className="font-sans" style={{ color: 'var(--text-primary)' }}>
 
       <main className="p-4 space-y-4 max-w-7xl mx-auto">
         <h1 className="text-xl font-bold text-cyan-300">Performance Dashboard</h1>
