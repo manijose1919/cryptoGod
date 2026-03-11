@@ -806,6 +806,38 @@ body {
   font-family: var(--font-sans);
 }
 
+.ed-trade-stats {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--bg-panel);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.ed-recent-trades {
+  padding: 14px;
+  background: var(--bg-panel);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
+.ed-positions {
+  margin-bottom: 12px;
+  padding: 14px;
+  background: var(--bg-panel);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+
 /* ============================================
    Portfolio Overview — Glass Panels
    ============================================ */
