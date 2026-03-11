@@ -109,6 +109,8 @@ export class TradingEngine {
 
   // Performance tracking
   private trades: { time: number; pnl: number; ticker: string; strategy: string }[] = [];
+  private tickInProgress = false;
+  private dailyDate: string = new Date().toDateString();
 
   constructor(
     config: EngineConfig,
@@ -220,9 +222,19 @@ export class TradingEngine {
 
   private async tick(): Promise<void> {
     if (this.state !== 'RUNNING') return;
+    if (this.tickInProgress) return; // Prevent overlapping ticks
+    this.tickInProgress = true;
 
     // Check circuit breaker pause
-    if (Date.now() < this.pauseUntil) return;
+    if (Date.now() < this.pauseUntil) { this.tickInProgress = false; return; }
+
+    // Daily reset of counters at midnight
+    const today = new Date().toDateString();
+    if (today !== this.dailyDate) {
+      this.dailyPnl = 0;
+      this.dailyTradeCount = 0;
+      this.dailyDate = today;
+    }
 
     this.tickCount++;
 
@@ -253,6 +265,8 @@ export class TradingEngine {
         error: msg,
         timestamp: Date.now(),
       });
+    } finally {
+      this.tickInProgress = false;
     }
   }
 
@@ -264,6 +278,9 @@ export class TradingEngine {
         // Get current price (from WS or REST fallback)
         const currentPrice = await this.getCurrentPrice(ticker);
         if (!currentPrice) continue;
+
+        // Cache for mark-to-market equity calculation
+        this.lastKnownPrices[ticker] = currentPrice;
 
         // Track highest/lowest for trailing stop
         if (currentPrice > position.highestPrice) {
@@ -509,6 +526,10 @@ export class TradingEngine {
       ticker,
       strategy: position.entryStrategy,
     });
+    // Cap trades array to prevent unbounded memory growth
+    if (this.trades.length > 500) {
+      this.trades = this.trades.slice(-500);
+    }
 
     // Emit exit event
     const event: ExitEvent = {
@@ -538,10 +559,13 @@ export class TradingEngine {
 
   private shouldPause(): boolean {
     const equity = this.getEquity();
-    const drawdownPct = ((this.peakEquity - equity) / this.peakEquity) * 100;
 
-    // Update peak
+    // Update peak BEFORE drawdown check (otherwise first rise shows negative drawdown)
     if (equity > this.peakEquity) this.peakEquity = equity;
+
+    const drawdownPct = this.peakEquity > 0
+      ? ((this.peakEquity - equity) / this.peakEquity) * 100
+      : 0;
 
     // Escalating drawdown response
     if (drawdownPct >= 25) {
@@ -624,12 +648,15 @@ export class TradingEngine {
     return null;
   }
 
+  // Cache latest prices for mark-to-market equity
+  private lastKnownPrices: Record<string, number> = {};
+
   getEquity(): number {
     let equity = this.portfolio.cash;
-    // In real implementation, sum position mark-to-market values
-    // For now, use open price as estimate (will be refined)
     for (const pos of Object.values(this.portfolio.positions)) {
-      equity += pos.openPrice * pos.quantity;
+      // Use last known market price if available, otherwise fall back to entry price
+      const price = this.lastKnownPrices[pos.ticker] || pos.highestPrice || pos.openPrice;
+      equity += price * pos.quantity;
     }
     return equity;
   }
@@ -639,7 +666,14 @@ export class TradingEngine {
   getState(): EngineState { return this.state; }
   getMode(): EngineMode { return this.mode; }
   getExchange(): ExchangeId { return this.exchange; }
-  getPortfolio(): EnginePortfolio { return { ...this.portfolio }; }
+  getPortfolio(): EnginePortfolio {
+    // Deep copy positions to prevent external mutation of internal state
+    const positions: Record<string, EnginePosition> = {};
+    for (const [k, v] of Object.entries(this.portfolio.positions)) {
+      positions[k] = { ...v };
+    }
+    return { ...this.portfolio, positions };
+  }
   getSessionId(): string | null { return this.sessionId; }
   getTickCount(): number { return this.tickCount; }
 
@@ -669,7 +703,16 @@ export class TradingEngine {
       consecutiveLosses: this.consecutiveLosses,
       peakEquity: this.peakEquity,
       drawdownPct: ((this.peakEquity - equity) / this.peakEquity) * 100,
-      trades: this.trades.slice(-50), // Last 50 trades
+      recentTrades: this.trades.slice(-50), // Last 50 trades (raw data)
+      // Trade stats summary for portfolioManager consumption
+      tradeStats: {
+        total: this.trades.length,
+        wins: this.trades.filter(t => t.pnl > 0).length,
+        losses: this.trades.filter(t => t.pnl < 0).length,
+        winRate: this.trades.length > 0
+          ? (this.trades.filter(t => t.pnl > 0).length / this.trades.length) * 100
+          : 0,
+      },
       uptime: this.sessionStartTime ? Date.now() - this.sessionStartTime : 0,
     };
   }

@@ -114,10 +114,10 @@ class PortfolioManager {
     let totalWins = 0;
     for (const [, engine] of this.engines) {
       const s = engine.getStatus();
-      const trades = s.trades as { total?: number; winRate?: number } | undefined;
-      if (trades?.total) {
-        totalTrades += trades.total;
-        totalWins += Math.round((trades.winRate || 0) / 100 * trades.total);
+      const stats = s.tradeStats as { total?: number; wins?: number; winRate?: number } | undefined;
+      if (stats?.total) {
+        totalTrades += stats.total;
+        totalWins += stats.wins ?? 0;
       }
     }
     const winRate = totalTrades > 0 ? (totalWins / totalTrades) * 100 : 0;

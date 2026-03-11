@@ -2353,7 +2353,7 @@ async function handlePartialSell(position, price, fraction, reason) {
     // Record partial sell in circuit breaker, strategy weights, and ML feedback
     // Without this, 60% of trade data (stage1=25% + stage2=35%) was invisible to analytics
     try { cbRecordTrade(partialPnl, position.entryStrategy || 'TREND', ticker); } catch (e) { /* non-critical */ }
-    try { recordStrategyResult(position.entryStrategy || 'TREND', partialPnl > 0, partialPnl); } catch (e) { /* non-critical */ }
+    try { recordStrategyResult(position.entryStrategy || 'TREND', partialPnl); } catch (e) { /* non-critical */ }
     try { beastRecordTrade(partialPnl > 0, Math.abs(partialPnl), position.entryStrategy || 'TREND'); } catch (e) { /* non-critical */ }
 
     // Record in trade log for ML/optimizer

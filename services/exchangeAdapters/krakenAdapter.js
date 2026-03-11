@@ -95,7 +95,7 @@ function createKrakenSignature(path, nonce, postData, secret) {
     return hmac.digest('base64');
 }
 
-async function krakenPrivateRequest(endpoint, params = {}, sessionId = null) {
+async function krakenPrivateRequest(endpoint, params = {}, sessionId = null, maxRetries = 3) {
     let apiKey, secret;
 
     // First: try session-based credentials (from user login)
@@ -117,29 +117,62 @@ async function krakenPrivateRequest(endpoint, params = {}, sessionId = null) {
         throw new Error('Kraken API credentials not available. Please authenticate first.');
     }
 
-    const path = `/0/private/${endpoint}`;
-    const nonce = Date.now() * 1000;
-    const postParams = { ...params, nonce };
-    const postData = new URLSearchParams(postParams).toString();
-    const signature = createKrakenSignature(path, String(nonce), postData, secret);
+    let lastError;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            const path = `/0/private/${endpoint}`;
+            // Use unique nonce per attempt to avoid Kraken nonce-reuse rejection
+            const nonce = Date.now() * 1000 + attempt;
+            const postParams = { ...params, nonce };
+            const postData = new URLSearchParams(postParams).toString();
+            const signature = createKrakenSignature(path, String(nonce), postData, secret);
 
-    const response = await fetch(`${KRAKEN_BASE_URL}${path}`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'API-Key': apiKey,
-            'API-Sign': signature,
-        },
-        body: postData,
-        signal: AbortSignal.timeout(15000),
-    });
+            const response = await fetch(`${KRAKEN_BASE_URL}${path}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'API-Key': apiKey,
+                    'API-Sign': signature,
+                },
+                body: postData,
+                signal: AbortSignal.timeout(15000),
+            });
 
-    const data = await response.json();
+            if (response.status === 429 && attempt < maxRetries - 1) {
+                const delay = Math.pow(2, attempt + 1) * 1000;
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
+            if (response.status >= 500 && attempt < maxRetries - 1) {
+                const delay = Math.pow(2, attempt) * 500 + Math.random() * 200;
+                await new Promise(r => setTimeout(r, delay));
+                continue;
+            }
 
-    if (data.error && data.error.length > 0) {
-        throw new Error(`Kraken API Error: ${data.error.join(', ')}`);
+            const data = await response.json();
+
+            if (data.error && data.error.length > 0) {
+                const errMsg = data.error.join(', ');
+                // Retry on temporary errors (rate limit, service unavailable)
+                if ((errMsg.includes('Rate limit') || errMsg.includes('Service:Unavailable')) && attempt < maxRetries - 1) {
+                    const delay = Math.pow(2, attempt + 1) * 1000;
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
+                }
+                throw new Error(`Kraken API Error: ${errMsg}`);
+            }
+            return data.result;
+        } catch (e) {
+            lastError = e;
+            // Don't retry auth errors or invalid nonce
+            if (e.message?.includes('credentials') || e.message?.includes('Invalid nonce')) throw e;
+            if (attempt < maxRetries - 1) {
+                const delay = Math.pow(2, attempt) * 500 + Math.random() * 200;
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
     }
-    return data.result;
+    throw lastError;
 }
 
 export class KrakenAdapter extends BaseExchangeAdapter {
@@ -368,6 +401,9 @@ export class KrakenAdapter extends BaseExchangeAdapter {
         return {
             quantity: filledQty,
             avgPrice,
+            // TradingEngine interface compatibility
+            filledPrice: avgPrice,
+            filledQuantity: filledQty,
             orderId,
             raw: result,
         };
@@ -410,6 +446,9 @@ export class KrakenAdapter extends BaseExchangeAdapter {
         return {
             avgPrice,
             filledQuantity,
+            // TradingEngine interface compatibility
+            filledPrice: avgPrice,
+            quantity: filledQuantity,
             orderId,
             raw: result,
         };
