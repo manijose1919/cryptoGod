@@ -2834,7 +2834,7 @@ async function tradingBotLoop() {
         const pauseCheck = shouldPauseTrading(botState.tradingMode);
         if (pauseCheck.paused) {
             // Log circuit breaker status max once per 30s (was 10% random ≈ 18/min)
-            if (!tradingBotLoop._lastCBLogTime || Date.now() - tradingBotLoop._lastCBLogTime > 30000) {
+            if (!tradingBotLoop._lastCBLogTime || Date.now() - tradingBotLoop._lastCBLogTime > 120000) {
                 tradingBotLoop._lastCBLogTime = Date.now();
                 addLog(`[CIRCUIT BREAKER] Paused: ${pauseCheck.reason} (${pauseCheck.remainingMinutes}min left)`, 'WARN');
             }
