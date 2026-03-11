@@ -3833,10 +3833,14 @@ async function tradingBotLoop() {
                             return { ticker: cand.ticker, advice: { available: false, direction: null, confidence: 0 } };
                         }
                     });
-                    const results = await Promise.allSettled(mlPromises);
-                    for (const r of results) {
-                        if (r.status === 'fulfilled' && r.value) {
-                            _mlAdviceCache.set(r.value.ticker, r.value.advice);
+                    const mlTimeout = new Promise(resolve => setTimeout(() => resolve('ML_TIMEOUT'), 10000));
+                    const mlBatch = Promise.allSettled(mlPromises);
+                    const raceResult = await Promise.race([mlBatch, mlTimeout]);
+                    if (raceResult !== 'ML_TIMEOUT' && Array.isArray(raceResult)) {
+                        for (const r of raceResult) {
+                            if (r.status === 'fulfilled' && r.value) {
+                                _mlAdviceCache.set(r.value.ticker, r.value.advice);
+                            }
                         }
                     }
                 } catch (e) {}
