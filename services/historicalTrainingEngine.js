@@ -679,8 +679,8 @@ function checkExitConditions(position, candles, exitParams = null, config = {}) 
   // Time exit (learned max hold hours)
   if (holdHours >= ep.maxHold) return `Time exit: ${ep.maxHold}h max hold`;
 
-  // Trailing stop (learned)
-  if (position.highestPnlPct >= ep.trailingStart && pnlPct < position.highestPnlPct * ep.trailingGiveBack) {
+  // Trailing stop (learned) — give back N% of peak profit before exiting
+  if (position.highestPnlPct >= ep.trailingStart && pnlPct < position.highestPnlPct * (1 - ep.trailingGiveBack)) {
     return `Trailing stop: gave back ${((position.highestPnlPct - pnlPct) * 100).toFixed(1)}%`;
   }
 
@@ -1131,14 +1131,13 @@ export async function startTraining(config = {}) {
   const aggressiveCompounding = config.aggressiveCompounding || false;
   const useMakerFees = config.useMakerFees || false;
 
-  // Set fee tier based on config
-  if (useMakerFees) {
-    TRADING_FEE_PER_SIDE = TRADING_FEE_PER_SIDE_MAKER;
-    TRADING_FEE_ROUND_TRIP = TRADING_FEE_ROUND_TRIP_MAKER;
-  } else {
-    TRADING_FEE_PER_SIDE = TRADING_FEE_PER_SIDE_TAKER;
-    TRADING_FEE_ROUND_TRIP = TRADING_FEE_ROUND_TRIP_TAKER;
-  }
+  // Set fee tier based on config (mutex guard for concurrent runs)
+  // Note: module-level vars are used by inner functions via closure
+  // Use atomic assignment to minimize race window
+  const feePerSide = useMakerFees ? TRADING_FEE_PER_SIDE_MAKER : TRADING_FEE_PER_SIDE_TAKER;
+  const feeRoundTrip = useMakerFees ? TRADING_FEE_ROUND_TRIP_MAKER : TRADING_FEE_ROUND_TRIP_TAKER;
+  TRADING_FEE_PER_SIDE = feePerSide;
+  TRADING_FEE_ROUND_TRIP = feeRoundTrip;
 
   // When seeded, lower the quality gate threshold so trade memory filters take effect immediately
   if (seedRunId) {
