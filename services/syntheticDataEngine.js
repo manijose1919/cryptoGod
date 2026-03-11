@@ -21,7 +21,7 @@ try {
 class TimeGAN {
   constructor(config = {}) {
     this.seqLen = config.seqLen || 30;
-    this.featureDim = config.featureDim || 103;
+    this.featureDim = config.featureDim || 109;
     this.hiddenDim = config.hiddenDim || 64;
     this.latentDim = config.latentDim || 32;
     this.batchSize = config.batchSize || 32;

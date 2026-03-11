@@ -76,7 +76,7 @@ export async function get(key) {
   // In-memory fallback
   const expiry = memTTLs.get(key);
   if (expiry && Date.now() > expiry) { memCache.delete(key); memTTLs.delete(key); return null; }
-  return memCache.get(key) || null;
+  return memCache.get(key) ?? null;
 }
 
 /**

@@ -2,7 +2,7 @@
  * Deep Reinforcement Learning Agent - PPO Implementation
  * Phase 3: Optimizes for risk-adjusted PnL rather than classification accuracy
  *
- * State: 103 features + 5 portfolio state = 108 dims
+ * State: 109 features + 5 portfolio state = 114 dims
  * Action: Discrete {BUY, SELL, HOLD} + continuous position_size [0, 1]
  * Reward: realized PnL - 0.5*variance - 0.001*hours_held - 2*max(drawdown-5%, 0)
  */

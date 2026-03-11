@@ -30,7 +30,7 @@ const LOG = '[ContinuousBacktest]';
 const BACKTEST_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const LOOKBACK_DAYS = 7;
 const STRATEGIES = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];
-const TRADING_FEE = 0.0015; // 0.15% round-trip
+const TRADING_FEE = 0.0052; // 0.52% round-trip (Kraken taker fees)
 
 let interval = null;
 let _tableReady = false;
