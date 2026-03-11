@@ -1338,8 +1338,8 @@ export function persistPositionsToDB() {
       saveDCAPosition(sessionId, ticker, {
         totalInvested: pos.totalInvested,
         totalQuantity: pos.totalQuantity,
-        avgPrice: pos.avgPrice,
-        buyCount: pos.buyCount,
+        avgPrice: pos.avgEntryPrice,
+        buyCount: pos.buys,
         lastBuyTime: pos.lastBuyTime,
         takeProfitPrice: pos.takeProfitPrice || 0,
       });
@@ -1383,11 +1383,14 @@ export function restorePositionsFromDatabase(sessionId) {
     const dcaRows = getDCAPositions(sessionId);
     for (const row of dcaRows) {
       dcaPositions.set(row.ticker, {
+        ticker: row.ticker,
         totalInvested: row.total_invested,
         totalQuantity: row.total_quantity,
-        avgPrice: row.avg_price,
-        buyCount: row.buy_count,
+        avgEntryPrice: row.avg_price,
+        initialEntryPrice: row.avg_price,
+        buys: row.buy_count,
         lastBuyTime: row.last_buy_time,
+        lastBuyPrice: row.avg_price,
         takeProfitPrice: row.take_profit_price,
       });
     }

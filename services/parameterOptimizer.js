@@ -42,7 +42,7 @@ const MIN_TRADES_REQUIRED = 30;    // Need at least 30 trades to optimize
 const ROLLING_WINDOW = 200;        // Use last 200 trades
 const MIN_FITNESS_IMPROVEMENT = 0.05; // 5% minimum improvement to justify a change
 const TRAIN_SPLIT = 0.7;             // 70% train, 30% validation
-let currentRoundTripFee = 0.15;      // Updated from beastMode's actual exchange fee
+let currentRoundTripFee = 0.52;      // Default to Kraken fees (primary exchange)
 
 // ============================================
 // STATE
