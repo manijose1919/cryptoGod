@@ -152,6 +152,15 @@ export function updateVPIN(ticker, price, volume, side) {
       lastUpdate: Date.now(),
     };
     tickerState.set(ticker, state);
+
+    // Cap map size to prevent unbounded growth
+    if (tickerState.size > 50) {
+      let oldestKey = null, oldestTime = Infinity;
+      for (const [k, v] of tickerState) {
+        if (v.lastUpdate < oldestTime) { oldestTime = v.lastUpdate; oldestKey = k; }
+      }
+      if (oldestKey) tickerState.delete(oldestKey);
+    }
   }
 
   // Auto-calibrate bucket size from observed volume
