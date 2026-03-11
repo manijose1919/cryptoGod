@@ -160,6 +160,14 @@ function triggerPause(reason) {
  * Check if trading should be paused
  */
 export function shouldPauseTrading(tradingMode = 'REAL') {
+  // Reset daily tracking if new day (in case no trades happen around midnight)
+  const today = new Date().toDateString();
+  if (today !== dailyDate) {
+    dailyPnl = 0;
+    dailyDate = today;
+    pauseCount = 0;
+  }
+
   // In simulation mode, apply a short 5-minute cooldown (vs full 60min+ in real mode)
   // Prevents bleeding through entire losing streaks while still generating varied training data
   if (tradingMode === 'SIMULATION') {

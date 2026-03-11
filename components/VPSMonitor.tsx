@@ -117,9 +117,10 @@ const VPSMonitor: React.FC<Props> = ({ pollInterval = 3000 }) => {
   const exchange = status.exchange || { id: 'unknown', wsConnected: false };
   const uptime = status.uptime || 0;
 
-  // uptime from process.uptime() is in seconds, not ms
-  const dailyRate = uptime > 0 && portfolio.initialBudget > 0
-    ? (portfolio.pnl / portfolio.initialBudget * 100) / (uptime / 86400)
+  // uptime from session/full-status is in milliseconds (Date.now() - sessionStartTime)
+  // Require at least 1 hour of uptime before extrapolating daily rate (avoids misleading spikes)
+  const dailyRate = uptime > 3600000 && portfolio.initialBudget > 0
+    ? (portfolio.pnl / portfolio.initialBudget * 100) / (uptime / 86400000)
     : 0;
 
   const estimatedDaysToDouble = dailyRate > 0
