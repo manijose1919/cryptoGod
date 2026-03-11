@@ -241,7 +241,9 @@ function handleOhlcUpdate(msg) {
     if (!data || data.length === 0) return;
 
     for (const candle of data) {
+        if (!candle || !candle.symbol || !candle.close) continue;
         const ticker = fromKrakenWsPair(candle.symbol);
+        if (!ticker || ticker === 'undefined') continue;
 
         const formatted = {
             t: new Date(candle.timestamp).getTime(),
@@ -251,6 +253,7 @@ function handleOhlcUpdate(msg) {
             c: parseFloat(candle.close),
             v: parseFloat(candle.volume || candle.vwap || 0),
         };
+        if (isNaN(formatted.c) || isNaN(formatted.t)) continue;
 
         // Update buffer
         let buffer = realtimeCandles.get(ticker);
@@ -274,10 +277,17 @@ function handleOhlcUpdate(msg) {
         latestPrices.set(ticker, formatted.c);
     }
 
-    // Callback with the first ticker's data
-    if (data.length > 0 && onCandleCallback) {
-        const ticker = fromKrakenWsPair(data[0].symbol);
-        onCandleCallback(ticker, realtimeCandles.get(ticker));
+    // Callback for each updated ticker
+    if (onCandleCallback) {
+        const updated = new Set();
+        for (const candle of data) {
+            if (!candle?.symbol) continue;
+            const t = fromKrakenWsPair(candle.symbol);
+            if (t && !updated.has(t)) {
+                updated.add(t);
+                onCandleCallback(t, realtimeCandles.get(t));
+            }
+        }
     }
 }
 
@@ -287,8 +297,11 @@ function handleTradeUpdate(msg) {
 
     // Process last trade in the batch
     const lastTrade = data[data.length - 1];
+    if (!lastTrade?.symbol || !lastTrade?.price) return;
     const ticker = fromKrakenWsPair(lastTrade.symbol);
+    if (!ticker || ticker === 'undefined') return;
     const price = parseFloat(lastTrade.price);
+    if (isNaN(price)) return;
 
     if (price > 0) {
         latestPrices.set(ticker, price);
