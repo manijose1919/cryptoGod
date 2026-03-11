@@ -50,24 +50,31 @@ parentPort.on('message', async (msg) => {
         purgeGap: 5,
       });
 
-      // Train LSTM if available and enough data
+      // Train LSTM if available and enough data (5min timeout to prevent blocking)
       let lstmWeights = null;
       if (LSTMNetwork && lstmConfig?.enabled && features2D.length >= 200) {
         try {
-          const seqLen = lstmConfig.sequenceLength || 20;
-          const sequences = [];
-          const seqLabels = [];
-          for (let i = seqLen; i < features2D.length; i++) {
-            sequences.push(features2D.slice(i - seqLen, i));
-            seqLabels.push(labels[i]);
-          }
-          if (sequences.length >= 100) {
-            const lstm = new LSTMNetwork(features2D[0].length, 64, 1);
-            lstm.fit(sequences, seqLabels, lstmConfig.epochs || 30, 0.001);
-            lstmWeights = lstm.serialize ? lstm.serialize() : null;
-          }
+          const lstmTimeout = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('LSTM training timeout (5min)')), 300000)
+          );
+          const lstmTraining = (async () => {
+            const seqLen = lstmConfig.sequenceLength || 20;
+            const sequences = [];
+            const seqLabels = [];
+            for (let i = seqLen; i < features2D.length; i++) {
+              sequences.push(features2D.slice(i - seqLen, i));
+              seqLabels.push(labels[i]);
+            }
+            if (sequences.length >= 100) {
+              const lstm = new LSTMNetwork(features2D[0].length, 64, 1);
+              lstm.fit(sequences, seqLabels, Math.min(lstmConfig.epochs || 30, 20), 0.001);
+              return lstm.serialize ? lstm.serialize() : null;
+            }
+            return null;
+          })();
+          lstmWeights = await Promise.race([lstmTraining, lstmTimeout]);
         } catch (lstmErr) {
-          // Non-critical
+          console.error('[MLWorker] LSTM training error:', lstmErr.message);
         }
       }
 
