@@ -189,10 +189,15 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
             notional: notional.toFixed(2)
         }, sessionId);
 
+        const filledQty = parseFloat(result.order_info?.cumulative_quantity || result.order_info?.filled_quantity || 0);
+        const avgPx = parseFloat(result.order_info?.avg_price || 0);
         return {
             orderId: result.order_id || result.order_info?.order_id || null,
-            quantity: parseFloat(result.order_info?.cumulative_quantity || result.order_info?.filled_quantity || 0),
-            avgPrice: parseFloat(result.order_info?.avg_price || 0),
+            quantity: filledQty,
+            avgPrice: avgPx,
+            // TradingEngine interface compatibility
+            filledPrice: avgPx,
+            filledQuantity: filledQty,
             raw: result
         };
     }
@@ -211,10 +216,15 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
             quantity: sellQty
         }, sessionId);
 
+        const avgPx = parseFloat(result.order_info?.avg_price || 0);
+        const filledQty = parseFloat(result.order_info?.cumulative_quantity || result.order_info?.filled_quantity || quantity);
         return {
             orderId: result.order_id || result.order_info?.order_id || null,
-            avgPrice: parseFloat(result.order_info?.avg_price || 0),
-            filledQuantity: parseFloat(result.order_info?.cumulative_quantity || result.order_info?.filled_quantity || quantity),
+            avgPrice: avgPx,
+            filledQuantity: filledQty,
+            // TradingEngine interface compatibility
+            filledPrice: avgPx,
+            quantity: filledQty,
             raw: result
         };
     }

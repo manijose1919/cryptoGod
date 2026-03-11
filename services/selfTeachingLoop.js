@@ -73,6 +73,7 @@ import {
 
 // State
 let isRunning = false;
+let isRetraining = false; // Concurrency guard for checkAndRetrain
 let checkInterval = null;
 let lastRetrainTime = Date.now(); // Initialize to now so "time since retrain" starts from boot
 let totalTradesProcessed = 0;
@@ -179,11 +180,19 @@ export async function onTradeComplete(tradeData) {
   try {
     // 1. Record trade outcome in ML service (labels the feature vector)
     if (mlPredictionService?.recordTradeOutcome) {
+      // Always pass pnlPercent (not absolute pnl) — they are different units
+      // If pnlPercent not available, compute from entry/exit prices
+      let pnlPct = tradeData.pnlPercent;
+      if (pnlPct == null && tradeData.entryPrice > 0 && tradeData.exitPrice > 0) {
+        pnlPct = ((tradeData.exitPrice - tradeData.entryPrice) / tradeData.entryPrice) * 100;
+      }
+      if (pnlPct == null) pnlPct = 0;
+
       await mlPredictionService.recordTradeOutcome(
         tradeData.ticker,
         tradeData.entryTime,
         tradeData.outcome,
-        tradeData.pnlPercent != null ? tradeData.pnlPercent : (tradeData.pnl != null ? tradeData.pnl : 0)
+        pnlPct
       );
     } else {
       console.warn('[SelfTeach] ML prediction service not available, cannot label features');
@@ -241,8 +250,8 @@ export async function onTradeComplete(tradeData) {
 
     // 4. Accumulate trade result for genetic evolution fitness
     recentTradeResults.push({
-      pnl: tradeData.pnl || 0,
-      pnlPercent: tradeData.pnlPercent || 0,
+      pnl: tradeData.pnl ?? 0,
+      pnlPercent: tradeData.pnlPercent ?? 0,
       strategy: tradeData.strategy,
       ticker: tradeData.ticker,
       outcome: tradeData.outcome,
@@ -275,6 +284,13 @@ export async function checkAndRetrain() {
     return;
   }
 
+  // Concurrency guard: prevent overlapping retrains
+  if (isRetraining) {
+    console.log('[SelfTeach] Retrain already in progress, skipping');
+    return;
+  }
+  isRetraining = true;
+
   const now = Date.now();
   const timeSinceRetrain = now - lastRetrainTime;
   const hasEnoughNewSamples = newSamplesSinceRetrain >= MIN_NEW_SAMPLES;
@@ -282,6 +298,7 @@ export async function checkAndRetrain() {
 
   if (!hasEnoughNewSamples && !hasBeenLongEnough) {
     console.log(`[SelfTeach] No retrain needed. Samples: ${newSamplesSinceRetrain}/${MIN_NEW_SAMPLES}, Time: ${(timeSinceRetrain / 60000).toFixed(1)}m`);
+    isRetraining = false;
     return;
   }
 
@@ -410,6 +427,8 @@ export async function checkAndRetrain() {
 
   } catch (error) {
     console.error('[SelfTeach] Error during retrain:', error);
+  } finally {
+    isRetraining = false;
   }
 }
 
