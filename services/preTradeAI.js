@@ -45,6 +45,14 @@ export async function getPreTradeDecision(ticker, snapshot) {
   // Cache the decision
   decisionCache.set(ticker, { ...result, timestamp: Date.now() });
 
+  // Periodic cleanup: remove expired entries when cache grows
+  if (decisionCache.size > 100) {
+    const now = Date.now();
+    for (const [k, v] of decisionCache) {
+      if (now - v.timestamp > CACHE_TTL_MS) decisionCache.delete(k);
+    }
+  }
+
   return { ...result, fromCache: false };
 }
 
