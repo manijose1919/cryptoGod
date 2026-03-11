@@ -136,6 +136,7 @@ function AppContent() {
                     <SessionReconnect
                         onReconnect={() => {
                             setShowReconnect(false);
+                            sessionStorage.setItem('sessionReconnectDismissed', '1');
                             setIsVPSReconnect(true);
                             setIsTradingActive(true);
                             setIsBotActive(true);
@@ -146,12 +147,14 @@ function AppContent() {
                         }}
                         onStopSession={() => {
                             setShowReconnect(false);
+                            sessionStorage.removeItem('sessionReconnectDismissed');
                             setIsBotActive(false);
                             setIsTradingActive(false);
                         }}
                         onStartNew={() => {
                             setShowReconnect(false);
-                        }}
+                            sessionStorage.removeItem('sessionReconnectDismissed');
+                        }
                     />
                 </div>
             )}
