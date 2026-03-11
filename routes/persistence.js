@@ -41,7 +41,7 @@ router.post('/trades', (req, res, next) => {
     }
     const result = insertTrade({
       ticker, strategy, entryPrice, exitPrice: exitPrice || null,
-      quantity, pnl: pnl || null, pnlPercent: pnlPercent || null,
+      quantity, pnl: pnl ?? null, pnlPercent: pnlPercent ?? null,
       outcome: outcome || null, reason: reason || null,
       entryTime, exitTime: exitTime || null,
     });
@@ -208,10 +208,10 @@ router.put('/sessions/:id', (req, res, next) => {
     const { endTime, finalValue, totalTrades, winRate, pnl } = req.body;
     updateSession(id, {
       endTime: endTime || null,
-      finalValue: finalValue || null,
-      totalTrades: totalTrades || 0,
-      winRate: winRate || null,
-      pnl: pnl || null,
+      finalValue: finalValue ?? null,
+      totalTrades: totalTrades ?? 0,
+      winRate: winRate ?? null,
+      pnl: pnl ?? null,
     });
     res.json({ success: true });
   } catch (error) {
