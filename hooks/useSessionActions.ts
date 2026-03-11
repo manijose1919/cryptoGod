@@ -16,13 +16,21 @@ export function useSessionActions() {
     } = useTradingContext();
     const { setTicker, setUnlimitedTrades } = useSettingsContext();
 
-    // Check for active backend session on mount
+    // Check for active backend session on mount (skip if already dismissed this browser session)
     useEffect(() => {
         const checkForActiveSession = async () => {
             try {
                 const res = await fetch('/api/session/full-status');
                 const data = await res.json();
-                if (data.sessionActive) setShowReconnect(true);
+                if (data.sessionActive) {
+                    const dismissed = sessionStorage.getItem('sessionReconnectDismissed');
+                    if (!dismissed) {
+                        setShowReconnect(true);
+                    } else {
+                        // Auto-reconnect silently since user already acknowledged
+                        setShowReconnect(false);
+                    }
+                }
             } catch {
                 // Backend not available
             } finally {
