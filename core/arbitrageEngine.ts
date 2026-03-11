@@ -125,9 +125,9 @@ class ArbitrageEngine {
         // Calculate spread
         // Buy at ask (higher), sell at bid (lower)
         // Arb 1: Buy Kraken, Sell Crypto.com
-        const spread1 = (cryptoComPrice.bid - krakenPrice.ask) / krakenPrice.ask;
+        const spread1 = krakenPrice.ask > 0 ? (cryptoComPrice.bid - krakenPrice.ask) / krakenPrice.ask : 0;
         // Arb 2: Buy Crypto.com, Sell Kraken
-        const spread2 = (krakenPrice.bid - cryptoComPrice.ask) / cryptoComPrice.ask;
+        const spread2 = cryptoComPrice.ask > 0 ? (krakenPrice.bid - cryptoComPrice.ask) / cryptoComPrice.ask : 0;
 
         const totalFees1 = FEES.kraken.taker + FEES['crypto.com'].taker + SLIPPAGE_BUFFER * 2;
         const totalFees2 = FEES['crypto.com'].taker + FEES.kraken.taker + SLIPPAGE_BUFFER * 2;
@@ -237,6 +237,7 @@ class ArbitrageEngine {
     if (opp.estimatedProfitPct < 0.1) return;
 
     this.activeArbs++;
+    try {
     this.lastArbTime.set(opp.ticker, Date.now());
 
     const tradeSize = this.simTradeSize;
@@ -297,7 +298,9 @@ class ArbitrageEngine {
       timestamp: Date.now(),
     });
 
-    this.activeArbs--;
+    } finally {
+      this.activeArbs--;
+    }
   }
 
   // ─── Getters ─────────────────────────────────────────────

@@ -127,7 +127,7 @@ export class IncrementalIndicatorEngine {
   }
 
   private updateState(state: IndicatorState, close: number, high: number, low: number, volume: number): void {
-    const prevClose = state.lastPrice || close;
+    const prevClose = state.lastPrice ?? close;
     state.tickCount++;
 
     // ── EMA updates (O(1) each) ──

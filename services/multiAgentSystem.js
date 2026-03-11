@@ -254,7 +254,7 @@ class MetaLearner {
     const accuracies = AGENT_NAMES.map(n => this.agentStats[n].emaAccuracy);
     const maxAcc = Math.max(...accuracies);
     const expAccs = accuracies.map(a => Math.exp((a - maxAcc) * temp));
-    const sumExp = expAccs.reduce((a, b) => a + b, 0);
+    const sumExp = expAccs.reduce((a, b) => a + b, 0) || 1;
 
     for (let i = 0; i < AGENT_NAMES.length; i++) {
       this.agentStats[AGENT_NAMES[i]].weight = expAccs[i] / sumExp;
