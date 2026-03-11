@@ -150,10 +150,14 @@ export function evaluateConsensus(features) {
   const bullPred = bullBrain.predict(features);
   const bearPred = bearBrain.predict(features);
 
+  if (!bullPred?.probabilities || !bearPred?.probabilities) {
+    return { consensus: 'HOLD', confidence: 0, bullConfidence: 0, bearConfidence: 0, marginOfVictory: 0 };
+  }
+
   // Bull confidence = probability of UP (profitable trade)
-  const bullConfidence = bullPred.probabilities.up * 100;
+  const bullConfidence = (bullPred.probabilities.up ?? 0.5) * 100;
   // Bear confidence = probability of UP in bear model = probability trade is a LOSS
-  const bearConfidence = bearPred.probabilities.up * 100;
+  const bearConfidence = (bearPred.probabilities.up ?? 0.5) * 100;
 
   const marginOfVictory = bullConfidence - bearConfidence;
   const netConfidence = bullConfidence - bearConfidence;
