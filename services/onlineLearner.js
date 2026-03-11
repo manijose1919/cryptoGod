@@ -136,7 +136,7 @@ class ThompsonSampler {
       const u = Math.random();
 
       if (u < 1 - 0.0331 * x * x * x * x) return d * v;
-      if (Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) return d * v;
+      if (Math.log(Math.max(1e-10, u)) < 0.5 * x * x + d * (1 - v + Math.log(Math.max(1e-10, v)))) return d * v;
     }
   }
 
@@ -144,7 +144,7 @@ class ThompsonSampler {
    * Standard normal sample (Box-Muller)
    */
   _randn() {
-    const u1 = Math.random();
+    const u1 = Math.max(1e-10, Math.random());
     const u2 = Math.random();
     return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   }
@@ -444,7 +444,7 @@ class OnlineLearner {
     if (!lr || !lr.weights) return;
 
     const learningRate = 0.001; // Small LR for stability
-    const scaledFeatures = mlEngine.scaler.transformRow(features);
+    const scaledFeatures = mlEngine.scaler?.transformRow(features) || features;
 
     // Compute current prediction
     let z = lr.bias;

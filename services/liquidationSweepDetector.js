@@ -133,7 +133,7 @@ function checkPriceStabilization(candles) {
   if (!candles || candles.length < PRICE_STABILIZATION_CANDLES + 2) return false;
 
   const recent = candles.slice(-(PRICE_STABILIZATION_CANDLES + 2));
-  const ranges = recent.map(c => (c.h - c.l) / c.c);
+  const ranges = recent.map(c => c.c > 0 ? (c.h - c.l) / c.c : 0);
 
   // Check if volatility is decreasing (last 3 ranges smaller than first 2)
   const earlyAvg = (ranges[0] + ranges[1]) / 2;
