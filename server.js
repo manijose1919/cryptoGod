@@ -2350,6 +2350,24 @@ async function handlePartialSell(position, price, fraction, reason) {
 
     addLog(`[PARTIAL-EXIT] ${ticker}: Sold ${(fraction * 100).toFixed(0)}% (${sellQty.toFixed(6)}) @ $${avgPrice.toFixed(2)} | PnL: $${partialPnl.toFixed(2)} | ${reason}`, partialPnl >= 0 ? 'PROFIT' : 'LOSS');
 
+    // Record partial sell in circuit breaker, strategy weights, and ML feedback
+    // Without this, 60% of trade data (stage1=25% + stage2=35%) was invisible to analytics
+    try { cbRecordTrade(partialPnl, position.entryStrategy || 'TREND', ticker); } catch (e) { /* non-critical */ }
+    try { recordStrategyResult(position.entryStrategy || 'TREND', partialPnl > 0, partialPnl); } catch (e) { /* non-critical */ }
+    try { beastRecordTrade(partialPnl > 0, Math.abs(partialPnl), position.entryStrategy || 'TREND'); } catch (e) { /* non-critical */ }
+
+    // Record in trade log for ML/optimizer
+    if (portfolio.tradeLog) {
+        portfolio.tradeLog.push({
+            ticker, strategy: position.entryStrategy || 'TREND',
+            entryPrice: position.openPrice, exitPrice: avgPrice,
+            quantity: sellQty, pnl: partialPnl,
+            pnlPercent: position.openPrice > 0 ? ((avgPrice - position.openPrice) / position.openPrice * 100) : 0,
+            exitTime: Date.now(), entryTime: position.entryTime,
+            reason: `PARTIAL_${reason}`, fraction,
+        });
+    }
+
     logThought({
         type: 'SELL', ticker, action: partialPnl >= 0 ? 'PARTIAL_PROFIT' : 'PARTIAL_LOSS',
         confidence: 0, reason: `${reason} (${(fraction*100).toFixed(0)}% of position)`,
@@ -3088,7 +3106,9 @@ async function tradingBotLoop() {
             }
 
             const profitGoal = profitGoals?.[position.entryStrategy] || 0;
-            const currentProfit = (currentPrice - position.openPrice) * position.quantity;
+            const fees = getActiveFees();
+            const roundTripFee = (position.openPrice + currentPrice) * position.quantity * fees.perSide;
+            const currentProfit = (currentPrice - position.openPrice) * position.quantity - roundTripFee;
 
             let exitReason = null;
 
@@ -5745,9 +5765,10 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         if (botState.tradingMode === 'SIMULATION' && getFlag('SIMULATION_ACCURACY')) {
             const emergencySlPct = 0.05; // 5% emergency SL, same as real mode
             const slPrice = parseFloat(avgPrice) * (1 - emergencySlPct);
+            const totalPosQty = portfolio.positions[ticker]?.quantity || parseFloat(quantity);
             simNativeStopOrders.set(ticker, {
                 stopPrice: slPrice,
-                volume: parseFloat(quantity),
+                volume: totalPosQty,
                 placedAt: Date.now(),
             });
             const slFmt = slPrice < 1 ? slPrice.toPrecision(4) : slPrice.toFixed(2);
@@ -5758,37 +5779,44 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
         if (botState.tradingMode !== 'SIMULATION' && getActiveExchangeId() === 'kraken') {
             try {
                 const adapter = getExchangeAdapter();
+                const totalPosQtyReal = portfolio.positions[ticker]?.quantity || parseFloat(quantity);
+
+                // Cancel existing SL if pyramiding (replace with updated volume)
+                const existingSL = nativeStopOrders.get(ticker);
+                if (existingSL?.orderId) {
+                    try { await withTimeout(adapter.cancelOrder(existingSL.orderId), 10000, 'cancelOldSL'); } catch (e) { /* best effort */ }
+                }
 
                 // #12: Use trailing stop if enabled, otherwise fixed stop-loss
                 if (getFlag('NATIVE_TRAILING_STOP') && adapter.placeTrailingStop) {
                     const trailPct = 0.03; // 3% trail offset
                     const trailOffset = parseFloat(avgPrice) * trailPct;
-                    const tsResult = await withTimeout(adapter.placeTrailingStop(ticker, parseFloat(quantity), trailOffset, botState.sessionId), 15000, 'placeTrailingStop');
+                    const tsResult = await withTimeout(adapter.placeTrailingStop(ticker, totalPosQtyReal, trailOffset, botState.sessionId), 15000, 'placeTrailingStop');
                     if (tsResult.orderId) {
                         nativeStopOrders.set(ticker, {
                             orderId: tsResult.orderId,
                             type: 'trailing-stop',
                             trailOffset,
-                            volume: parseFloat(quantity),
+                            volume: totalPosQtyReal,
                             placedAt: Date.now(),
                         });
-                        addLog(`[NATIVE-TS] Placed trailing stop for ${ticker}: ${tsResult.orderId} offset=$${trailOffset.toFixed(2)} (-${(trailPct * 100).toFixed(1)}%)`, 'INFO');
+                        addLog(`[NATIVE-TS] Placed trailing stop for ${ticker}: ${tsResult.orderId} offset=$${trailOffset.toFixed(2)} (-${(trailPct * 100).toFixed(1)}%) vol=${totalPosQtyReal}`, 'INFO');
                     }
                 } else {
                     // Emergency SL: 5% below entry (wide enough to avoid noise, tight enough to protect)
                     // Will be tightened by refreshExitLevels() once ATR data is available
                     const emergencySlPct = 0.05;
                     const slPrice = parseFloat(avgPrice) * (1 - emergencySlPct);
-                    const slResult = await withTimeout(adapter.placeStopLoss(ticker, parseFloat(quantity), slPrice, botState.sessionId), 15000, 'placeEmergencySL');
+                    const slResult = await withTimeout(adapter.placeStopLoss(ticker, totalPosQtyReal, slPrice, botState.sessionId), 15000, 'placeEmergencySL');
                     if (slResult.orderId) {
                         nativeStopOrders.set(ticker, {
                             orderId: slResult.orderId,
                             type: 'stop-loss',
                             stopPrice: slPrice,
-                            volume: parseFloat(quantity),
+                            volume: totalPosQtyReal,
                             placedAt: Date.now(),
                         });
-                        addLog(`[NATIVE-SL] Placed exchange stop-loss for ${ticker}: ${slResult.orderId} @ $${slPrice.toFixed(2)} (-${(emergencySlPct * 100).toFixed(1)}%)`, 'INFO');
+                        addLog(`[NATIVE-SL] Placed exchange stop-loss for ${ticker}: ${slResult.orderId} @ $${slPrice.toFixed(2)} (-${(emergencySlPct * 100).toFixed(1)}%) vol=${totalPosQtyReal}`, 'INFO');
                     }
                 }
             } catch (slErr) {
