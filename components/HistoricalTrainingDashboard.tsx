@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
 import type {
   TrainingDownloadStatus,
   TrainingDataSummary,
@@ -20,13 +19,7 @@ import { ShortTraining } from './ShortTraining';
 import { GridTraining } from './GridTraining';
 import { StakingCalculator } from './StakingCalculator';
 
-const NAV_LINKS = [
-  { to: '/', label: 'Crypto' },
-  { to: '/performance', label: 'Performance' },
-  { to: '/backtest', label: 'Backtest' },
-  { to: '/training', label: 'Training' },
-  { to: '/system', label: 'System' },
-];
+// Nav provided by PageLayout wrapper
 
 const ALL_PAIRS = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
 const ALL_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d', '1w'];
@@ -365,20 +358,7 @@ export const HistoricalTrainingDashboard: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 font-sans" style={{ color: 'var(--text-primary)' }}>
-      {/* Nav */}
-      <nav className="flex items-center gap-4 p-4 border-b border-gray-700/50">
-        {NAV_LINKS.map(link => (
-          <Link
-            key={link.to}
-            to={link.to}
-            className={`text-sm px-3 py-1 rounded ${link.to === '/training' ? 'bg-cyan-800/50 text-cyan-300' : 'text-gray-400 hover:text-white'}`}
-          >
-            {link.label}
-          </Link>
-        ))}
-      </nav>
-
+    <div className="font-sans" style={{ color: 'var(--text-primary)' }}>
       <main className="p-4 space-y-6 max-w-7xl mx-auto">
         <h1 className="text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
           Historical ML Training — Time Machine

@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import { ReplayEngine, type ReplayState, type ReplayCandle } from '../services/replayService';
 import { getAvailableData, type AvailableData } from '../services/backtestService';
 
@@ -9,15 +8,6 @@ interface Annotation {
   note: string;
   price: number;
 }
-
-const NAV_LINKS = [
-  { to: '/', label: 'Crypto' },
-  { to: '/performance', label: 'Performance' },
-  { to: '/backtest', label: 'Backtest' },
-  { to: '/replay', label: 'Replay' },
-  { to: '/training', label: 'Training' },
-  { to: '/system', label: 'System' },
-];
 
 export const ReplayDashboard: React.FC = () => {
   const engineRef = useRef(new ReplayEngine());
@@ -131,16 +121,7 @@ export const ReplayDashboard: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 font-sans" style={{ color: 'var(--text-primary)' }}>
-      <nav className="flex items-center gap-4 p-4 border-b border-gray-700/50">
-        {NAV_LINKS.map(link => (
-          <Link key={link.to} to={link.to}
-            className={`text-sm px-3 py-1 rounded ${link.to === '/replay' ? 'bg-cyan-800/50 text-cyan-300' : 'text-gray-400 hover:text-white'}`}>
-            {link.label}
-          </Link>
-        ))}
-      </nav>
-
+    <div className="font-sans" style={{ color: 'var(--text-primary)' }}>
       <main className="p-4 max-w-7xl mx-auto space-y-4">
         <h1 className="text-xl font-bold text-cyan-300">Replay Mode</h1>
 
