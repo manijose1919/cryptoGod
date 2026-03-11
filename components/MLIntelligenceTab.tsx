@@ -163,7 +163,7 @@ export default function MLIntelligenceTab() {
           {thoughts.map((t, i) => (
             <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '8px' }}>
               <span style={{ color: 'var(--text-muted)', flexShrink: 0, width: '55px' }}>
-                {new Date(t.timestamp || t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {(t.timestamp || t.created_at) ? new Date(t.timestamp || t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}
               </span>
               <span style={{ color: t.action?.includes('BLOCK') || t.action?.includes('DISAGREE') ? 'var(--red)' : t.action?.includes('PASS') || t.action?.includes('AGREE') ? 'var(--green)' : 'var(--text-header)', fontWeight: 600, flexShrink: 0, width: '70px' }}>
                 {t.action || t.type}
@@ -186,7 +186,7 @@ export default function MLIntelligenceTab() {
             {gatekeeper.map((g, i) => (
               <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '6px' }}>
                 <span style={{ color: 'var(--text-muted)', flexShrink: 0, width: '50px' }}>
-                  {new Date(g.timestamp || g.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {(g.timestamp || g.created_at) ? new Date(g.timestamp || g.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}
                 </span>
                 <span style={{
                   color: g.decision === 'BLOCK' ? 'var(--red)' : 'var(--green)',

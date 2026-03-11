@@ -91,7 +91,7 @@ export default function PortfolioRiskPanel() {
             <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 2fr', gap: '4px', padding: '3px 0', borderBottom: '1px solid var(--border-subtle)' }}>
               <span style={{ fontWeight: 600 }}>{pos.ticker}</span>
               <span>{(pos.weight * 100).toFixed(1)}%</span>
-              <span style={{ color: pos.pnlPct >= 0 ? 'var(--green)' : 'var(--red)' }}>{pos.pnlPct.toFixed(2)}%</span>
+              <span style={{ color: (pos.pnlPct || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>{(pos.pnlPct || 0).toFixed(2)}%</span>
               <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>
                 {pos.correlated?.join(', ') || 'none'}
               </span>

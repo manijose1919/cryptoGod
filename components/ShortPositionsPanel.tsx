@@ -83,13 +83,13 @@ export default function ShortPositionsPanel() {
           {data.positions.map((pos, i) => (
             <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '4px', padding: '3px 0', borderBottom: '1px solid var(--border-subtle)' }}>
               <span style={{ color: 'var(--red)', fontWeight: 600 }}>{pos.ticker}</span>
-              <span>${pos.entryPrice?.toFixed(2)}</span>
-              <span>${pos.currentPrice?.toFixed(2)}</span>
+              <span>${(pos.entryPrice ?? 0).toFixed(2)}</span>
+              <span>${(pos.currentPrice ?? 0).toFixed(2)}</span>
               <span style={{ color: (pos.pnl || 0) >= 0 ? 'var(--green)' : 'var(--red)' }}>
                 {(pos.pnlPercent || 0).toFixed(2)}%
               </span>
               <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>
-                {pos.stopLoss?.toFixed(0)}/{pos.takeProfit?.toFixed(0)}
+                {(pos.stopLoss ?? 0).toFixed(0)}/{(pos.takeProfit ?? 0).toFixed(0)}
               </span>
             </div>
           ))}

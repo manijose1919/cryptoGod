@@ -15,7 +15,8 @@ const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, wat
   
   const positionsValue = Object.values(positions || {}).reduce((acc, position) => {
 // FIX: Property 'at' does not exist on type 'Candle[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.
-    const currentPrice = watchlistData[position.ticker]?.candles?.[watchlistData[position.ticker]?.candles.length - 1]?.close ?? position.openPrice;
+    const candles = watchlistData[position.ticker]?.candles;
+    const currentPrice = (candles && candles.length > 0 ? candles[candles.length - 1]?.close : undefined) ?? position.openPrice;
     return acc + (position.quantity * currentPrice);
   }, 0);
 
@@ -67,7 +68,8 @@ const PortfolioSummaryInner: React.FC<PortfolioSummaryProps> = ({ portfolio, wat
                 {Object.keys(positions || {}).length > 0 ? (
                     Object.values(positions || {}).map(pos => {
 // FIX: Property 'at' does not exist on type 'Candle[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.
-                        const currentPrice = watchlistData[pos.ticker]?.candles?.[watchlistData[pos.ticker]?.candles.length - 1]?.close ?? pos.openPrice;
+                        const posCandles = watchlistData[pos.ticker]?.candles;
+                        const currentPrice = (posCandles && posCandles.length > 0 ? posCandles[posCandles.length - 1]?.close : undefined) ?? pos.openPrice;
                         const positionPnl = (currentPrice - pos.openPrice) * pos.quantity;
                         const positionPnlColor = positionPnl >= 0 ? 'text-green-500' : 'text-red-500';
                         return (

@@ -263,10 +263,10 @@ export const BacktestDashboard: React.FC = () => {
             <h3 className="text-xs text-cyan-300 font-semibold mb-2">Walk-Forward Analysis ({strategy})</h3>
             {wfResult.summary && (
               <div className="grid grid-cols-4 gap-3 mb-3">
-                <div className="text-center"><div className="text-[10px] text-gray-400">Avg Test Return</div><div className="text-sm font-bold text-white">{wfResult.summary.avgTestReturn?.toFixed(2)}%</div></div>
-                <div className="text-center"><div className="text-[10px] text-gray-400">Avg Win Rate</div><div className="text-sm font-bold text-white">{wfResult.summary.avgTestWinRate?.toFixed(1)}%</div></div>
+                <div className="text-center"><div className="text-[10px] text-gray-400">Avg Test Return</div><div className="text-sm font-bold text-white">{(wfResult.summary.avgTestReturn ?? 0).toFixed(2)}%</div></div>
+                <div className="text-center"><div className="text-[10px] text-gray-400">Avg Win Rate</div><div className="text-sm font-bold text-white">{(wfResult.summary.avgTestWinRate ?? 0).toFixed(1)}%</div></div>
                 <div className="text-center"><div className="text-[10px] text-gray-400">Consistency</div><div className="text-sm font-bold text-white">{((wfResult.summary.consistency ?? 0) * 100).toFixed(0)}%</div></div>
-                <div className="text-center"><div className="text-[10px] text-gray-400">Avg Sharpe</div><div className="text-sm font-bold text-white">{wfResult.summary.avgTestSharpe?.toFixed(2)}</div></div>
+                <div className="text-center"><div className="text-[10px] text-gray-400">Avg Sharpe</div><div className="text-sm font-bold text-white">{(wfResult.summary.avgTestSharpe ?? 0).toFixed(2)}</div></div>
               </div>
             )}
             <div className="space-y-1">

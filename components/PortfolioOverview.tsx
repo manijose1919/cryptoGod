@@ -42,7 +42,7 @@ export function PortfolioOverview() {
       .then(d => {
         if (Array.isArray(d) && d.length > 0) {
           setEquityCurve(d.map((p: { timestamp?: string; equity?: number; t?: string; e?: number }) => ({
-            time: new Date(p.timestamp || p.t || '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            time: (() => { const raw = p.timestamp || p.t; const d = raw ? new Date(raw) : null; return d && !isNaN(d.getTime()) ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'; })(),
             equity: p.equity ?? p.e ?? 0,
           })));
         }
