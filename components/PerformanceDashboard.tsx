@@ -90,8 +90,9 @@ export const PerformanceDashboard: React.FC = () => {
   const winRate = totalTrades > 0 ? (wins / totalTrades * 100) : 0;
 
   // Simple equity chart using CSS
-  const maxEquity = Math.max(...equityCurve.map(p => p.equity), initialBudget);
-  const minEquity = Math.min(...equityCurve.map(p => p.equity), initialBudget);
+  const equityValues = equityCurve.map(p => p.equity);
+  const maxEquity = equityValues.length > 0 ? Math.max(...equityValues, initialBudget) : initialBudget;
+  const minEquity = equityValues.length > 0 ? Math.min(...equityValues, initialBudget) : initialBudget;
   const equityRange = maxEquity - minEquity || 1;
 
   return (

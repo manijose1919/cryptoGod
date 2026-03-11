@@ -112,7 +112,7 @@ export function updateEquityCurve(portfolioValue: number): void {
       drawdownStartTime = now;
     }
 
-    const currentDrawdown = ((peakValue - troughValue) / peakValue) * 100;
+    const currentDrawdown = peakValue > 0 ? ((peakValue - troughValue) / peakValue) * 100 : 0;
     if (currentDrawdown > maxDrawdown) {
       maxDrawdown = currentDrawdown;
     }

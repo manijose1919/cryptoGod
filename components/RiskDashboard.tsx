@@ -46,6 +46,7 @@ interface MonteCarloData {
 
 interface PositionSizing {
   asset: string;
+  ticker?: string;
   recommended: number;
   maxAllowed: number;
   reason: string;
@@ -600,7 +601,7 @@ export const RiskDashboard: React.FC = () => {
                     {data.positionSizing.map((pos, i) => (
                       <div key={i} className="bg-gray-900/30 p-2 rounded flex items-center justify-between">
                         <div>
-                          <span className="text-xs text-gray-300 font-medium">{pos.asset}</span>
+                          <span className="text-xs text-gray-300 font-medium">{pos.asset || pos.ticker || 'Unknown'}</span>
                           <p className="text-[10px] text-gray-500">{pos.reason}</p>
                         </div>
                         <div className="text-right">
