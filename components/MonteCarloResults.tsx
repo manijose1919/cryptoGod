@@ -58,7 +58,7 @@ export const MonteCarloResults: React.FC<Props> = ({ runId }) => {
 
   if (!runId) return null;
 
-  const maxHist = results ? Math.max(...results.histogram, 1) : 1;
+  const maxHist = results?.histogram?.length ? Math.max(...results.histogram, 1) : 1;
 
   return (
     <div className="bg-gray-800/50 rounded-lg p-4 space-y-3">

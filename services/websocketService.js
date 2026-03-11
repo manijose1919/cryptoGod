@@ -388,5 +388,6 @@ export function closeWebSocket() {
     ws = null;
   }
   connected = false;
+  latencyHistory.length = 0;
   console.log('[WebSocket] Connection closed');
 }

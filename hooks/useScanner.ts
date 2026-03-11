@@ -44,8 +44,8 @@ export function useScanner() {
                     const breakoutValue = data.breakoutData.at(-1)?.value ?? 50;
                     const whaleValue = data.whaleData.at(-1)?.value ?? 50;
                     const momentumValue = data.momentumData.at(-1)?.value ?? 50;
-                    const confluenceScore = data.trendDashboardData.score;
-                    const divergenceConfidence = data.divergenceData.confidence;
+                    const confluenceScore = data.trendDashboardData?.score ?? 0;
+                    const divergenceConfidence = data.divergenceData?.confidence ?? 0;
 
                     insights.TREND!.push({ ticker: asset, value: tcValue, score: 0 });
                     insights.BREAKOUT!.push({ ticker: asset, value: breakoutValue, score: 0 });

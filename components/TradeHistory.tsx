@@ -80,9 +80,9 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
         return {
             totalTrades: trades.length,
             closedTrades: sellTrades.length,
-            winRate: (wins.length / sellTrades.length) * 100,
+            winRate: sellTrades.length > 0 ? (wins.length / sellTrades.length) * 100 : 0,
             totalPnL: pnlList.reduce((a, b) => a + b, 0),
-            avgPnL: pnlList.reduce((a, b) => a + b, 0) / sellTrades.length,
+            avgPnL: sellTrades.length > 0 ? pnlList.reduce((a, b) => a + b, 0) / sellTrades.length : 0,
             largestWin: Math.max(0, ...pnlList),
             largestLoss: Math.min(0, ...pnlList),
             avgHoldTime: holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0
