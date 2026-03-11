@@ -2642,20 +2642,18 @@ async function checkTickExit(ticker, price) {
         const pyramidThreshold = position._pyramidCount === 0 ? 2.0 : 4.0; // First at +2%, second at +4%
 
         if (pnlPct >= pyramidThreshold && position.entryStrategy === 'TREND') {
-            // Verify trend is still strong
+            // Verify trend is still strong using cached momentum (0-100 scale)
             let tcScore = 0;
             try {
-                const mom = position._cachedMom;
-                tcScore = mom?.tcScore || 0;
+                tcScore = typeof position._cachedMom === 'number' ? position._cachedMom : 0;
             } catch (e) {}
 
             // Check regime is still bullish
-            // Note: getMarketRegime(candles, ticker) returns 'UPTREND'/'SIDEWAYS'/'DOWNTREND'
-            // We don't have candles in checkTickExit, so use the bot loop's cached regime
+            // detectMarketRegime returns 'STRONG_UP'/'UP'/'SIDEWAYS'/'DOWN'/'STRONG_DOWN'
             let regimeOk = false;
             try {
-                const cachedRegime = botState._lastRegime || 'UNKNOWN';
-                regimeOk = cachedRegime === 'UPTREND';
+                const cachedRegime = botState._lastRegime || position.regime || 'UNKNOWN';
+                regimeOk = cachedRegime === 'STRONG_UP' || cachedRegime === 'UP';
             } catch (e) {}
 
             if (tcScore > 70 && regimeOk) {
@@ -5272,6 +5270,7 @@ async function tradingBotLoop() {
                             entryType: sniperCandidate ? 'SNIPER' : 'STANDARD',
                             fearGreedAtEntry: fearGreedGate?.getFearGreedIndex?.() ?? null,
                             atrPct: candles.length >= 15 ? ((calculateATRFromCandles(candles, 14) / currentPrice) * 100) : null,
+                            cachedMom: _cachedMom,
                         });
                     }
                 }
@@ -5744,6 +5743,7 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                 metaRLActions: entryMeta.metaRLActions || null,
                 fearGreedAtEntry: entryMeta.fearGreedAtEntry ?? null,
                 atrPct: entryMeta.atrPct ?? null,
+                _cachedMom: entryMeta.cachedMom ?? null,
             };
         }
         // Guard against cash going negative (slippage/fee can exceed original estimate)
