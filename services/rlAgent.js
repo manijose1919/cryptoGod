@@ -249,8 +249,8 @@ class PPOAgent {
   _buildState(features, portfolioState) {
     const ps = portfolioState || {};
     return [
-      ...features.slice(0, 103), // Pad/truncate to 103
-      ...new Array(Math.max(0, 103 - features.length)).fill(0),
+      ...features.slice(0, 109), // Pad/truncate to 109
+      ...new Array(Math.max(0, 109 - features.length)).fill(0),
       ps.position || 0,          // 0=flat, 1=long, -1=short
       ps.unrealizedPnl || 0,
       ps.drawdown || 0,
@@ -388,7 +388,7 @@ class TradingEnvironment {
 
   _getState() {
     const idx = this.startIdx + this.currentStep;
-    const features = this.features2D[idx] || new Array(103).fill(0);
+    const features = this.features2D[idx] || new Array(109).fill(0);
     const candle = this.candles[idx];
     const price = candle?.close || candle?.[4] || 0;
 
