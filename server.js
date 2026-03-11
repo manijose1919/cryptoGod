@@ -7116,15 +7116,16 @@ const startServer = async () => {
                     trades: {
                         total: portfolio.tradeLog?.length || 0,
                         winRate: (() => {
-                            const sells = (portfolio.tradeLog || []).filter(t => t.type === 'SELL');
-                            if (sells.length === 0) return 0;
-                            const wins = sells.filter(t => (t.pnl || 0) > 0).length;
-                            return (wins / sells.length) * 100;
+                            // All tradeLog entries are sell trades (appended in handleSell)
+                            const trades = portfolio.tradeLog || [];
+                            if (trades.length === 0) return 0;
+                            const wins = trades.filter(t => (t.pnl || 0) > 0).length;
+                            return (wins / trades.length) * 100;
                         })(),
                         avgPnl: (() => {
-                            const sells = (portfolio.tradeLog || []).filter(t => t.type === 'SELL');
-                            if (sells.length === 0) return 0;
-                            return sells.reduce((s, t) => s + (t.pnl || 0), 0) / sells.length;
+                            const trades = portfolio.tradeLog || [];
+                            if (trades.length === 0) return 0;
+                            return trades.reduce((s, t) => s + (t.pnl || 0), 0) / trades.length;
                         })(),
                     },
                 };
