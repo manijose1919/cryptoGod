@@ -146,6 +146,14 @@ function checkPriceStabilization(candles) {
  * Get recent sweep events for dashboard.
  */
 export function getSweepEvents() {
+  // Prune events older than 72h to prevent unbounded Map growth
+  const cutoff = Date.now() - 72 * 60 * 60 * 1000;
+  for (const [ticker, event] of sweepEvents) {
+    if (event.timestamp < cutoff) {
+      sweepEvents.delete(ticker);
+      lastSignalTime.delete(ticker);
+    }
+  }
   const events = [];
   for (const [ticker, event] of sweepEvents) {
     events.push({ ticker, ...event });

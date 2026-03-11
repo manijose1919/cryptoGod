@@ -307,7 +307,7 @@ export function stopDerivativesPolling() {
 export function getDerivativesSignal(ticker) {
   const symbol = ticker.replace(/USD[T]?$/, '');
   const cached = cache.get(symbol);
-  if (!cached || Date.now() - cached.timestamp > CACHE_TTL_MS * 2) return null;
+  if (!cached || Date.now() - cached.timestamp > CACHE_TTL_MS) return null;
   return cached.data;
 }
 

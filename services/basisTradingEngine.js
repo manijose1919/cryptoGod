@@ -173,7 +173,7 @@ export function closeBasisPosition(symbol) {
 
   const holdTime = Date.now() - pos.entryTime;
   const holdDays = holdTime / (24 * 60 * 60 * 1000);
-  const apr = holdDays > 0 ? (pos.fundingCollected / pos.notionalUSD) * (365 / holdDays) * 100 : 0;
+  const apr = holdDays > 0 && pos.notionalUSD > 0 ? (pos.fundingCollected / pos.notionalUSD) * (365 / holdDays) * 100 : 0;
 
   const result = {
     success: true,
