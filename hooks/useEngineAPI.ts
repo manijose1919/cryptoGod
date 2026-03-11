@@ -26,26 +26,29 @@ export interface EngineStatus {
   mode: string;
   exchange: string;
   uptime: number;
-  positionDetails?: PositionDetail[];
-  portfolio: {
-    cash: number;
-    equity: number;
-    pnl: number;
-    pnlPct: number;
-    positions: number;
-    exposurePct: number;
-  };
-  circuitBreaker: {
-    consecutiveLosses: number;
-    dailyPnl: number;
-    drawdownPct: number;
-    isPaused: boolean;
-  };
-  trades: {
+  sessionId?: string;
+  // Flat fields from TradingEngine.getStatus()
+  equity: number;
+  cash: number;
+  initialBudget: number;
+  pnlUsd: number;
+  pnlPct: number;
+  positions: number;
+  positionDetails?: Record<string, any> | any[];
+  tickCount?: number;
+  dailyPnl: number;
+  dailyTradeCount?: number;
+  consecutiveLosses: number;
+  peakEquity?: number;
+  drawdownPct: number;
+  tradeStats: {
     total: number;
+    wins: number;
+    losses: number;
     winRate: number;
     avgPnl: number;
   };
+  recentTrades?: any[];
 }
 
 export interface GlobalPortfolio {

@@ -45,10 +45,22 @@ export function ExchangeDashboard({ exchange }: Props) {
 
   const engineState = status?.state || 'IDLE';
   const mode = status?.mode || 'SIMULATION';
-  const portfolio = status?.portfolio;
-  const cb = status?.circuitBreaker;
-  const trades = status?.trades;
-  const positions = status?.positionDetails || [];
+  // Backend returns flat structure from TradingEngine.getStatus()
+  const equity = status?.equity ?? 0;
+  const cash = status?.cash ?? 0;
+  const pnl = status?.pnlUsd ?? 0;
+  const pnlPct = status?.pnlPct ?? 0;
+  const posCount = status?.positions ?? 0;
+  const exposurePct = equity > 0 ? ((equity - cash) / equity) * 100 : 0;
+  const winRate = status?.tradeStats?.winRate ?? 0;
+  const consecutiveLosses = status?.consecutiveLosses ?? 0;
+  const dailyPnl = status?.dailyPnl ?? 0;
+  const drawdownPct = status?.drawdownPct ?? 0;
+  // positionDetails is an object keyed by ticker — convert to array
+  const posObj = status?.positionDetails || {};
+  const positions = Array.isArray(posObj)
+    ? posObj
+    : Object.entries(posObj).map(([ticker, pos]: [string, any]) => ({ ticker, ...pos }));
 
   return (
     <div className="exchange-dashboard" style={{ '--accent': accentColor } as React.CSSProperties}>
@@ -153,30 +165,30 @@ export function ExchangeDashboard({ exchange }: Props) {
       <div className="ed-portfolio-grid">
         <div className="ed-stat">
           <span className="ed-stat-label">Equity</span>
-          <span className="ed-stat-value">${(portfolio?.equity || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          <span className="ed-stat-value">${equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
         <div className="ed-stat">
           <span className="ed-stat-label">Cash</span>
-          <span className="ed-stat-value">${(portfolio?.cash || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+          <span className="ed-stat-value">${cash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
         <div className="ed-stat">
           <span className="ed-stat-label">P&L</span>
-          <span className={`ed-stat-value ${(portfolio?.pnl || 0) >= 0 ? 'positive' : 'negative'}`}>
-            {(portfolio?.pnl || 0) >= 0 ? '+' : ''}${(portfolio?.pnl || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            <small> ({portfolio?.pnlPct?.toFixed(1) || '0.0'}%)</small>
+          <span className={`ed-stat-value ${pnl >= 0 ? 'positive' : 'negative'}`}>
+            {pnl >= 0 ? '+' : ''}${pnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            <small> ({pnlPct.toFixed(1)}%)</small>
           </span>
         </div>
         <div className="ed-stat">
           <span className="ed-stat-label">Positions</span>
-          <span className="ed-stat-value">{portfolio?.positions || 0}</span>
+          <span className="ed-stat-value">{posCount}</span>
         </div>
         <div className="ed-stat">
           <span className="ed-stat-label">Exposure</span>
-          <span className="ed-stat-value">{portfolio?.exposurePct?.toFixed(1) || '0.0'}%</span>
+          <span className="ed-stat-value">{exposurePct.toFixed(1)}%</span>
         </div>
         <div className="ed-stat">
           <span className="ed-stat-label">Win Rate</span>
-          <span className="ed-stat-value">{trades?.winRate?.toFixed(1) || '0.0'}%</span>
+          <span className="ed-stat-value">{winRate.toFixed(1)}%</span>
         </div>
       </div>
 
@@ -196,20 +208,24 @@ export function ExchangeDashboard({ exchange }: Props) {
               </tr>
             </thead>
             <tbody>
-              {positions.map((pos) => {
-                const holdHrs = pos.holdTime ? Math.floor(pos.holdTime / 3600000) : 0;
-                const holdMin = pos.holdTime ? Math.floor((pos.holdTime % 3600000) / 60000) : 0;
+              {positions.map((pos: any) => {
+                const holdMs = pos.entryTime ? Date.now() - pos.entryTime : 0;
+                const holdHrs = Math.floor(holdMs / 3600000);
+                const holdMin = Math.floor((holdMs % 3600000) / 60000);
+                const entry = pos.openPrice ?? pos.entryPrice ?? 0;
+                const current = pos.currentPrice ?? pos.highestPrice ?? entry;
+                const pnlP = entry > 0 ? ((current - entry) / entry) * 100 : 0;
                 return (
                   <tr key={pos.ticker}>
-                    <td style={{ fontWeight: 600 }}>{pos.ticker.replace('USD', '')}</td>
-                    <td><span className="badge badge-blue" style={{ fontSize: '10px' }}>{pos.strategy}</span></td>
-                    <td>${pos.entryPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td>${pos.currentPrice?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                    <td style={{ color: (pos.pnlPct || 0) >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
-                      {(pos.pnlPct || 0) >= 0 ? '+' : ''}{(pos.pnlPct || 0).toFixed(2)}%
+                    <td style={{ fontWeight: 600 }}>{pos.ticker?.replace('USD', '')}</td>
+                    <td><span className="badge badge-blue" style={{ fontSize: '10px' }}>{pos.entryStrategy || pos.strategy || '—'}</span></td>
+                    <td>${entry.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td>${current.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td style={{ color: pnlP >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                      {pnlP >= 0 ? '+' : ''}{pnlP.toFixed(2)}%
                     </td>
                     <td style={{ color: 'var(--text-muted)' }}>{holdHrs}h {holdMin}m</td>
-                    <td><span className={`badge ${pos.regime?.includes('UP') ? 'badge-green' : pos.regime?.includes('DOWN') ? 'badge-red' : 'badge-blue'}`} style={{ fontSize: '10px' }}>{pos.regime}</span></td>
+                    <td><span className={`badge ${pos.regime?.includes('UP') ? 'badge-green' : pos.regime?.includes('DOWN') ? 'badge-red' : 'badge-blue'}`} style={{ fontSize: '10px' }}>{pos.regime || '—'}</span></td>
                   </tr>
                 );
               })}
@@ -219,15 +235,15 @@ export function ExchangeDashboard({ exchange }: Props) {
       )}
 
       {/* Circuit Breaker */}
-      {cb && (cb.isPaused || cb.consecutiveLosses >= 2) && (
-        <div className={`ed-circuit-breaker ${cb.isPaused ? 'paused' : 'warning'}`}>
-          <span className="ed-cb-icon">{cb.isPaused ? '🛑' : '⚠️'}</span>
+      {consecutiveLosses >= 2 && (
+        <div className={`ed-circuit-breaker ${consecutiveLosses >= 4 ? 'paused' : 'warning'}`}>
+          <span className="ed-cb-icon">{consecutiveLosses >= 4 ? '🛑' : '⚠️'}</span>
           <span>
-            {cb.isPaused
+            {consecutiveLosses >= 4
               ? 'Circuit breaker active — trading paused'
-              : `${cb.consecutiveLosses} consecutive losses — monitoring`}
+              : `${consecutiveLosses} consecutive losses — monitoring`}
           </span>
-          <small>Daily P&L: ${(cb.dailyPnl ?? 0).toFixed(2)} | Drawdown: {(cb.drawdownPct ?? 0).toFixed(1)}%</small>
+          <small>Daily P&L: ${dailyPnl.toFixed(2)} | Drawdown: {drawdownPct.toFixed(1)}%</small>
         </div>
       )}
 
