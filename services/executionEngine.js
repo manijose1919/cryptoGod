@@ -521,9 +521,9 @@ async function executeLimitThenMarketSell(adapter, ticker, quantity, sessionId, 
     }
   }
 
-  // Fill remainder with market
+  // Fill remainder with market (skip dust amounts under $1)
   const remainingQty = quantity - filledQty;
-  if (remainingQty > 0) {
+  if (remainingQty > 0 && remainingQty * (fills[0]?.price || 1) > 1) {
     const marketResult = await adapter.placeSellOrder(ticker, remainingQty, sessionId);
     const mPrice = parseFloat(marketResult.avgPrice || marketResult.avg_price || 0);
     const mQty = parseFloat(marketResult.filledQuantity || marketResult.filled_quantity || remainingQty);

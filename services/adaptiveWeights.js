@@ -119,6 +119,12 @@ function recalculateWeights() {
       stats.weight = adaptiveWeight * 0.75 + BASE_WEIGHT * 0.25;
     }
   }
+  // Re-normalize so weights sum to 1.0 (blend inflates total by ~25%)
+  let totalWeight = 0;
+  for (const [, stats] of strategyStats) totalWeight += stats.weight;
+  if (totalWeight > 0) {
+    for (const [, stats] of strategyStats) stats.weight /= totalWeight;
+  }
 }
 
 // ============================================
@@ -222,15 +228,15 @@ export function importState(state) {
   if (!state) return;
   for (const [key, saved] of Object.entries(state)) {
     const stats = getOrCreateStats(key);
-    stats.trades = saved.trades || 0;
-    stats.wins = saved.wins || 0;
-    stats.losses = saved.losses || 0;
-    stats.totalPnl = saved.totalPnl || 0;
+    stats.trades = saved.trades ?? 0;
+    stats.wins = saved.wins ?? 0;
+    stats.losses = saved.losses ?? 0;
+    stats.totalPnl = saved.totalPnl ?? 0;
     stats.recentPnls = Array.isArray(saved.recentPnls) ? saved.recentPnls : [];
-    stats.weight = saved.weight || BASE_WEIGHT;
-    stats.emaWinRate = saved.emaWinRate || 0.5;
-    stats.emaPnl = saved.emaPnl || 0;
-    stats.lastUpdate = saved.lastUpdate || Date.now();
+    stats.weight = saved.weight ?? BASE_WEIGHT;
+    stats.emaWinRate = saved.emaWinRate ?? 0.5;
+    stats.emaPnl = saved.emaPnl ?? 0;
+    stats.lastUpdate = saved.lastUpdate ?? Date.now();
   }
 }
 
