@@ -280,7 +280,7 @@ export default function createSessionsRouter(ctx) {
                         entryStrategy: pos.entryStrategy,
                         entryTime: pos.entryTime,
                         unrealizedPnl: ((pos.currentPrice || pos.openPrice) - pos.openPrice) * pos.quantity,
-                        unrealizedPnlPercent: ((pos.currentPrice || pos.openPrice) - pos.openPrice) / pos.openPrice * 100,
+                        unrealizedPnlPercent: pos.openPrice > 0 ? ((pos.currentPrice || pos.openPrice) - pos.openPrice) / pos.openPrice * 100 : 0,
                         highestPrice: pos.highestPrice,
                         lowestPrice: pos.lowestPrice,
                     })),
