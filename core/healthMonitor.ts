@@ -49,11 +49,12 @@ class HealthMonitor {
   private alertCooldown = 0;         // Don't spam alerts
   private systemChecks: Map<string, boolean> = new Map();
   private eventLoopLag = 0;
+  private lagTimer: ReturnType<typeof setInterval> | null = null;
 
   start(intervalMs = 30000): void {
     // Measure event loop lag
     let lastCheck = Date.now();
-    setInterval(() => {
+    this.lagTimer = setInterval(() => {
       const now = Date.now();
       this.eventLoopLag = Math.max(0, now - lastCheck - 1000);
       lastCheck = now;
@@ -64,6 +65,10 @@ class HealthMonitor {
   }
 
   stop(): void {
+    if (this.lagTimer) {
+      clearInterval(this.lagTimer);
+      this.lagTimer = null;
+    }
     if (this.interval) {
       clearInterval(this.interval);
       this.interval = null;
@@ -125,9 +130,9 @@ class HealthMonitor {
     if (warnings.length > 0 && Date.now() > this.alertCooldown) {
       this.alertCooldown = Date.now() + 300000; // 5min cooldown
       tradingBus.emit('risk:alert', {
-        type: 'SYSTEM_HEALTH',
+        type: 'heat_warning',
         severity: 'medium',
-        message: `System health: ${warnings.join('; ')}`,
+        reason: `System health: ${warnings.join('; ')}`,
         data: { warnings, memory: snapshot.memoryUsage },
         timestamp: Date.now(),
       });

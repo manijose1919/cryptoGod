@@ -65,6 +65,14 @@ class StructuredLogger {
         }));
       }
       this.rateLimits.set(rateLimitKey, { lastTime: now, count: 0 });
+
+      // Evict stale entries to prevent unbounded Map growth
+      if (this.rateLimits.size > 500) {
+        const cutoff = now - 60000; // 1 minute TTL
+        for (const [key, val] of this.rateLimits) {
+          if (val.lastTime < cutoff) this.rateLimits.delete(key);
+        }
+      }
     }
 
     const entry: LogEntry = {

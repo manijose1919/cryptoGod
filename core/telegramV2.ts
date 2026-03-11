@@ -187,10 +187,12 @@ class TelegramV2Service {
 
   // ─── Daily Digest ────────────────────────────────────────
 
+  private initialDigestTimer: ReturnType<typeof setTimeout> | null = null;
+
   private startDailyDigest(): void {
     // Send digest every 24h (or at midnight UTC)
     const msUntilMidnight = this.msUntilNextMidnightUTC();
-    setTimeout(() => {
+    this.initialDigestTimer = setTimeout(() => {
       this.sendDailyDigest();
       // Then every 24h
       this.digestTimer = setInterval(() => this.sendDailyDigest(), 24 * 60 * 60 * 1000);
@@ -526,6 +528,7 @@ class TelegramV2Service {
   }
 
   destroy(): void {
+    if (this.initialDigestTimer) clearTimeout(this.initialDigestTimer);
     if (this.digestTimer) clearInterval(this.digestTimer);
     if (this.commandPollTimer) clearInterval(this.commandPollTimer);
   }
