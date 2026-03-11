@@ -10,11 +10,11 @@ import {
 
 const NAV_LINKS = [
   { to: '/', label: 'Crypto' },
-  { to: '/stocks', label: 'Stocks' },
   { to: '/performance', label: 'Performance' },
   { to: '/backtest', label: 'Backtest' },
   { to: '/replay', label: 'Replay' },
   { to: '/training', label: 'Training' },
+  { to: '/system', label: 'System' },
 ];
 
 export const PerformanceDashboard: React.FC = () => {
@@ -24,23 +24,42 @@ export const PerformanceDashboard: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/api/status');
-        if (res.ok) {
-          const data = await res.json();
-          setInitialBudget(data.portfolio?.initialBudget || 1000);
-          // Combine logs into trade format
-          const tradeData = (data.logs || [])
-            .filter((l: any) => l.type === 'BUY' || l.type === 'SELL')
-            .map((l: any) => ({
-              type: l.type,
-              ticker: l.ticker || '',
-              price: l.price || 0,
-              quantity: l.quantity || 0,
-              strategy: l.strategy || '',
-              timestamp: l.timestamp || Date.now(),
-              pnl: l.pnl,
-            }));
-          setTrades(tradeData);
+        // Get initial budget from status
+        const statusRes = await fetch('/api/status');
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          setInitialBudget(statusData.portfolio?.initialBudget || 1000);
+
+          // Use tradeLog from status — all entries are sell trades (appended in handleSell)
+          const tradeLog = statusData.tradeLog || [];
+          if (tradeLog.length > 0) {
+            setTrades(tradeLog.map((t: any) => ({
+              type: 'SELL',
+              ticker: t.ticker || '',
+              price: t.price || 0,
+              quantity: t.quantity || 0,
+              strategy: t.strategy || '',
+              timestamp: t.time || t.timestamp || Date.now(),
+              pnl: t.pnl,
+            })));
+          }
+        }
+
+        // Also try session trades endpoint (active session)
+        const sessionRes = await fetch('/api/session/trades?limit=1000');
+        if (sessionRes.ok) {
+          const sessionData = await sessionRes.json();
+          if (sessionData.trades?.length > 0) {
+            setTrades(sessionData.trades.map((t: any) => ({
+              type: t.type || 'SELL',
+              ticker: t.ticker || '',
+              price: t.price || 0,
+              quantity: t.quantity || 0,
+              strategy: t.strategy || '',
+              timestamp: t.time || t.timestamp || Date.now(),
+              pnl: t.pnl,
+            })));
+          }
         }
       } catch (e) { /* ignore */ }
     };

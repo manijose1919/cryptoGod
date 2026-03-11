@@ -77,6 +77,7 @@ export interface StakingStatus {
 export interface ArbitrageStatus {
   enabled: boolean;
   opportunities: number;
+  recentOpportunities?: number;
 }
 
 export interface ShortStatus {

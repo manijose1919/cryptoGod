@@ -22,10 +22,10 @@ import { StakingCalculator } from './StakingCalculator';
 
 const NAV_LINKS = [
   { to: '/', label: 'Crypto' },
-  { to: '/stocks', label: 'Stocks' },
   { to: '/performance', label: 'Performance' },
   { to: '/backtest', label: 'Backtest' },
   { to: '/training', label: 'Training' },
+  { to: '/system', label: 'System' },
 ];
 
 const ALL_PAIRS = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD'];
