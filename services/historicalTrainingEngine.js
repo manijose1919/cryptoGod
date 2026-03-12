@@ -109,6 +109,16 @@ const SELECTIVITY_PRESETS = {
     minMemoryTradesForGate: 50,
     entryCooldownSteps: 4,                // every 4th candle
   },
+  scalp: {
+    minOppScore: 25,                      // slightly selective
+    minRegimeStrategyWR: 0.40,
+    minBinWR: 0.38,
+    regimeGate: ['STRONG_UP', 'UP', 'SIDEWAYS'], // avoid downtrends
+    minStrategiesAgreeing: 1,
+    qualityConfidenceFloor: 0.35,
+    minMemoryTradesForGate: 30,
+    entryCooldownSteps: 2,                // every 2nd candle (10min at 5m TF)
+  },
 };
 
 // Active training state
@@ -1121,6 +1131,7 @@ export async function startTraining(config = {}) {
   const evaluationOnly = config.evaluationOnly || false;
   const frozenState = config.frozenState || null;
   const skipMTF = config.skipMTF || false;
+  const primaryTimeframe = config.primaryTimeframe || '1h'; // '5m', '15m', '1h', '4h'
   // Accept selectivity as string key OR object (regime training passes objects with regimeGate)
   const selectivity = typeof config.selectivity === 'object' && config.selectivity !== null
     ? { ...SELECTIVITY_PRESETS.normal, ...config.selectivity }
@@ -1160,7 +1171,7 @@ export async function startTraining(config = {}) {
   const pairRanges = {};
 
   for (const ticker of tickers) {
-    const range = getHistoricalCandleRange(ticker, '1h');
+    const range = getHistoricalCandleRange(ticker, primaryTimeframe);
     if (!range || !range.earliest) continue;
     pairRanges[ticker] = range;
     if (range.earliest < earliestTime) earliestTime = range.earliest;
@@ -1239,18 +1250,21 @@ export async function startTraining(config = {}) {
     targetWinRate,
     aggressiveCompounding,
     useDynamicExits: config.useDynamicExits || false,
+    primaryTimeframe,
     startedAt: Date.now(),
   };
 
   // Pre-load all candle data into memory for speed — ALL timeframes
-  const timeframesToLoad = skipMTF
-    ? ['1h', '4h', '1d', '1w']
-    : ALL_TIMEFRAMES;
+  const baseTimeframes = skipMTF ? ['1h', '4h', '1d', '1w'] : ALL_TIMEFRAMES;
+  // Always include the primary timeframe even if skipMTF
+  const timeframesToLoad = baseTimeframes.includes(primaryTimeframe)
+    ? baseTimeframes
+    : [primaryTimeframe, ...baseTimeframes];
 
   console.log(`[Training] Loading ${timeframesToLoad.length} timeframes for ${tickers.length} pairs...`);
 
   const candlesByTF = {}; // { '1h': { 'BTCUSD': [...], ... }, '4h': { ... }, ... }
-  const candleData = {}; // 1h reference (primary stepping TF)
+  const candleData = {}; // Primary stepping TF reference
 
   for (const tf of timeframesToLoad) {
     candlesByTF[tf] = {};
@@ -1263,12 +1277,20 @@ export async function startTraining(config = {}) {
           time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
         }));
         candlesByTF[tf][ticker] = mapped;
-        if (tf === '1h') candleData[ticker] = mapped;
+        if (tf === primaryTimeframe) candleData[ticker] = mapped;
       }
     }
     const pairCount = Object.keys(candlesByTF[tf]).length;
     const totalCandles = Object.values(candlesByTF[tf]).reduce((s, arr) => s + arr.length, 0);
     console.log(`[Training] ${tf}: ${totalCandles.toLocaleString()} candles across ${pairCount} pairs`);
+  }
+
+  // If primary TF candles not found (e.g. no 5m data), fall back to 1h
+  if (Object.keys(candleData).length === 0 && candlesByTF['1h']) {
+    console.warn(`[Training] No ${primaryTimeframe} data found, falling back to 1h`);
+    for (const [ticker, candles] of Object.entries(candlesByTF['1h'])) {
+      candleData[ticker] = candles;
+    }
   }
 
   // Backward compat: candleData4h reference
@@ -1277,7 +1299,7 @@ export async function startTraining(config = {}) {
   // Build cross-TF index for O(log n) lookups
   const candleIndex = buildCandleIndex(candlesByTF);
 
-  // Build unified timeline (all unique hourly timestamps)
+  // Build unified timeline (all unique timestamps from primary TF)
   const timestampSet = new Set();
   for (const candles of Object.values(candleData)) {
     for (const c of candles) timestampSet.add(c.time);
