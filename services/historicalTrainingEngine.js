@@ -670,8 +670,9 @@ function checkExitConditions(position, candles, exitParams = null, config = {}) 
   // Use learned exit params if available, else defaults
   let ep = exitParams || { stopLoss: -0.05, takeProfit: 0.04, maxHold: 48, trailingStart: 0.03, trailingGiveBack: 0.4 };
 
-  // B1: Override SL/TP with ATR-computed dynamic values when useDynamicExits is enabled
-  if (config.useDynamicExits) {
+  // B1: Override SL/TP with ATR-computed dynamic values ONLY when no seed exits provided
+  // When exitParams come from a seed (learned values), they take priority over ATR defaults
+  if (config.useDynamicExits && !exitParams) {
     const dynTargets = getDynamicExitTargets(candles);
     ep = {
       ...ep,
