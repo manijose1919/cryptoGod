@@ -71,6 +71,8 @@ class TFEngine {
     this.tftMetrics = {};
     this.featureCount = 109;
     this.sequenceLength = 30;
+    this._lstmTraining = false;
+    this._tftTraining = false;
   }
 
   // ================================================================
@@ -120,81 +122,90 @@ class TFEngine {
    */
   async trainLSTM(sequences, labels) {
     if (!tf || !sequences.length) return null;
-
-    const maxEpochs = getFlag('TF_MAX_EPOCHS') || 50;
-    const featureCount = sequences[0][0].length;
-
-    // Build model if needed
-    if (!this.lstmModel) {
-      this.buildLSTMModel(featureCount);
+    if (this._lstmTraining) {
+      console.warn('[TF Engine] LSTM fit() already in progress — skipping');
+      return null;
     }
+    this._lstmTraining = true;
 
-    // Convert to tensors
-    const xTensor = tf.tensor3d(sequences);
-    const yTensor = tf.tensor2d(labels.map(l => [l]));
+    try {
+      const maxEpochs = getFlag('TF_MAX_EPOCHS') || 50;
+      const featureCount = sequences[0][0].length;
 
-    // Split 80/20 for validation
-    const splitIdx = Math.floor(sequences.length * 0.8);
-    const xTrain = xTensor.slice([0, 0, 0], [splitIdx, -1, -1]);
-    const yTrain = yTensor.slice([0, 0], [splitIdx, -1]);
-    const xVal = xTensor.slice([splitIdx, 0, 0], [-1, -1, -1]);
-    const yVal = yTensor.slice([splitIdx, 0], [-1, -1]);
+      // Build model if needed
+      if (!this.lstmModel) {
+        this.buildLSTMModel(featureCount);
+      }
 
-    // Train with early stopping
-    let bestValLoss = Infinity;
-    let patience = 10;
-    let patienceCounter = 0;
-    let bestEpoch = 0;
+      // Convert to tensors
+      const xTensor = tf.tensor3d(sequences);
+      const yTensor = tf.tensor2d(labels.map(l => [l]));
 
-    const history = await this.lstmModel.fit(xTrain, yTrain, {
-      epochs: maxEpochs,
-      batchSize: 32,
-      validationData: [xVal, yVal],
-      shuffle: false, // Time series — don't shuffle
-      verbose: 0,
-      callbacks: {
-        onEpochEnd: (epoch, logs) => {
-          if (logs.val_loss < bestValLoss) {
-            bestValLoss = logs.val_loss;
-            patienceCounter = 0;
-            bestEpoch = epoch;
-          } else {
-            patienceCounter++;
-            if (patienceCounter >= patience) {
-              this.lstmModel.stopTraining = true;
+      // Split 80/20 for validation
+      const splitIdx = Math.floor(sequences.length * 0.8);
+      const xTrain = xTensor.slice([0, 0, 0], [splitIdx, -1, -1]);
+      const yTrain = yTensor.slice([0, 0], [splitIdx, -1]);
+      const xVal = xTensor.slice([splitIdx, 0, 0], [-1, -1, -1]);
+      const yVal = yTensor.slice([splitIdx, 0], [-1, -1]);
+
+      // Train with early stopping
+      let bestValLoss = Infinity;
+      let patience = 10;
+      let patienceCounter = 0;
+      let bestEpoch = 0;
+
+      const history = await this.lstmModel.fit(xTrain, yTrain, {
+        epochs: maxEpochs,
+        batchSize: 32,
+        validationData: [xVal, yVal],
+        shuffle: false, // Time series — don't shuffle
+        verbose: 0,
+        callbacks: {
+          onEpochEnd: (epoch, logs) => {
+            if (logs.val_loss < bestValLoss) {
+              bestValLoss = logs.val_loss;
+              patienceCounter = 0;
+              bestEpoch = epoch;
+            } else {
+              patienceCounter++;
+              if (patienceCounter >= patience) {
+                this.lstmModel.stopTraining = true;
+              }
             }
           }
         }
-      }
-    });
+      });
 
-    // Evaluate on validation set
-    const evalResult = this.lstmModel.evaluate(xVal, yVal);
-    const valLoss = (await evalResult[0].data())[0];
-    const valAcc = (await evalResult[1].data())[0];
+      // Evaluate on validation set
+      const evalResult = this.lstmModel.evaluate(xVal, yVal);
+      const valLoss = (await evalResult[0].data())[0];
+      const valAcc = (await evalResult[1].data())[0];
 
-    // Cleanup tensors
-    xTensor.dispose();
-    yTensor.dispose();
-    xTrain.dispose();
-    yTrain.dispose();
-    xVal.dispose();
-    yVal.dispose();
-    evalResult[0].dispose();
-    evalResult[1].dispose();
+      // Cleanup tensors
+      xTensor.dispose();
+      yTensor.dispose();
+      xTrain.dispose();
+      yTrain.dispose();
+      xVal.dispose();
+      yVal.dispose();
+      evalResult[0].dispose();
+      evalResult[1].dispose();
 
-    this.isLSTMTrained = true;
-    this.lstmMetrics = {
-      accuracy: valAcc,
-      loss: valLoss,
-      bestEpoch,
-      epochs: history.epoch.length,
-      sampleCount: sequences.length,
-    };
+      this.isLSTMTrained = true;
+      this.lstmMetrics = {
+        accuracy: valAcc,
+        loss: valLoss,
+        bestEpoch,
+        epochs: history.epoch.length,
+        sampleCount: sequences.length,
+      };
 
-    console.log(`[TF Engine] LSTM trained: acc=${(valAcc * 100).toFixed(1)}%, loss=${valLoss.toFixed(4)}, epochs=${history.epoch.length}/${maxEpochs}`);
+      console.log(`[TF Engine] LSTM trained: acc=${(valAcc * 100).toFixed(1)}%, loss=${valLoss.toFixed(4)}, epochs=${history.epoch.length}/${maxEpochs}`);
 
-    return this.lstmMetrics;
+      return this.lstmMetrics;
+    } finally {
+      this._lstmTraining = false;
+    }
   }
 
   /**
@@ -341,63 +352,72 @@ class TFEngine {
    */
   async trainTFT(sequences, labels) {
     if (!tf || !sequences.length) return null;
-
-    const featureCount = sequences[0][0].length;
-    if (!this.tftModel) {
-      this.buildTFTModel(featureCount);
+    if (this._tftTraining) {
+      console.warn('[TF Engine] TFT fit() already in progress — skipping');
+      return null;
     }
+    this._tftTraining = true;
 
-    const xTensor = tf.tensor3d(sequences);
-    const y1h = tf.tensor2d(labels.h1.map(l => [l]));
-    const y4h = tf.tensor2d(labels.h4.map(l => [l]));
-    const y24h = tf.tensor2d(labels.h24.map(l => [l]));
+    try {
+      const featureCount = sequences[0][0].length;
+      if (!this.tftModel) {
+        this.buildTFTModel(featureCount);
+      }
 
-    const splitIdx = Math.floor(sequences.length * 0.8);
+      const xTensor = tf.tensor3d(sequences);
+      const y1h = tf.tensor2d(labels.h1.map(l => [l]));
+      const y4h = tf.tensor2d(labels.h4.map(l => [l]));
+      const y24h = tf.tensor2d(labels.h24.map(l => [l]));
 
-    const history = await this.tftModel.fit(
-      xTensor.slice([0, 0, 0], [splitIdx, -1, -1]),
-      [
-        y1h.slice([0, 0], [splitIdx, -1]),
-        y4h.slice([0, 0], [splitIdx, -1]),
-        y24h.slice([0, 0], [splitIdx, -1]),
-      ],
-      {
-        epochs: getFlag('TF_MAX_EPOCHS') || 50,
-        batchSize: 32,
-        validationSplit: 0.2,
-        shuffle: false,
-        verbose: 0,
-        callbacks: {
-          onEpochEnd: (epoch, logs) => {
-            if (epoch > 0 && logs.val_loss > (this._tftBestLoss || Infinity) * 1.1) {
-              this._tftPatienceCounter = (this._tftPatienceCounter || 0) + 1;
-              if (this._tftPatienceCounter >= 10) {
-                this.tftModel.stopTraining = true;
+      const splitIdx = Math.floor(sequences.length * 0.8);
+
+      const history = await this.tftModel.fit(
+        xTensor.slice([0, 0, 0], [splitIdx, -1, -1]),
+        [
+          y1h.slice([0, 0], [splitIdx, -1]),
+          y4h.slice([0, 0], [splitIdx, -1]),
+          y24h.slice([0, 0], [splitIdx, -1]),
+        ],
+        {
+          epochs: getFlag('TF_MAX_EPOCHS') || 50,
+          batchSize: 32,
+          validationSplit: 0.2,
+          shuffle: false,
+          verbose: 0,
+          callbacks: {
+            onEpochEnd: (epoch, logs) => {
+              if (epoch > 0 && logs.val_loss > (this._tftBestLoss || Infinity) * 1.1) {
+                this._tftPatienceCounter = (this._tftPatienceCounter || 0) + 1;
+                if (this._tftPatienceCounter >= 10) {
+                  this.tftModel.stopTraining = true;
+                }
+              } else {
+                this._tftBestLoss = logs.val_loss;
+                this._tftPatienceCounter = 0;
               }
-            } else {
-              this._tftBestLoss = logs.val_loss;
-              this._tftPatienceCounter = 0;
             }
           }
         }
-      }
-    );
+      );
 
-    // Cleanup
-    xTensor.dispose();
-    y1h.dispose();
-    y4h.dispose();
-    y24h.dispose();
+      // Cleanup
+      xTensor.dispose();
+      y1h.dispose();
+      y4h.dispose();
+      y24h.dispose();
 
-    this.isTFTTrained = true;
-    this.tftMetrics = {
-      epochs: history.epoch.length,
-      sampleCount: sequences.length,
-      finalLoss: history.history.loss?.[history.epoch.length - 1],
-    };
+      this.isTFTTrained = true;
+      this.tftMetrics = {
+        epochs: history.epoch.length,
+        sampleCount: sequences.length,
+        finalLoss: history.history.loss?.[history.epoch.length - 1],
+      };
 
-    console.log(`[TF Engine] TFT trained: epochs=${history.epoch.length}, samples=${sequences.length}`);
-    return this.tftMetrics;
+      console.log(`[TF Engine] TFT trained: epochs=${history.epoch.length}, samples=${sequences.length}`);
+      return this.tftMetrics;
+    } finally {
+      this._tftTraining = false;
+    }
   }
 
   /**
