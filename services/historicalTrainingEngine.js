@@ -1238,6 +1238,7 @@ export async function startTraining(config = {}) {
     strategyFilter,
     targetWinRate,
     aggressiveCompounding,
+    useDynamicExits: config.useDynamicExits || false,
     startedAt: Date.now(),
   };
 
@@ -1384,7 +1385,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
       let exitP = state.tradeMemory?.exitParams;
       const regimeOverrides = state.tradeMemory?.regimeExitOverrides?.[position.regime];
       if (regimeOverrides) exitP = { ...exitP, ...regimeOverrides };
-      const exitReason = checkExitConditions(position, candles, exitP, { useDynamicExits: config.useDynamicExits || false });
+      const exitReason = checkExitConditions(position, candles, exitP, { useDynamicExits: training.useDynamicExits || false });
       if (exitReason) {
         // Track exit reason
         const exitType = exitReason.startsWith('Stop loss') ? 'stopLoss'
