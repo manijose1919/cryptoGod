@@ -2787,14 +2787,14 @@ async function tradingBotLoop() {
                 .filter(t => /USD$/.test(t) && !/_/.test(t) && !/-/.test(t)) // Only spot USD pairs (no USDT, PERP, BTC, EUR, underscore formats)
             : [];
 
-        // Fetch CoinGecko trending coins (cached — only refresh every 60s, not every 2s loop)
+        // Fetch CoinGecko trending coins (non-blocking background refresh)
         if (!tradingBotLoop._trendingCache) tradingBotLoop._trendingCache = { data: [], ts: 0 };
         let trendingCoinsList = tradingBotLoop._trendingCache.data;
         if (Date.now() - tradingBotLoop._trendingCache.ts > 60_000) {
-            try {
-                trendingCoinsList = await fetchCoinGeckoTrending();
-                tradingBotLoop._trendingCache = { data: trendingCoinsList, ts: Date.now() };
-            } catch (e) { /* fail open */ }
+            tradingBotLoop._trendingCache.ts = Date.now(); // prevent re-trigger while fetching
+            fetchCoinGeckoTrending()
+                .then(data => { tradingBotLoop._trendingCache = { data, ts: Date.now() }; })
+                .catch(() => {}); // fail open, use stale data
         }
         const trendingTickers = trendingCoinsList
             .map(c => `${(c.symbol || '').toUpperCase()}USD`)

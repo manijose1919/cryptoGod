@@ -102,7 +102,7 @@ export async function fetchFearGreedIndex() {
 
   try {
     const response = await fetch('https://api.alternative.me/fng/', {
-      timeout: 10_000,
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!response.ok) {
@@ -214,7 +214,7 @@ export async function fetchCoinGeckoTrending() {
 
   try {
     const response = await fetch('https://api.coingecko.com/api/v3/search/trending', {
-      timeout: 10_000,
+      signal: AbortSignal.timeout(10_000),
     });
 
     if (!response.ok) {
