@@ -19,7 +19,7 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const,
+  ALLOWED_REGIMES: ['STRONG_UP', 'UP', 'SIDEWAYS'] as const, // TODO: remove SIDEWAYS after paper testing
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 65,
