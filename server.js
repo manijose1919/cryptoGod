@@ -7028,6 +7028,15 @@ app.post('/api/reconcile/auto-fix', async (req, res) => {
     }
 });
 
+// --- Phoenix V2 Engine routes ---
+try {
+    const { v2Router } = await import('./v2/index.ts');
+    app.use('/api/v2', v2Router);
+    console.log('[Server] V2 routes mounted at /api/v2');
+} catch (err) {
+    console.warn('[Server] V2 routes not available:', err.message);
+}
+
 // SPA catch-all (must be AFTER all API routes)
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
@@ -7816,6 +7825,15 @@ const startServer = async () => {
         cbExportState, awExportState, beastExportState, pmExportState, optExportState,
         get availableTickers() { return availableTickers; },
     }, 60000);
+
+    // --- Phoenix V2 Engine boot ---
+    try {
+        const { bootV2 } = await import('./v2/index.ts');
+        await bootV2(1000);
+        console.log('[Server] V2 engine started');
+    } catch (err) {
+        console.warn('[Server] V2 engine not available:', err.message);
+    }
 
     server.on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
