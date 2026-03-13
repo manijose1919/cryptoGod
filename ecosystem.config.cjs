@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'canuck-node',
-      script: 'server.js',
+      script: 'serverV2.ts',
       node_args: '--experimental-strip-types',
       cwd: '/opt/trading-bot',
       exec_mode: 'fork',
@@ -13,6 +13,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: 3033,
+        V2_MODE: 'paper',
       },
       // Logging
       error_file: '/opt/trading-bot/logs/error.log',
