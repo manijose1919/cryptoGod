@@ -40,6 +40,8 @@ const stats = {
   rejectedByScan: 0,
   rejectedBySignal: 0,
   rejectedByRisk: 0,
+  lastScanReasons: [] as { ticker: string; reason: string }[],
+  candleCounts: {} as Record<string, number>,
 };
 
 // --- Status Interface ---
@@ -48,6 +50,8 @@ export interface V2EngineStatus {
   mode: string;
   isRunning: boolean;
   lastLoopTime: number;
+  lastScanReasons?: { ticker: string; reason: string }[];
+  candleCounts?: Record<string, number>;
   loopCount: number;
   rejectedByScan: number;
   rejectedBySignal: number;
@@ -206,6 +210,8 @@ export function getV2Status(): V2EngineStatus {
     totalTrades: closedTrades.length + openTrades.length,
     portfolioCash: budget + totalPnlNet,
     totalPnlNet,
+    lastScanReasons: stats.lastScanReasons,
+    candleCounts: stats.candleCounts,
   };
 }
 
@@ -243,6 +249,12 @@ async function runLoop(): Promise<void> {
       return;
     }
 
+    // Track candle counts for diagnostics
+    stats.candleCounts = {};
+    for (const [ticker, candles] of tickerCandles) {
+      stats.candleCounts[ticker] = candles.length;
+    }
+
     // ==============================
     // Stage 1: Market Scan
     // ==============================
@@ -250,8 +262,15 @@ async function runLoop(): Promise<void> {
     const passedScan = getPassedTickers(scanResults);
     const scanRejections = scanResults.length - passedScan.length;
     stats.rejectedByScan += scanRejections;
+    stats.lastScanReasons = scanResults.map(r => ({ ticker: r.ticker, reason: r.reason || (r.passed ? 'PASS' : 'UNKNOWN') }));
 
     if (passedScan.length === 0) {
+      // Log rejection reasons every 10 loops for diagnostics
+      if (stats.loopCount % 10 === 1) {
+        for (const r of scanResults) {
+          console.log(`[V2] REJECT ${r.ticker}: ${r.reason}`);
+        }
+      }
       console.log(`[V2] Loop #${stats.loopCount}: scan rejected all ${scanResults.length} tickers`);
       stats.lastLoopTime = Date.now() - loopStart;
       // Still check exits
