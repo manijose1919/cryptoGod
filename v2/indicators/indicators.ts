@@ -375,6 +375,7 @@ export function computeSignals(candles: Candle[]): { signals: SignalSnapshot; re
     volume_ratio: volumeRatio,
     trend_strength: regimeResult.trendStrength,
     price_vs_ema50: priceVsEma50,
+    close_price: currentPrice,
   };
 
   return { signals, regime: regimeResult };

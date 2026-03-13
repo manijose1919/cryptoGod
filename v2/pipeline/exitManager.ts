@@ -119,16 +119,21 @@ export async function checkExits(
         trailingJustActivated = true;
       }
 
-      // Calculate trailing stop: give back a fraction of current gains
-      const trailingStop = currentPrice * (1 - V2_CONFIG.TRAILING_GIVEBACK_PERCENT * pnlPercent);
+      // Calculate trailing stop: give back a fixed fraction of the gain from entry
+      // e.g., up $5 with 40% giveback → trail at currentPrice - $2 = $3 above entry
+      const peakGain = currentPrice - trade.entryPrice;
+      const trailingStop = currentPrice - peakGain * V2_CONFIG.TRAILING_GIVEBACK_PERCENT;
 
-      // Stops can only tighten (go up for longs)
+      // Stops can only tighten (go up for longs) — use the higher of computed vs existing
       if (trailingStop > trade.currentStop) {
         newStop = trailingStop;
         updateTradeStop(trade.id, newStop);
+      } else {
+        // DB stop may be higher than what we just computed (market whipped down)
+        newStop = Math.max(newStop, trade.currentStop);
       }
 
-      // Check if trailing stop was hit (price fell through new stop)
+      // Check if trailing stop was hit (price fell through effective stop)
       if (currentPrice <= newStop) {
         results.push({
           trade,

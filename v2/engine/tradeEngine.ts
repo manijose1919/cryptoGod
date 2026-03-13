@@ -223,14 +223,17 @@ async function runLoop(): Promise<void> {
     // ==============================
     const tickerCandles = new Map<string, Candle[]>();
 
-    for (const ticker of V2_CONFIG.SCAN_TICKERS) {
-      try {
+    // Fetch candles in parallel for all tickers (much faster than sequential)
+    const fetchResults = await Promise.allSettled(
+      V2_CONFIG.SCAN_TICKERS.map(async (ticker) => {
         const candles = await fetchCandles(ticker);
-        if (candles) {
-          tickerCandles.set(ticker, candles);
-        }
-      } catch (e) {
-        console.error(`[V2] Failed to fetch candles for ${ticker}: ${(e as Error).message}`);
+        return { ticker, candles };
+      }),
+    );
+
+    for (const result of fetchResults) {
+      if (result.status === 'fulfilled' && result.value.candles) {
+        tickerCandles.set(result.value.ticker, result.value.candles);
       }
     }
 
