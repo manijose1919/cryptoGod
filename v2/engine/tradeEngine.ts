@@ -115,13 +115,25 @@ async function sendExitAlert(trade: V2Trade, exitPrice: number, exitReason: stri
 
 // --- Candle Fetching ---
 
+/** Normalize short-form {t,o,h,l,c,v} candles to V2's {time,open,high,low,close,volume} */
+function normalizeCandles(raw: any[]): Candle[] {
+  return raw.map((c: any) => ({
+    time: c.time ?? c.t ?? 0,
+    open: c.open ?? c.o ?? 0,
+    high: c.high ?? c.h ?? 0,
+    low: c.low ?? c.l ?? 0,
+    close: c.close ?? c.c ?? 0,
+    volume: c.volume ?? c.v ?? 0,
+  }));
+}
+
 async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   // Try WebSocket realtime candles first
   try {
     const wsModule = await import('../../services/krakenWebsocketService.js');
     const candles = wsModule.getRealtimeCandles(ticker);
     if (candles && candles.length >= V2_CONFIG.MIN_CANDLES) {
-      return candles as Candle[];
+      return normalizeCandles(candles);
     }
   } catch {
     // WS not available
@@ -133,7 +145,7 @@ async function fetchCandles(ticker: string): Promise<Candle[] | null> {
     const adapter = adapterModule.krakenAdapter;
     const candles = await adapter.getCandles(ticker, '1', 200);
     if (candles && candles.length > 0) {
-      return candles as Candle[];
+      return normalizeCandles(candles);
     }
   } catch {
     // REST failed
