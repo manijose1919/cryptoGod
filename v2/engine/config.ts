@@ -15,7 +15,7 @@ export const V2_CONFIG = {
     'LINKUSD', 'DOTUSD', 'AVAXUSD', 'DOGEUSD', 'BNBUSD',
   ],
   MIN_VOLUME_24H_USD: 500_000,
-  MIN_ATR_PERCENT: 0.3,
+  MIN_ATR_PERCENT: 0.05, // Calibrated for 1-minute candles (0.3 was for hourly)
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
