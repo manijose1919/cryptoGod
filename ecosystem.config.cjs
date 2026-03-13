@@ -3,6 +3,7 @@ module.exports = {
     {
       name: 'canuck-node',
       script: 'serverV2.ts',
+      interpreter: 'node',
       node_args: '--experimental-strip-types',
       cwd: '/opt/trading-bot',
       exec_mode: 'fork',
