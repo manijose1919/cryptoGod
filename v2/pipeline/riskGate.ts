@@ -96,9 +96,8 @@ export function evaluateRisk(
       continue;
     }
 
-    // Compute stop loss and take profit prices
-    const lastPrice = signal.signals.ema_12; // approximate current price from last EMA12
-    // Use ATR-based levels
+    // Compute stop loss and take profit prices using actual close price (not EMA which lags)
+    const lastPrice = signal.signals.close_price || signal.signals.ema_12;
     const atrValue = signal.signals.atr;
     const stopLoss = lastPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
     const takeProfit = lastPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
