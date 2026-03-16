@@ -77,6 +77,28 @@ app.get('/api/health', (_req, res) => {
 // --- V2 API routes ---
 app.use('/api/v2', v2Router);
 
+// --- Config endpoint (runtime flag changes) ---
+app.post('/api/config/flag', async (req, res) => {
+  try {
+    const { key, value } = req.body;
+    if (!key) return res.status(400).json({ error: 'key required' });
+    const { setFlag, getFlag } = await import('./services/systemConfig.js');
+    setFlag(key, value);
+    res.json({ ok: true, key, value: getFlag(key) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/config/flags', async (_req, res) => {
+  try {
+    const { getAllFlags } = await import('./services/systemConfig.js');
+    res.json(getAllFlags());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- SPA catch-all ---
 app.get('*', (_req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'));
