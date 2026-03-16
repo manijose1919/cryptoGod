@@ -86,7 +86,15 @@ export async function executeTrade(
 
   if (V2_CONFIG.MODE !== 'live') {
     // --- Shadow / Paper mode ---
-    const price = await exchange.getLatestPrice(signal.ticker);
+    // Use close price from signal (already computed from candles) instead of extra API call
+    let price = signal.signals.close_price as number;
+    if (!price || price <= 0) {
+      price = await exchange.getLatestPrice(signal.ticker);
+    }
+    if (!price || price <= 0) {
+      const rejectDecision = makeReject(tradeId, `Cannot get price for ${signal.ticker}`);
+      return { trade: null, decision: rejectDecision };
+    }
     const quantity = risk.positionSizeUsd / price;
     const stopLoss = price - atr * V2_CONFIG.STOP_LOSS_ATR_MULT;
     const takeProfit = price + atr * V2_CONFIG.TAKE_PROFIT_ATR_MULT;

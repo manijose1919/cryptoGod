@@ -22,7 +22,7 @@ export const V2_CONFIG = {
   ALLOWED_REGIMES: ['STRONG_UP', 'UP', 'SIDEWAYS'] as const, // TODO: remove SIDEWAYS after paper testing
 
   // --- Signal ---
-  MIN_COMPOSITE_SCORE: 65,
+  MIN_COMPOSITE_SCORE: 55,
   MIN_CONFIDENCE: 0.60,
   MIN_CANDLES: 50,
 
@@ -33,9 +33,9 @@ export const V2_CONFIG = {
   FEE_ROUND_TRIP_TAKER: 0.0052,
 
   // --- Position Sizing ---
-  MIN_EXPECTED_RETURN: 0.015,
+  MIN_EXPECTED_RETURN: 0.005,    // 0.5% — was 1.5%, too high for any timeframe
   MAX_POSITION_PERCENT: 0.25,
-  MAX_OPEN_POSITIONS: 1,
+  MAX_OPEN_POSITIONS: 3,         // Paper mode: need trade data; reduce for live
 
   // --- Risk ---
   MAX_DAILY_LOSS_PERCENT: 0.03,
@@ -45,9 +45,12 @@ export const V2_CONFIG = {
   MAKER_FILL_TIMEOUT_MS: 30_000,
   USE_MAKER_ORDERS: true,
 
+  // --- Candle Timeframe ---
+  CANDLE_INTERVAL: '15m' as string, // '1m', '5m', '15m', '1h', '4h'
+
   // --- Exit Management ---
   STOP_LOSS_ATR_MULT: 2.0,
-  TAKE_PROFIT_ATR_MULT: 4.0,
+  TAKE_PROFIT_ATR_MULT: 3.0,      // Was 4.0 — tighter targets for more frequent exits
   TRAILING_ACTIVATE_PERCENT: 0.02,
   TRAILING_GIVEBACK_PERCENT: 0.40,
   TIME_KILL_MS: 4 * 60 * 60 * 1000, // 4 hours
