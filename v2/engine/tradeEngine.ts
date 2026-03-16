@@ -327,11 +327,49 @@ async function runLoop(): Promise<void> {
     stats.rejectedByRisk += riskRejections;
 
     // ==============================
-    // Stage 4: Execute best approved trade
+    // Stage 4: ML Gatekeeper (optional)
     // ==============================
+    let mlFiltered = approved;
     if (approved.length > 0) {
+      try {
+        const gk = await import('../../services/mlGatekeeper.js');
+        if (gk.evaluateEntry) {
+          const mlResults = [];
+          for (const risk of approved) {
+            const signal = passedSignals.find((s) => s.ticker === risk.ticker);
+            if (!signal) continue;
+            const candles = tickerCandles.get(risk.ticker);
+            if (!candles || candles.length < 50) { mlResults.push(risk); continue; }
+            // Convert V2 candles to {o,h,l,c,v} format expected by feature engineering
+            const fmtCandles = candles.map(c => ({ o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }));
+            const gate = gk.evaluateEntry(risk.ticker, fmtCandles, 'TREND', signal.confidence, {});
+            if (gate.proceed) {
+              // Apply ML size multiplier
+              if (gate.sizeMultiplier && gate.sizeMultiplier !== 1.0) {
+                risk.positionSizeUsd *= gate.sizeMultiplier;
+                risk.quantity = risk.positionSizeUsd / (signal.signals.close_price || 1);
+              }
+              mlResults.push(risk);
+            } else {
+              stats.rejectedByRisk++;
+              if (stats.loopCount % 5 === 1) {
+                console.log(`[V2] ML REJECT ${risk.ticker}: ${gate.reason} (tier=${gate.tier}, conf=${gate.confidence?.toFixed(1)}%)`);
+              }
+            }
+          }
+          mlFiltered = mlResults;
+        }
+      } catch {
+        // ML not available — pass through
+      }
+    }
+
+    // ==============================
+    // Stage 5: Execute best approved trade
+    // ==============================
+    if (mlFiltered.length > 0) {
       // Take the best (first, since signals are sorted by score)
-      const bestRisk = approved[0];
+      const bestRisk = mlFiltered[0];
       const bestSignal = passedSignals.find((s) => s.ticker === bestRisk.ticker);
 
       if (bestSignal) {
@@ -352,6 +390,9 @@ async function runLoop(): Promise<void> {
           console.log(`[V2] Trade execution failed: ${decision.reason}`);
         }
       }
+    } else if (approved.length > 0) {
+      // Had risk-approved trades but ML rejected them all
+      console.log(`[V2] Loop #${stats.loopCount}: ML rejected all ${approved.length} risk-approved signals`);
     } else {
       // Log risk rejection reasons every 5 loops
       if (stats.loopCount % 5 === 1) {
@@ -363,7 +404,7 @@ async function runLoop(): Promise<void> {
     }
 
     // ==============================
-    // Stage 5: Check exits
+    // Stage 6: Check exits
     // ==============================
     await checkOpenExits();
 

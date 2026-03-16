@@ -1,10 +1,40 @@
 // ============================================
 // Phoenix V2 Risk Gate
-// Hard kills only — no soft adjustments
+// Hard kills + Fear & Greed macro filter
 // ============================================
 
 import type { SignalResult, RiskResult, V2PortfolioState } from './types.ts';
 import { V2_CONFIG } from '../engine/config.ts';
+
+// --- Fear & Greed (lazy-loaded from existing service) ---
+
+let _fgModule: any = null;
+let _fgLoaded = false;
+
+async function loadFearGreed(): Promise<void> {
+  if (_fgLoaded) return;
+  try {
+    _fgModule = await import('../../services/fearGreedGate.js');
+    _fgLoaded = true;
+  } catch {
+    _fgLoaded = true; // Don't retry
+  }
+}
+
+// Pre-load on module init (non-blocking)
+loadFearGreed();
+
+/** Get F&G position multiplier (1.0 if unavailable) */
+export function getFearGreedMultiplier(): number {
+  if (!_fgModule) return 1.0;
+  return _fgModule.getPositionMultiplier?.() ?? 1.0;
+}
+
+/** Check if F&G blocks entry */
+export function getFearGreedBlock(): { block: boolean; reason: string } {
+  if (!_fgModule) return { block: false, reason: '' };
+  return _fgModule.shouldBlockEntry?.() ?? { block: false, reason: '' };
+}
 
 // --- Types ---
 
@@ -42,6 +72,16 @@ export function evaluateRisk(
 ): RiskResult[] {
   const results: RiskResult[] = [];
   const now = Date.now();
+
+  // Gate 0 (global): Fear & Greed extreme greed block
+  const fgBlock = getFearGreedBlock();
+  if (fgBlock.block) {
+    for (const signal of signalResults) {
+      if (signal.passed) results.push(makeReject(signal, `F&G blocked: ${fgBlock.reason}`));
+    }
+    return results;
+  }
+  const fgMultiplier = getFearGreedMultiplier();
 
   for (const signal of signalResults) {
     if (!signal.passed) continue;
@@ -90,9 +130,9 @@ export function evaluateRisk(
       continue;
     }
 
-    // Position sizing: scale by confidence
+    // Position sizing: scale by confidence × Fear & Greed multiplier
     const maxPositionUsd = portfolio.availableCapital * V2_CONFIG.MAX_POSITION_PERCENT;
-    const positionSizeUsd = maxPositionUsd * signal.confidence;
+    const positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier;
 
     // Gate 6: Minimum order size ($10 Kraken minimum)
     if (positionSizeUsd < 10) {
@@ -115,7 +155,7 @@ export function evaluateRisk(
       stopLoss,
       takeProfit,
       expectedReturn,
-      reason: `APPROVED: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%`,
+      reason: `APPROVED: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x`,
     });
   }
 
