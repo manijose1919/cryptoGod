@@ -32,14 +32,16 @@ export function evaluateSignals(signals: Record<string, number | boolean>): Sign
 
   const evals: SignalEval[] = [];
 
-  // 1. RSI oversold (weight 20)
+  // 1. RSI momentum (weight 20)
+  // In uptrends RSI 50-70 is healthy — don't penalize it
   let rsiScore: number;
-  if (rsiVal < 30) rsiScore = 90;
-  else if (rsiVal < 40) rsiScore = 70;
-  else if (rsiVal < 50) rsiScore = 50;
-  else if (rsiVal < 60) rsiScore = 30;
-  else rsiScore = 10;
-  evals.push({ name: 'rsi_oversold', score: rsiScore, active: rsiVal < 45, weight: 20 });
+  if (rsiVal < 30) rsiScore = 90;       // deeply oversold — strong buy
+  else if (rsiVal < 40) rsiScore = 75;
+  else if (rsiVal < 50) rsiScore = 60;
+  else if (rsiVal < 65) rsiScore = 45;   // trend-appropriate range
+  else if (rsiVal < 75) rsiScore = 30;   // getting overbought
+  else rsiScore = 10;                     // overbought — avoid
+  evals.push({ name: 'rsi_momentum', score: rsiScore, active: rsiVal < 65, weight: 20 });
 
   // 2. MACD cross (weight 25)
   let macdScore: number;
@@ -100,9 +102,15 @@ export function generateSignals(
 
     // Weighted average
     const totalWeight = evals.reduce((sum, e) => sum + e.weight, 0);
-    const compositeScore = totalWeight > 0
+    let compositeScore = totalWeight > 0
       ? evals.reduce((sum, e) => sum + e.score * e.weight, 0) / totalWeight
       : 0;
+
+    // Regime bonus: reward trend alignment (we only trade UP/STRONG_UP/SIDEWAYS)
+    if (regime.regime === 'STRONG_UP') compositeScore += 8;
+    else if (regime.regime === 'UP') compositeScore += 5;
+
+    compositeScore = Math.min(compositeScore, 100);
     const confidence = compositeScore / 100;
 
     const passed = compositeScore >= V2_CONFIG.MIN_COMPOSITE_SCORE;

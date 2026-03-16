@@ -128,22 +128,26 @@ function normalizeCandles(raw: any[]): Candle[] {
 }
 
 async function fetchCandles(ticker: string): Promise<Candle[] | null> {
-  // Try WebSocket realtime candles first
-  try {
-    const wsModule = await import('../../services/krakenWebsocketService.js');
-    const candles = wsModule.getRealtimeCandles(ticker);
-    if (candles && candles.length >= V2_CONFIG.MIN_CANDLES) {
-      return normalizeCandles(candles);
+  const interval = V2_CONFIG.CANDLE_INTERVAL;
+
+  // For 1-minute candles, try WebSocket realtime first
+  if (interval === '1m') {
+    try {
+      const wsModule = await import('../../services/krakenWebsocketService.js');
+      const candles = wsModule.getRealtimeCandles(ticker);
+      if (candles && candles.length >= V2_CONFIG.MIN_CANDLES) {
+        return normalizeCandles(candles);
+      }
+    } catch {
+      // WS not available
     }
-  } catch {
-    // WS not available
   }
 
-  // Fallback: REST via Kraken adapter
+  // REST via Kraken adapter (supports all intervals)
   try {
     const adapterModule = await import('../../services/exchangeAdapters/krakenAdapter.js');
     const adapter = adapterModule.krakenAdapter;
-    const candles = await adapter.getCandles(ticker, '1', 200);
+    const candles = await adapter.getCandles(ticker, interval, 200);
     if (candles && candles.length > 0) {
       return normalizeCandles(candles);
     }
@@ -299,7 +303,14 @@ async function runLoop(): Promise<void> {
     stats.rejectedBySignal += signalRejections;
 
     if (passedSignals.length === 0) {
-      console.log(`[V2] Loop #${stats.loopCount}: signal rejected all ${signalResults.length} candidates`);
+      // Log top 3 scores every 5 loops for diagnostics
+      if (stats.loopCount % 5 === 1) {
+        const top3 = signalResults.slice(0, 3);
+        const scoreStr = top3.map(s => `${s.ticker}=${s.compositeScore.toFixed(1)}`).join(', ');
+        console.log(`[V2] Loop #${stats.loopCount}: signal rejected all ${signalResults.length} candidates, top: [${scoreStr}] (min ${V2_CONFIG.MIN_COMPOSITE_SCORE})`);
+      } else {
+        console.log(`[V2] Loop #${stats.loopCount}: signal rejected all ${signalResults.length} candidates`);
+      }
       stats.lastLoopTime = Date.now() - loopStart;
       await checkOpenExits();
       return;
@@ -342,6 +353,12 @@ async function runLoop(): Promise<void> {
         }
       }
     } else {
+      // Log risk rejection reasons every 5 loops
+      if (stats.loopCount % 5 === 1) {
+        for (const r of riskResults) {
+          if (!r.passed) console.log(`[V2] RISK REJECT ${r.ticker}: ${r.reason}`);
+        }
+      }
       console.log(`[V2] Loop #${stats.loopCount}: risk rejected all ${riskResults.length} signals (${passedScan.length} scanned, ${passedSignals.length} signaled)`);
     }
 
@@ -353,7 +370,9 @@ async function runLoop(): Promise<void> {
     stats.lastLoopTime = Date.now() - loopStart;
     console.log(`[V2] Loop #${stats.loopCount} completed in ${stats.lastLoopTime}ms`);
   } catch (e) {
-    console.error(`[V2] Loop error: ${(e as Error).message}`);
+    const err = e as Error;
+    console.error(`[V2] Loop error: ${err.message}`);
+    if (err.stack) console.error(`[V2] Stack: ${err.stack.split('\n').slice(1, 4).join(' | ')}`);
     stats.lastLoopTime = Date.now() - loopStart;
   }
 }

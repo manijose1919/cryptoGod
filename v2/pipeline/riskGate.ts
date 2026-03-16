@@ -77,10 +77,14 @@ export function evaluateRisk(
     const atrPercent = signal.signals.atr_percent;
     const tpPercent = atrPercent * V2_CONFIG.TAKE_PROFIT_ATR_MULT / 100;
     const slPercent = atrPercent * V2_CONFIG.STOP_LOSS_ATR_MULT / 100;
-    const feeRoundTrip = V2_CONFIG.FEE_ROUND_TRIP_TAKER;
+    // Use maker fees when USE_MAKER_ORDERS is on, taker otherwise
+    const feeRoundTrip = V2_CONFIG.USE_MAKER_ORDERS
+      ? V2_CONFIG.FEE_ROUND_TRIP_MAKER
+      : V2_CONFIG.FEE_ROUND_TRIP_TAKER;
 
     // Gate 5: Expected return must exceed minimum
-    const expectedReturn = tpPercent * signal.confidence - feeRoundTrip;
+    // TP% is the raw target move — confidence already scales position size, not ER
+    const expectedReturn = tpPercent - feeRoundTrip;
     if (expectedReturn < V2_CONFIG.MIN_EXPECTED_RETURN) {
       results.push(makeReject(signal, `Expected return ${(expectedReturn * 100).toFixed(2)}% < min ${(V2_CONFIG.MIN_EXPECTED_RETURN * 100).toFixed(1)}%`));
       continue;
