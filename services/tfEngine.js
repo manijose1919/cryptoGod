@@ -20,7 +20,8 @@ try {
   console.warn('[TF Engine] TensorFlow.js not available:', err.message);
 }
 
-const MODEL_DIR = 'data/tf-models';
+import { resolve } from 'node:path';
+const MODEL_DIR = resolve('data/tf-models');
 
 // Custom layer: softmax on last axis for 3D tensors (tf.layers.softmax fails on rank>2)
 class Softmax3DLayer extends (tf?.layers?.Layer || class {}) {
@@ -475,7 +476,7 @@ class TFEngine {
       if (!fs.existsSync(MODEL_DIR)) {
         fs.mkdirSync(MODEL_DIR, { recursive: true });
       }
-      await this.lstmModel.save(`file://${MODEL_DIR}/lstm`);
+      await this.lstmModel.save(`file://${MODEL_DIR}/lstm`.replace(/\\/g, '/'));
       console.log('[TF Engine] LSTM model saved');
     } catch (err) {
       console.warn('[TF Engine] Failed to save LSTM:', err.message);
@@ -485,7 +486,7 @@ class TFEngine {
   async loadLSTM() {
     if (!tf) return false;
     try {
-      this.lstmModel = await tf.loadLayersModel(`file://${MODEL_DIR}/lstm/model.json`);
+      this.lstmModel = await tf.loadLayersModel(`file://${MODEL_DIR}/lstm/model.json`.replace(/\\/g, '/'));
       this.lstmModel.compile({
         optimizer: tf.train.adam(0.001),
         loss: 'binaryCrossentropy',
@@ -506,7 +507,7 @@ class TFEngine {
       if (!fs.existsSync(MODEL_DIR)) {
         fs.mkdirSync(MODEL_DIR, { recursive: true });
       }
-      await this.tftModel.save(`file://${MODEL_DIR}/tft`);
+      await this.tftModel.save(`file://${MODEL_DIR}/tft`.replace(/\\/g, '/'));
       console.log('[TF Engine] TFT model saved');
     } catch (err) {
       console.warn('[TF Engine] Failed to save TFT:', err.message);
@@ -516,7 +517,7 @@ class TFEngine {
   async loadTFT() {
     if (!tf) return false;
     try {
-      this.tftModel = await tf.loadLayersModel(`file://${MODEL_DIR}/tft/model.json`);
+      this.tftModel = await tf.loadLayersModel(`file://${MODEL_DIR}/tft/model.json`.replace(/\\/g, '/'));
       this.tftModel.compile({
         optimizer: tf.train.adam(0.0005),
         loss: ['binaryCrossentropy', 'binaryCrossentropy', 'binaryCrossentropy'],
