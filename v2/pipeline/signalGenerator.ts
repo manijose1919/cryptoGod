@@ -111,14 +111,22 @@ export function generateSignals(
     else if (regime.regime === 'UP') compositeScore += 5;
 
     compositeScore = Math.min(compositeScore, 100);
+
+    // BB overbought filter: penalize entries near upper band
+    // %B > 0.85 means price is near the top of the band — likely to revert
+    const pctB = signals.bb_percent_b as number;
+    if (pctB > 0.90) compositeScore -= 12;
+    else if (pctB > 0.80) compositeScore -= 6;
+
     const confidence = compositeScore / 100;
 
     const passed = compositeScore >= V2_CONFIG.MIN_COMPOSITE_SCORE;
 
     const activeSignals = evals.filter((e) => e.active).map((e) => e.name);
+    const bbNote = pctB > 0.80 ? `, BB%B=${pctB.toFixed(2)}(penalty)` : '';
     const reason = passed
-      ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]`
-      : `REJECT: score=${compositeScore.toFixed(1)} < min ${V2_CONFIG.MIN_COMPOSITE_SCORE}`;
+      ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}`
+      : `REJECT: score=${compositeScore.toFixed(1)} < min ${V2_CONFIG.MIN_COMPOSITE_SCORE}${bbNote}`;
 
     results.push({
       ticker: scan.ticker,

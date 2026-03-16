@@ -49,7 +49,7 @@ export const V2_CONFIG = {
   CANDLE_INTERVAL: '15m' as string, // '1m', '5m', '15m', '1h', '4h'
 
   // --- Exit Management ---
-  STOP_LOSS_ATR_MULT: 2.0,
+  STOP_LOSS_ATR_MULT: 2.5,         // Was 2.0 — too tight, normal 15m noise triggered SL
   TAKE_PROFIT_ATR_MULT: 3.0,      // Was 4.0 — tighter targets for more frequent exits
   TRAILING_ACTIVATE_PERCENT: 0.02,
   TRAILING_GIVEBACK_PERCENT: 0.40,
