@@ -185,6 +185,7 @@ let samplesSinceLastTrain = 0;
 
 // Upgrade #1: Incremental learning
 let incrementalSampleCount = 0;
+let shapSampleCount = 0; // Module-level counter for SHAP sampling (every 10th prediction)
 const INCREMENTAL_THRESHOLD = 20; // Trigger incremental update every 20 labeled samples
 const incrementalBuffer = { features: [], labels: [] };
 
@@ -600,12 +601,21 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
     }
 
     // Step 10: Meta-Ensemble with dynamic weights (Phase 6 Thompson Sampling)
-    let metaWeights = { rf_gbt_lr: 0.25, tf_lstm: 0.10, tft: 0.20, war_room: 0.15 };
+    // Meta-weights: zero out untrained models (LSTM/TFT never trained, output noise).
+    // RF+GBT+LR is the only trained ensemble (88.9% CV accuracy).
+    // War Room agents get reduced weight until agent bugs are fixed.
+    // TODO: restore LSTM/TFT weights once training pipelines are activated.
+    let metaWeights = { rf_gbt_lr: 0.55, tf_lstm: 0.0, tft: 0.0, war_room: 0.10 };
     try {
       if (onlineLearner && getFlag('ONLINE_LEARNING_ENABLED')) {
         metaWeights = onlineLearner.getExpectedWeights();
       }
     } catch {}
+    // CLAMP: Force untrained models to 0 weight regardless of online learner.
+    // The online learner may assign non-zero weights via Thompson Sampling even if
+    // the models never trained (random warm-start). Remove this clamp once LSTM/TFT are trained.
+    metaWeights.tf_lstm = 0;
+    metaWeights.tft = 0;
 
     // Blend all model predictions into final confidence
     const direction = prediction.prediction === 1 ? 'UP' : 'DOWN';
@@ -703,9 +713,10 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
     if (tftPrediction) modelContributions.tft = tftPrediction.prediction;
     if (warRoomResult) modelContributions.war_room = warRoomResult.prediction;
 
-    // SHAP drift tracking (Phase 7)
+    // SHAP drift tracking (Phase 7) — sample every 10th prediction to reduce CPU cost
     try {
-      if (shapModule?.trackSHAPDrift && shapModule?.explainPrediction && getFeatureNames) {
+      shapSampleCount++;
+      if (shapSampleCount % 10 === 0 && shapModule?.trackSHAPDrift && shapModule?.explainPrediction && getFeatureNames) {
         const explanation = shapModule.explainPrediction(mlEngine, featureArray, getFeatureNames());
         if (explanation?.topFeatures) {
           const contributions = new Array(featureArray.length).fill(0);
@@ -776,7 +787,7 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
  * @param {string} outcome - 'WIN' or 'LOSS'
  * @param {number} pnlPercent - Profit/loss percentage
  */
-export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent) {
+export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent, regime = null) {
   try {
     if (!db || !db.labelMLFeatures) {
       console.warn('[ML Prediction] Database not available for labeling');
@@ -904,6 +915,27 @@ export async function recordTradeOutcome(ticker, entryTime, outcome, pnlPercent)
         warRoom.recordOutcome(ticker, actualDirection, null);
       }
     } catch {}
+
+    // Per-regime accuracy tracking — helps diagnose which market conditions the model struggles with.
+    // If regime not passed by caller, try to derive from beastMode regime cache.
+    let tradeRegime = regime;
+    if (!tradeRegime) {
+      try {
+        const { getMarketRegime } = await import('./beastMode.js');
+        tradeRegime = getMarketRegime([], ticker); // Will use cached regime if available
+      } catch {}
+    }
+    if (tradeRegime) {
+      try {
+        if (db?.getDb) {
+          const database = db.getDb();
+          database.prepare(`
+            INSERT INTO ml_regime_accuracy (regime, outcome, ticker, pnl_percent, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+          `).run(tradeRegime, outcome, ticker, pnlPercent, Date.now());
+        }
+      } catch {}
+    }
 
   } catch (err) {
     console.error('[ML Prediction] recordTradeOutcome error:', err);

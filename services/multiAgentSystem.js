@@ -55,8 +55,8 @@ class SniperAgent {
       return new AgentDecision('HOLD', confidence, 0, 'Confidence below 80% threshold');
     }
 
-    if (this.tradesToday >= 2) {
-      return new AgentDecision('HOLD', confidence, 0, 'Max 2 trades/day reached');
+    if (this.tradesToday >= 5) {
+      return new AgentDecision('HOLD', confidence, 0, 'Max 5 trades/day reached');
     }
 
     // Check model agreement
@@ -68,7 +68,8 @@ class SniperAgent {
       return new AgentDecision('HOLD', confidence * 0.7, 0, 'TFT horizons divergent');
     }
 
-    this.tradesToday++;
+    // NOTE: tradesToday is incremented via recordSniperTrade(), NOT on evaluate().
+    // Old bug: incrementing here disabled the agent after 2 evaluations, not 2 actual trades.
     const action = direction === 'UP' ? 'BUY' : direction === 'DOWN' ? 'SELL' : 'HOLD';
     return new AgentDecision(action, confidence, 0.8, `High-confidence ${direction} signal`);
   }
@@ -80,12 +81,11 @@ class ScalperAgent {
   }
 
   evaluate(features, prediction, context = {}) {
-    const { rsi, macdHist, volumeRatio, hoursSinceLastTrade } = context;
-
-    // Scalper: short momentum plays
-    const rsiVal = features[0] || rsi || 50; // RSI is feature index 0
-    const macd = features[3] || macdHist || 0; // MACD histogram
-    const volRatio = features[20] || volumeRatio || 1; // Volume ratio
+    // Use context values first (passed from mlPredictionService), then feature array as fallback.
+    // Old bug: hardcoded indices (features[0], features[3], features[20]) broke when feature order changed.
+    const rsiVal = context.rsi || (Array.isArray(features) && features.length > 0 ? features[0] * 100 : 50);
+    const macd = context.macdHist || (Array.isArray(features) && features.length > 3 ? features[3] : 0);
+    const volRatio = context.volumeRatio || (Array.isArray(features) && features.length > 20 ? features[20] : 1);
 
     let action = 'HOLD';
     let confidence = 0.5;
@@ -164,23 +164,28 @@ class ContrarianAgent {
   evaluate(features, prediction, context = {}) {
     const { fearGreedIndex, sentimentScore, rsi } = context;
 
-    // Contrarian: fades extreme sentiment
-    const fgi = fearGreedIndex || features[40] || 50; // Fear & Greed index
-    const sentiment = sentimentScore || features[41] || 0;
-    const rsiVal = features[0] || rsi || 50;
+    // Contrarian: fades extreme sentiment.
+    // Use context values first (reliable), then features as fallback.
+    // If Fear & Greed data is unavailable (=== 0 or null), HOLD instead of making decisions on bad data.
+    const fgi = fearGreedIndex || 50;
+    const sentiment = sentimentScore || 0;
+    const rsiVal = rsi || (Array.isArray(features) && features.length > 0 ? features[0] * 100 : 50);
+
+    // If Fear & Greed data is missing (defaults to 50), don't act on contrarian signals
+    const hasFGData = fearGreedIndex != null && fearGreedIndex !== 0 && fearGreedIndex !== 50;
 
     let action = 'HOLD';
     let confidence = 0.5;
     let reason = '';
 
-    // Extreme fear = buy opportunity
-    if (fgi < 20 && rsiVal < 35) {
+    // Extreme fear = buy opportunity (only if we have real F&G data)
+    if (hasFGData && fgi < 20 && rsiVal < 35) {
       action = 'BUY';
       confidence = 0.60 + (20 - fgi) / 100;
       reason = `Extreme fear (FGI=${fgi.toFixed(0)}), contrarian buy`;
     }
-    // Extreme greed = sell/reduce
-    else if (fgi > 80 && rsiVal > 65) {
+    // Extreme greed = sell/reduce (only if we have real F&G data)
+    else if (hasFGData && fgi > 80 && rsiVal > 65) {
       action = 'SELL';
       confidence = 0.60 + (fgi - 80) / 100;
       reason = `Extreme greed (FGI=${fgi.toFixed(0)}), contrarian sell`;
@@ -305,6 +310,14 @@ class MultiAgentWarRoom {
       regime: this.regime,
       contrarian: this.contrarian,
     };
+  }
+
+  /**
+   * Record that a sniper trade was actually executed (not just evaluated).
+   * Fixes bug where tradesToday was incremented on evaluate() instead of actual execution.
+   */
+  recordSniperTrade() {
+    this.sniper.tradesToday++;
   }
 
   /**
