@@ -26,7 +26,7 @@ let pauseReason = '';
 
 const CIRCUIT_BREAKER_CONFIG = {
   MAX_CONSECUTIVE_LOSSES: 3,            // Tighter: 3 consecutive losses triggers pause
-  MAX_DAILY_DRAWDOWN_PERCENT: 8,        // Was 15%: protect capital more aggressively
+  MAX_DAILY_DRAWDOWN_PERCENT: 5,        // Was 8%: tighter capital protection — 5% daily max preserves portfolio
   MAX_HOURLY_LOSSES: 8,                 // Was 20: 8 losses/hour is already excessive
   PAUSE_DURATION_MS: 10 * 60 * 1000,    // Was 5min: longer cooldown to prevent overtrading
   ESCALATING_PAUSE: true,               // Repeated trips = longer cooldowns

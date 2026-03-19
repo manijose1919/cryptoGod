@@ -357,13 +357,15 @@ export function getCompoundMultiplier() {
   let multiplier = 1.0;
   let reason = 'Neutral';
 
-  // Win streak bonuses
+  // Win streak bonuses — capped conservatively to prevent "gave it all back" on reversal.
+  // Old: 5 wins = 1.5×. A 5-win then 2-loss sequence at 1.5× loses more than the 5 wins gained.
+  // New: max 1.2× — still rewards streaks without risking blowup.
   if (streakState.consecutiveWins >= 5) {
-    multiplier = 1.5;
-    reason = `Hot streak: ${streakState.consecutiveWins} wins -> 1.5x`;
+    multiplier = 1.2;
+    reason = `Hot streak: ${streakState.consecutiveWins} wins -> 1.2x`;
   } else if (streakState.consecutiveWins >= 3) {
-    multiplier = 1.25;
-    reason = `Win streak: ${streakState.consecutiveWins} wins -> 1.25x`;
+    multiplier = 1.1;
+    reason = `Win streak: ${streakState.consecutiveWins} wins -> 1.1x`;
   }
 
   // Loss streak penalties
@@ -390,8 +392,8 @@ export function getCompoundMultiplier() {
     }
   }
 
-  // Cap between 0.4x and 2.0x
-  multiplier = Math.max(0.4, Math.min(2.0, multiplier));
+  // Cap between 0.4x and 1.5x (was 2.0x — too aggressive, amplifies losses on reversal)
+  multiplier = Math.max(0.4, Math.min(1.5, multiplier));
 
   return { multiplier, reason };
 }
@@ -559,8 +561,10 @@ export function checkDynamicExit(position, currentPrice, candles) {
   }
 
   // --- TRAILING STOP (ATR-aware) ---
-  // Scale activation based on TP target: activate at 40% of TP (was 60% — too late for scalps)
-  const trailActivation = Math.max(0.8, targets.takeProfitPct * 0.4);
+  // Scale activation based on TP target: activate at 55% of TP.
+  // Was 40% — too early, triggered on normal bid-ask retracement (0.3-0.5% noise).
+  // At 55%, a 1.5% TP activates trail at +0.825% (clear of noise).
+  const trailActivation = Math.max(0.8, targets.takeProfitPct * 0.55);
 
   if (highFeeAdj >= trailActivation) {
     // Trail giveback: time-weighted + ATR-aware

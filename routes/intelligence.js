@@ -425,6 +425,36 @@ export default function createIntelligenceRouter(ctx) {
         }
     });
 
+    // GET /ml/accuracy-by-regime — Per-regime accuracy breakdown
+    router.get('/ml/accuracy-by-regime', async (req, res) => {
+        try {
+            const { getDb } = await import('../services/database.js');
+            const database = getDb();
+            const rows = database.prepare(`
+                SELECT regime,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN outcome = 'WIN' THEN 1 ELSE 0 END) as wins,
+                       SUM(CASE WHEN outcome = 'LOSS' THEN 1 ELSE 0 END) as losses,
+                       AVG(pnl_percent) as avg_pnl,
+                       MIN(pnl_percent) as worst_trade,
+                       MAX(pnl_percent) as best_trade
+                FROM ml_regime_accuracy
+                WHERE timestamp > ?
+                GROUP BY regime
+                ORDER BY total DESC
+            `).all(Date.now() - 30 * 24 * 60 * 60 * 1000); // Last 30 days
+            const result = rows.map(r => ({
+                ...r,
+                winRate: r.total > 0 ? (r.wins / r.total * 100).toFixed(1) + '%' : '0%',
+                avgPnl: r.avg_pnl?.toFixed(3) + '%',
+            }));
+            res.json(result);
+        } catch (e) {
+            log.error('ml/accuracy-by-regime failed', { error: e.message });
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // GET /derivatives/history — Current derivatives intelligence data
     router.get('/derivatives/history', async (req, res) => {
         try {

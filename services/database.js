@@ -541,6 +541,18 @@ export function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_gatekeeper_log_time
       ON ml_gatekeeper_log(created_at DESC);
+
+    -- Per-regime ML accuracy tracking
+    CREATE TABLE IF NOT EXISTS ml_regime_accuracy (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      regime TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      ticker TEXT,
+      pnl_percent REAL,
+      timestamp INTEGER DEFAULT (unixepoch() * 1000)
+    );
+    CREATE INDEX IF NOT EXISTS idx_regime_accuracy_regime
+      ON ml_regime_accuracy(regime, timestamp DESC);
   `);
 
   // ============================================

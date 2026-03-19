@@ -131,6 +131,7 @@ export async function executeTrade(
       entrySignals: signal.signals,
       entryRegime: signal.regime,
       entryConfidence: signal.confidence,
+      atrPercent: signal.signals.atr_percent,
       decisionLog: [...previousDecisions, decision],
       createdAt: Date.now(),
     };
@@ -212,6 +213,7 @@ export async function executeTrade(
       entrySignals: signal.signals,
       entryRegime: signal.regime,
       entryConfidence: signal.confidence,
+      atrPercent: signal.signals.atr_percent,
       decisionLog: [...previousDecisions, decision],
       createdAt: Date.now(),
     };

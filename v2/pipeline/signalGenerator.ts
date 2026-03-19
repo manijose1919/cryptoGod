@@ -3,9 +3,10 @@
 // TREND strategy only, individually scored signals
 // ============================================
 
-import type { Candle, ScanResult, SignalResult, SignalSnapshot } from './types.ts';
+import type { Candle, ScanResult, SignalResult } from './types.ts';
 import { V2_CONFIG } from '../engine/config.ts';
 import { computeSignals } from '../indicators/indicators.ts';
+import { getSignalScores } from '../attribution/attributionStore.ts';
 
 // --- Internal Types ---
 
@@ -16,11 +17,64 @@ interface SignalEval {
   weight: number;
 }
 
+// --- Adaptive Weight Map ---
+// Maps signal eval names to scorecard signal names for weight adaptation
+const EVAL_TO_SCORECARD: Record<string, string> = {
+  rsi_momentum: 'rsi',
+  macd_cross: 'macd_cross',
+  trend_strength: 'trend_strength',
+  volume_spike: 'volume_ratio',
+  bb_lower_touch: 'bb_percent_b',
+};
+
+// Cache scorecard verdicts for 5 minutes to avoid hammering SQLite
+let _cachedVerdicts: Map<string, string> | null = null;
+let _verdictCacheTime = 0;
+const VERDICT_CACHE_TTL = 5 * 60 * 1000;
+
+function getScorecardVerdicts(): Map<string, string> {
+  const now = Date.now();
+  if (_cachedVerdicts && now - _verdictCacheTime < VERDICT_CACHE_TTL) {
+    return _cachedVerdicts;
+  }
+  try {
+    const scores = getSignalScores();
+    _cachedVerdicts = new Map(scores.map((s) => [s.signalName, '']));
+    for (const s of scores) {
+      let verdict: string;
+      if (s.totalTrades < V2_CONFIG.MIN_TRADES_FOR_SCORING) verdict = 'inconclusive';
+      else if (s.edge > 0.003 && s.winRate > 0.55) verdict = 'proven';
+      else if (s.edge < -0.002) verdict = 'negative';
+      else verdict = 'inconclusive';
+      _cachedVerdicts.set(s.signalName, verdict);
+    }
+  } catch {
+    _cachedVerdicts = new Map();
+  }
+  _verdictCacheTime = now;
+  return _cachedVerdicts;
+}
+
+/**
+ * Adjust signal weight based on scorecard verdict.
+ * Proven → 1.5x weight, Negative → 0.5x weight, Inconclusive → 1.0x
+ */
+function adaptWeight(evalName: string, baseWeight: number): number {
+  const scorecardName = EVAL_TO_SCORECARD[evalName];
+  if (!scorecardName) return baseWeight;
+  const verdicts = getScorecardVerdicts();
+  const verdict = verdicts.get(scorecardName);
+  if (verdict === 'proven') return Math.round(baseWeight * 1.5);
+  if (verdict === 'negative') return Math.round(baseWeight * 0.5);
+  return baseWeight;
+}
+
 // --- Signal Evaluation ---
 
 /**
  * Evaluate 5 TREND signals independently. Each gets a score (0-100),
  * active flag, and weight for weighted averaging.
+ * Weights are adapted based on signal scorecard verdicts.
  */
 export function evaluateSignals(signals: Record<string, number | boolean>): SignalEval[] {
   const rsiVal = signals.rsi as number;
@@ -41,39 +95,39 @@ export function evaluateSignals(signals: Record<string, number | boolean>): Sign
   else if (rsiVal < 65) rsiScore = 45;   // trend-appropriate range
   else if (rsiVal < 75) rsiScore = 30;   // getting overbought
   else rsiScore = 10;                     // overbought — avoid
-  evals.push({ name: 'rsi_momentum', score: rsiScore, active: rsiVal < 65, weight: 20 });
+  evals.push({ name: 'rsi_momentum', score: rsiScore, active: rsiVal < 65, weight: adaptWeight('rsi_momentum', 20) });
 
-  // 2. MACD cross (weight 25)
+  // 2. MACD cross (base weight 25, adapted by scorecard)
   let macdScore: number;
   if (macdCross) macdScore = 95;
   else if (macdHist > 0) macdScore = 60;
   else macdScore = 20;
-  evals.push({ name: 'macd_cross', score: macdScore, active: macdCross || macdHist > 0, weight: 25 });
+  evals.push({ name: 'macd_cross', score: macdScore, active: macdCross || macdHist > 0, weight: adaptWeight('macd_cross', 25) });
 
-  // 3. Trend strength (weight 25)
+  // 3. Trend strength (base weight 25, adapted by scorecard)
   let trendScore: number;
   if (trendStr > 2) trendScore = 90;
   else if (trendStr > 1) trendScore = 75;
   else if (trendStr > 0.5) trendScore = 60;
   else if (trendStr > 0) trendScore = 40;
   else trendScore = 10;
-  evals.push({ name: 'trend_strength', score: trendScore, active: trendStr > 0.5, weight: 25 });
+  evals.push({ name: 'trend_strength', score: trendScore, active: trendStr > 0.5, weight: adaptWeight('trend_strength', 25) });
 
-  // 4. Volume spike (weight 15)
+  // 4. Volume spike (base weight 15, adapted by scorecard)
   let volScore: number;
   if (volRatio > 2) volScore = 90;
   else if (volRatio > 1.5) volScore = 75;
   else if (volRatio > 1) volScore = 55;
   else volScore = 30;
-  evals.push({ name: 'volume_spike', score: volScore, active: volRatio > 1.2, weight: 15 });
+  evals.push({ name: 'volume_spike', score: volScore, active: volRatio > 1.2, weight: adaptWeight('volume_spike', 15) });
 
-  // 5. Bollinger lower touch (weight 15)
+  // 5. Bollinger lower touch (base weight 15, adapted by scorecard)
   let bbScore: number;
   if (pctB < 0.2) bbScore = 85;
   else if (pctB < 0.4) bbScore = 65;
   else if (pctB < 0.6) bbScore = 45;
   else bbScore = 25;
-  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.35, weight: 15 });
+  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.35, weight: adaptWeight('bb_lower_touch', 15) });
 
   return evals;
 }
@@ -112,11 +166,14 @@ export function generateSignals(
 
     compositeScore = Math.min(compositeScore, 100);
 
-    // BB overbought filter: penalize entries near upper band
-    // %B > 0.85 means price is near the top of the band — likely to revert
+    // BB overbought filter: proportional penalty near upper band.
+    // Was flat -12/-6 — now curves up to -30pts at %B=1.0.
+    // This prevents buying at the top of Bollinger Bands.
     const pctB = signals.bb_percent_b as number;
-    if (pctB > 0.90) compositeScore -= 12;
-    else if (pctB > 0.80) compositeScore -= 6;
+    if (pctB > 0.80) {
+      // Proportional: 6 + (pctB - 0.80) * 120 → -6 at 0.80, -18 at 0.90, -30 at 1.0
+      compositeScore -= Math.round(6 + (pctB - 0.80) * 120);
+    }
 
     const confidence = compositeScore / 100;
 

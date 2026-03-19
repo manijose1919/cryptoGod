@@ -155,6 +155,7 @@ export interface V2Trade {
   entrySignals: SignalSnapshot;
   entryRegime: Regime;
   entryConfidence: number;
+  atrPercent?: number;           // ATR% at entry — used for ATR-aware trailing stops
   decisionLog: DecisionRecord[];
   createdAt: number;
 }

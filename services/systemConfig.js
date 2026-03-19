@@ -13,7 +13,7 @@ const DEFAULT_FLAGS = {
   ML_GATEKEEPER_MODE: 'HARD_GATE',       // 'ADVISORY' | 'SOFT_GATE' | 'HARD_GATE'
   ML_MIN_CONFIDENCE_TO_BLOCK: 52,
   ML_MIN_CONFIDENCE_TO_OVERRIDE: 55,
-  ML_AUTO_DOWNGRADE_THRESHOLD: 0,         // DISABLED — no auto-downgrade, learn or die
+  ML_AUTO_DOWNGRADE_THRESHOLD: 0.48,      // Auto-downgrade to ADVISORY if accuracy < 48% over window
   ML_AUTO_DOWNGRADE_WINDOW: 100,
 
   // System B: Genetic Strategy Evolution — ON

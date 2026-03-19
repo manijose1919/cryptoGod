@@ -108,9 +108,41 @@ export async function checkExits(
       continue;
     }
 
+    let newStop = trade.currentStop;
+
+    // --- 2b. Break-Even Stop ---
+    // Once price moves +1.5% (covers round-trip fees + buffer), move SL to entry.
+    // Turns potential losers into scratches — critical for win rate.
+    const rawPnlPercent = pnlPercent; // pnlPercent is already raw (no fee adjustment)
+    if (rawPnlPercent >= 0.015 && rawPnlPercent < V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
+      const breakEvenStop = trade.entryPrice * 1.001; // Slightly above entry to cover slippage
+      if (breakEvenStop > trade.currentStop) {
+        newStop = breakEvenStop;
+        updateTradeStop(trade.id, newStop);
+      }
+    }
+
+    // --- 2c. Quick-Kill for Dud Trades ---
+    // If trade is >45 min old and has never been profitable (+0.3%), tighten SL.
+    // "If it was going to work, it would have shown signs by now."
+    const peakPnlPercent = (trade.currentStop > trade.initialStop)
+      ? (trade.currentStop - trade.entryPrice) / trade.entryPrice
+      : pnlPercent;  // approximate: if stop never moved, peak ≈ current
+    if (
+      holdMs > V2_CONFIG.QUICK_KILL_AFTER_MS &&
+      peakPnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
+      pnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
+      trade.atrPercent
+    ) {
+      const tighterStop = trade.entryPrice - (trade.entryPrice * trade.atrPercent / 100) * V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
+      if (tighterStop > trade.currentStop) {
+        newStop = tighterStop;
+        updateTradeStop(trade.id, newStop);
+      }
+    }
+
     // --- 3. Trailing Stop ---
     let trailingJustActivated = false;
-    let newStop = trade.currentStop;
 
     if (pnlPercent >= V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
       // Activate trailing if not yet active
@@ -119,10 +151,25 @@ export async function checkExits(
         trailingJustActivated = true;
       }
 
-      // Calculate trailing stop: give back a fixed fraction of the gain from entry
-      // e.g., up $5 with 40% giveback → trail at currentPrice - $2 = $3 above entry
+      // ATR-aware giveback: use trade's ATR% to scale trail width.
+      // High volatility = wider trail (avoid noise stops), low vol = tighter trail (lock profit).
+      let givebackFraction = V2_CONFIG.TRAILING_GIVEBACK_PERCENT;
+      if (trade.atrPercent) {
+        if (trade.atrPercent > 2.0) givebackFraction *= 1.3;      // High vol: widen 30%
+        else if (trade.atrPercent > 1.0) givebackFraction *= 1.1;  // Med vol: widen 10%
+        else if (trade.atrPercent < 0.3) givebackFraction *= 0.7;  // Low vol: tighten 30%
+      }
+
+      // Profit-tier tightening: bigger winners get tighter trails
+      const tpTarget = trade.takeProfitTarget
+        ? (trade.takeProfitTarget - trade.entryPrice) / trade.entryPrice
+        : V2_CONFIG.TAKE_PROFIT_ATR_MULT * (trade.atrPercent || 0.01);
+      const profitMultiple = tpTarget > 0 ? pnlPercent / tpTarget : 1;
+      if (profitMultiple >= 2.0) givebackFraction *= 0.6;
+      else if (profitMultiple >= 1.5) givebackFraction *= 0.8;
+
       const peakGain = currentPrice - trade.entryPrice;
-      const trailingStop = currentPrice - peakGain * V2_CONFIG.TRAILING_GIVEBACK_PERCENT;
+      const trailingStop = currentPrice - peakGain * givebackFraction;
 
       // Stops can only tighten (go up for longs) — use the higher of computed vs existing
       if (trailingStop > trade.currentStop) {
