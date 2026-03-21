@@ -75,4 +75,37 @@ export const V2_CONFIG = {
 
   // --- Signal Scoring ---
   MIN_TRADES_FOR_SCORING: 20,
+
+  // --- TC (Trend Composite) Indicator Thresholds ---
+  TC_BUY_ZONE: 20,           // TC below this = strong buy zone
+  TC_SELL_ZONE: 80,          // TC above this = sell zone / avoid
+  TC_CONSENSUS_MIN: 50,      // Minimum multi-TF consensus to boost score
+} as const;
+
+// --- Exchange-specific fee configs ---
+
+export const EXCHANGE_FEES = {
+  kraken: {
+    TAKER_PERCENT: 0.0026,
+    MAKER_PERCENT: 0.0016,
+    ROUND_TRIP_TAKER: 0.0052,
+    ROUND_TRIP_MAKER: 0.0032,
+  },
+  'crypto.com': {
+    TAKER_PERCENT: 0.00075,
+    MAKER_PERCENT: 0.00050,
+    ROUND_TRIP_TAKER: 0.0015,
+    ROUND_TRIP_MAKER: 0.0010,
+  },
+} as const;
+
+// --- Dual Exchange Competition Config ---
+
+export const DUAL_ENGINE_CONFIG = {
+  /** Enable dual-engine mode (run Kraken + Crypto.com side by side) */
+  ENABLED: (process.env.DUAL_ENGINE ?? 'false') === 'true',
+  /** Budget per engine in USD (each gets its own portfolio) */
+  BUDGET_PER_ENGINE: 1000,
+  /** Both run in paper mode during competition */
+  MODE: 'paper' as const,
 } as const;

@@ -8,7 +8,7 @@ import { getClosedTrades, upsertSignalScore } from './attributionStore.ts';
 
 // --- Signal Active Thresholds ---
 
-export const SIGNAL_ACTIVE_THRESHOLDS: Record<string, (v: number | boolean) => boolean> = {
+export const SIGNAL_ACTIVE_THRESHOLDS: Record<string, (v: number | boolean | string) => boolean> = {
   rsi: (v) => (v as number) < 45,
   macd_cross: (v) => v === true,
   macd_histogram: (v) => (v as number) > 0,
@@ -17,6 +17,10 @@ export const SIGNAL_ACTIVE_THRESHOLDS: Record<string, (v: number | boolean) => b
   bb_percent_b: (v) => (v as number) < 0.35,
   price_vs_ema50: (v) => (v as number) > 0,
   atr_percent: (v) => (v as number) > 0.005,
+  // TC + S/R + Dashboard signals
+  tc_value: (v) => (v as number) < 40,
+  sr_channel_position: (v) => (v as number) < 0.40,
+  td_score: (v) => (v as number) >= 50,
 };
 
 // --- Analyze Closed Trade ---

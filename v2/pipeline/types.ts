@@ -93,7 +93,18 @@ export interface SignalSnapshot {
   volume_ratio: number;
   trend_strength: number;
   price_vs_ema50: number;
-  [key: string]: number | boolean;
+  // TC (Trend Composite) indicators — ported from PineScript
+  tc_value: number;           // TC oscillator 0-100 (below 20 = buy, above 80 = sell)
+  tc_zone: string;            // 'buy' | 'sell' | 'neutral'
+  tc_consensus: number;       // Multi-timeframe TC consensus 0-100 (high = bullish)
+  // Support/Resistance
+  sr_channel_position: number; // 0 = at support, 1 = at resistance
+  sr_support_distance: number; // Distance to nearest support as %
+  sr_resistance_distance: number; // Distance to nearest resistance as %
+  // Trend Dashboard
+  td_score: number;           // 0-100 based on 6 indicators (RSI, Stoch, MACD, SMA50/100/200)
+  td_bullish_count: number;   // 0-6 bullish indicator count
+  [key: string]: number | boolean | string;
 }
 
 // --- Pipeline Stage Results ---
