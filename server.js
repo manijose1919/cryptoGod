@@ -7828,9 +7828,16 @@ const startServer = async () => {
 
     // --- Phoenix V2 Engine boot ---
     try {
-        const { bootV2 } = await import('./v2/index.ts');
+        const { bootV2, bootDualEngine } = await import('./v2/index.ts');
         await bootV2(1000);
         console.log('[Server] V2 engine started');
+
+        // --- Dual Exchange Competition (Kraken vs Crypto.com) ---
+        // Set DUAL_ENGINE=true env var to enable, or start via API
+        if (process.env.DUAL_ENGINE === 'true') {
+            await bootDualEngine();
+            console.log('[Server] Dual exchange competition started (paper mode)');
+        }
     } catch (err) {
         console.warn('[Server] V2 engine not available:', err.message);
     }

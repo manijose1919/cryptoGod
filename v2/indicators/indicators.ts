@@ -5,6 +5,9 @@
 
 import type { Candle, Regime, SignalSnapshot } from '../pipeline/types.ts';
 import { REGIME } from '../pipeline/types.ts';
+import { computeTC, computeMultiTimeframeTC } from './tcIndicator.ts';
+import { computeSupportResistance } from './supportResistance.ts';
+import { computeTrendDashboard } from './trendDashboard.ts';
 
 // --- Local Result Types ---
 
@@ -357,6 +360,17 @@ export function computeSignals(candles: Candle[]): { signals: SignalSnapshot; re
     ? (currentPrice - lastEma50Val) / lastEma50Val
     : 0;
 
+  // TC (Trend Composite) indicator
+  const tcResult = computeTC(candles);
+  // Multi-timeframe TC (assumes 15m base, the V2 default)
+  const mtfTc = computeMultiTimeframeTC(candles, 15);
+
+  // Support/Resistance levels
+  const srResult = computeSupportResistance(candles, 12, 0.003);
+
+  // Trend Dashboard (6-indicator consensus)
+  const dashResult = computeTrendDashboard(candles);
+
   const signals: SignalSnapshot = {
     rsi: lastRsi,
     macd_value: lastMacdValue,
@@ -376,6 +390,17 @@ export function computeSignals(candles: Candle[]): { signals: SignalSnapshot; re
     trend_strength: regimeResult.trendStrength,
     price_vs_ema50: priceVsEma50,
     close_price: currentPrice,
+    // TC indicators
+    tc_value: tcResult.current,
+    tc_zone: tcResult.zone,
+    tc_consensus: mtfTc.consensus,
+    // Support/Resistance
+    sr_channel_position: srResult.channelPosition,
+    sr_support_distance: srResult.supportDistance,
+    sr_resistance_distance: srResult.resistanceDistance,
+    // Trend Dashboard
+    td_score: dashResult.score,
+    td_bullish_count: dashResult.bullishCount,
   };
 
   return { signals, regime: regimeResult };

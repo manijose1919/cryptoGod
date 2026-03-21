@@ -141,8 +141,8 @@ export function evaluateRisk(
     }
 
     // Compute stop loss and take profit prices using actual close price (not EMA which lags)
-    const lastPrice = signal.signals.close_price || signal.signals.ema_12;
-    const atrValue = signal.signals.atr;
+    const lastPrice = (signal.signals.close_price || signal.signals.ema_12) as number;
+    const atrValue = signal.signals.atr as number;
     const stopLoss = lastPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
     const takeProfit = lastPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
     const quantity = lastPrice > 0 ? positionSizeUsd / lastPrice : 0;

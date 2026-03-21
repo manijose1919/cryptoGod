@@ -347,7 +347,7 @@ async function runLoop(): Promise<void> {
               // Apply ML size multiplier
               if (gate.sizeMultiplier && gate.sizeMultiplier !== 1.0) {
                 risk.positionSizeUsd *= gate.sizeMultiplier;
-                risk.quantity = risk.positionSizeUsd / (signal.signals.close_price || 1);
+                risk.quantity = risk.positionSizeUsd / ((signal.signals.close_price as number) || 1);
               }
               mlResults.push(risk);
             } else {

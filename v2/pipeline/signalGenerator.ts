@@ -25,6 +25,9 @@ const EVAL_TO_SCORECARD: Record<string, string> = {
   trend_strength: 'trend_strength',
   volume_spike: 'volume_ratio',
   bb_lower_touch: 'bb_percent_b',
+  tc_momentum: 'tc_value',
+  sr_position: 'sr_channel_position',
+  td_consensus: 'td_score',
 };
 
 // Cache scorecard verdicts for 5 minutes to avoid hammering SQLite
@@ -76,7 +79,7 @@ function adaptWeight(evalName: string, baseWeight: number): number {
  * active flag, and weight for weighted averaging.
  * Weights are adapted based on signal scorecard verdicts.
  */
-export function evaluateSignals(signals: Record<string, number | boolean>): SignalEval[] {
+export function evaluateSignals(signals: Record<string, number | boolean | string>): SignalEval[] {
   const rsiVal = signals.rsi as number;
   const macdCross = signals.macd_cross as boolean;
   const macdHist = signals.macd_histogram as number;
@@ -121,13 +124,52 @@ export function evaluateSignals(signals: Record<string, number | boolean>): Sign
   else volScore = 30;
   evals.push({ name: 'volume_spike', score: volScore, active: volRatio > 1.2, weight: adaptWeight('volume_spike', 15) });
 
-  // 5. Bollinger lower touch (base weight 15, adapted by scorecard)
+  // 5. Bollinger lower touch (base weight 10, adapted by scorecard)
   let bbScore: number;
   if (pctB < 0.2) bbScore = 85;
   else if (pctB < 0.4) bbScore = 65;
   else if (pctB < 0.6) bbScore = 45;
   else bbScore = 25;
-  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.35, weight: adaptWeight('bb_lower_touch', 15) });
+  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.35, weight: adaptWeight('bb_lower_touch', 10) });
+
+  // ── TC (Trend Composite) Signals ──────────────────
+
+  // 6. TC momentum (base weight 20) — core signal from PineScript daytrading system
+  // TC < 20 = strong buy zone, TC > 80 = sell zone, inverted for score
+  const tcVal = signals.tc_value as number ?? 50;
+  const tcConsensus = signals.tc_consensus as number ?? 50;
+  let tcScore: number;
+  if (tcVal < 10) tcScore = 95;        // Deep buy zone — strongest signal
+  else if (tcVal < 20) tcScore = 85;   // Buy zone
+  else if (tcVal < 35) tcScore = 70;   // Leaning bullish
+  else if (tcVal < 50) tcScore = 55;   // Neutral-bullish
+  else if (tcVal < 65) tcScore = 40;   // Neutral
+  else if (tcVal < 80) tcScore = 25;   // Leaning bearish
+  else tcScore = 10;                    // Sell zone — avoid
+  // Boost if multi-timeframe consensus agrees
+  if (tcConsensus > 70 && tcScore > 50) tcScore = Math.min(100, tcScore + 10);
+  evals.push({ name: 'tc_momentum', score: tcScore, active: tcVal < 40, weight: adaptWeight('tc_momentum', 20) });
+
+  // 7. S/R channel position (base weight 10) — buy near support, avoid near resistance
+  const srPos = signals.sr_channel_position as number ?? 0.5;
+  let srScore: number;
+  if (srPos < 0.15) srScore = 90;      // Right at support
+  else if (srPos < 0.30) srScore = 75; // Near support
+  else if (srPos < 0.50) srScore = 55; // Lower half of channel
+  else if (srPos < 0.70) srScore = 35; // Upper half
+  else if (srPos < 0.85) srScore = 20; // Near resistance
+  else srScore = 10;                    // At resistance — worst entry
+  evals.push({ name: 'sr_position', score: srScore, active: srPos < 0.40, weight: adaptWeight('sr_position', 10) });
+
+  // 8. Trend Dashboard consensus (base weight 10) — 6-indicator bull/bear vote
+  const tdScore = signals.td_score as number ?? 50;
+  let dashScore: number;
+  if (tdScore >= 83) dashScore = 90;    // 5-6 bullish indicators
+  else if (tdScore >= 67) dashScore = 75; // 4 bullish
+  else if (tdScore >= 50) dashScore = 55; // 3 bullish (neutral)
+  else if (tdScore >= 33) dashScore = 35; // 2 bullish
+  else dashScore = 15;                    // 0-1 bullish — bearish
+  evals.push({ name: 'td_consensus', score: dashScore, active: tdScore >= 50, weight: adaptWeight('td_consensus', 10) });
 
   return evals;
 }
