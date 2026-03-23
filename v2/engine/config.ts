@@ -20,11 +20,11 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP', 'SIDEWAYS'] as const, // TODO: remove SIDEWAYS after paper testing
+  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // SIDEWAYS removed — backtest showed 10.4% WR, -$252 (worst regime)
 
   // --- Signal ---
-  MIN_COMPOSITE_SCORE: 60,                // Was 55 — raise bar for 15m entries to reduce noise trades
-  MIN_CONFIDENCE: 0.60,
+  MIN_COMPOSITE_SCORE: 70,                // Was 60 — backtest showed 12.4% WR at 60; 49% of trades time-killed (no momentum)
+  MIN_CONFIDENCE: 0.70,
   MIN_CANDLES: 50,
 
   // --- Fees (Kraken) ---
