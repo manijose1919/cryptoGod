@@ -375,9 +375,17 @@ export function initializeDatabase() {
   `);
 
   // Migrate sessions table: add session_id, status, trading_mode columns
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN session_id TEXT`); } catch(e) { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ACTIVE'`); } catch(e) {}
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN trading_mode TEXT DEFAULT 'SIMULATION'`); } catch(e) {}
+  // Helper: ignore "duplicate column" errors but log unexpected ones
+  const safeAlter = (sql) => {
+    try { db.exec(sql); } catch(e) {
+      if (!e.message?.includes('duplicate column') && !e.message?.includes('already exists')) {
+        console.error(`[DB MIGRATION] Unexpected error: ${e.message} — SQL: ${sql}`);
+      }
+    }
+  };
+  safeAlter(`ALTER TABLE sessions ADD COLUMN session_id TEXT`);
+  safeAlter(`ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'ACTIVE'`);
+  safeAlter(`ALTER TABLE sessions ADD COLUMN trading_mode TEXT DEFAULT 'SIMULATION'`);
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`); } catch(e) {}
 
@@ -586,7 +594,7 @@ export function initializeDatabase() {
   `);
 
   // Add regime column to ml_features (safe migration)
-  try { db.exec(`ALTER TABLE ml_features ADD COLUMN regime TEXT`); } catch(e) { /* already exists */ }
+  safeAlter(`ALTER TABLE ml_features ADD COLUMN regime TEXT`);
 
   // Phase 1-8: ML Pipeline tables
   db.exec(`
@@ -1451,7 +1459,11 @@ export function initializeTrainingTables() {
   // Add training_type column to training_runs (safe migration)
   try {
     d.exec(`ALTER TABLE training_runs ADD COLUMN training_type TEXT DEFAULT 'standard'`);
-  } catch { /* column already exists */ }
+  } catch(e) {
+    if (!e.message?.includes('duplicate column') && !e.message?.includes('already exists')) {
+      console.error(`[DB MIGRATION] Unexpected error: ${e.message}`);
+    }
+  }
 
   console.log('[Database] Historical training tables initialized');
 }

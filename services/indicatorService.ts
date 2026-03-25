@@ -34,13 +34,14 @@ function cleanCache(): void {
             indicatorCache.delete(key);
         }
     }
-    // If still too large, remove oldest entries
+    // If still too large, evict oldest (Map iterates in insertion order — O(k) not O(n log n))
     if (indicatorCache.size > CACHE_MAX_SIZE) {
-        const entries = Array.from(indicatorCache.entries());
-        entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
-        const toRemove = entries.slice(0, entries.length - CACHE_MAX_SIZE);
-        for (const [key] of toRemove) {
+        const deleteCount = indicatorCache.size - CACHE_MAX_SIZE;
+        let deleted = 0;
+        for (const key of indicatorCache.keys()) {
+            if (deleted >= deleteCount) break;
             indicatorCache.delete(key);
+            deleted++;
         }
     }
 }

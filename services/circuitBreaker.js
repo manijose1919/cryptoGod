@@ -161,10 +161,11 @@ function triggerPause(reason) {
  */
 export function shouldPauseTrading(tradingMode = 'REAL') {
   // Reset daily tracking if new day (in case no trades happen around midnight)
+  // Atomic check-and-set: update dailyDate first to prevent concurrent double-reset
   const today = new Date().toDateString();
   if (today !== dailyDate) {
+    dailyDate = today;   // set FIRST so concurrent calls see the new date
     dailyPnl = 0;
-    dailyDate = today;
     pauseCount = 0;
   }
 
@@ -271,11 +272,26 @@ export function calculateKellyFraction(minTrades = 50) {
 
   const winRate = wins.length / recentTrades.length;
   const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
-  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 1;
+  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
+
+  // Edge case: no losses yet — Kelly formula breaks down (b = Infinity).
+  // Use a conservative fixed fraction instead of a nonsensical Kelly value.
+  if (avgLoss === 0 || losses.length === 0) {
+    return {
+      kellyFull: 1,
+      kellyHalf: 0.5,
+      kellyQuarter: 0.25,
+      recommended: 0.05, // Conservative 5% — no loss data to calibrate
+      confidence: 'LOW',
+      drawdownPct: '0.00',
+      kellyMultiplier: 0.5,
+      stats: { trades: recentTrades.length, wins: wins.length, losses: 0, winRate, avgWin, avgLoss: 0, note: 'no-loss-data' },
+    };
+  }
 
   // Kelly formula: f* = (bp - q) / b
   // where b = avgWin/avgLoss, p = winRate, q = 1 - winRate
-  const b = avgLoss > 0 ? avgWin / avgLoss : 1;
+  const b = avgWin / avgLoss;
   const kellyFull = b > 0 ? Math.max(0, (b * winRate - (1 - winRate)) / b) : 0;
   const kellyHalf = kellyFull / 2;
   const kellyQuarter = kellyFull / 4;
