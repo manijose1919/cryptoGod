@@ -71,6 +71,13 @@ function connect() {
         return;
     }
 
+    // Clean up old socket listeners to prevent memory leaks on reconnect
+    if (ws) {
+        ws.removeAllListeners();
+        try { ws.close(); } catch (e) { /* already closed */ }
+        ws = null;
+    }
+
     try {
         ws = new WebSocket(WS_URL);
 
@@ -98,7 +105,7 @@ function connect() {
                 const msg = JSON.parse(data.toString());
                 handleMessage(msg);
             } catch (e) {
-                // Ignore parse errors
+                if (Math.random() < 0.01) console.warn(`[KrakenWS] Parse error: ${e.message} — data: ${String(data).slice(0, 100)}`);
             }
         });
 

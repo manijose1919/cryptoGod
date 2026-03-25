@@ -115,14 +115,19 @@ export async function fetchHistoricalCandles(
       return [];
   }
 
-  const candles: Candle[] = data.data.map((d: any) => ({
-    time: d.t,
-    open: Number(d.o),
-    high: Number(d.h),
-    low: Number(d.l),
-    close: Number(d.c),
-    volume: Number(d.v),
-  }));
+  const candles: Candle[] = data.data
+    .map((d: any) => ({
+      time: d.t,
+      open: Number(d.o),
+      high: Number(d.h),
+      low: Number(d.l),
+      close: Number(d.c),
+      volume: Number(d.v),
+    }))
+    .filter((c: Candle) =>
+      isFinite(c.open) && isFinite(c.high) && isFinite(c.low) && isFinite(c.close) &&
+      c.open > 0 && c.high > 0 && c.low > 0 && c.close > 0
+    );
 
   return candles;
 }

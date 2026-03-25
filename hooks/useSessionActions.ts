@@ -47,10 +47,11 @@ export function useSessionActions() {
     useEffect(() => {
         if (!isBotActive || !isTradingActive) return;
         const pollInterval = 2000;
+        const abortController = new AbortController();
 
         const pollBackend = async () => {
             try {
-                const res = await fetch('/api/session/full-status');
+                const res = await fetch('/api/session/full-status', { signal: abortController.signal });
                 if (!res.ok) return;
                 const data = await res.json();
 
@@ -82,7 +83,7 @@ export function useSessionActions() {
 
                 // Sync trades from backend
                 try {
-                    const tradesRes = await fetch('/api/session/trades?limit=200');
+                    const tradesRes = await fetch('/api/session/trades?limit=200', { signal: abortController.signal });
                     if (tradesRes.ok) {
                         const tradesData = await tradesRes.json();
                         if (tradesData.trades?.length > 0) {
@@ -113,7 +114,7 @@ export function useSessionActions() {
 
         pollBackend();
         const botInterval = setInterval(pollBackend, pollInterval);
-        return () => clearInterval(botInterval);
+        return () => { clearInterval(botInterval); abortController.abort(); };
     }, [isBotActive, isTradingActive, addLog, setPortfolio, setTrades, setSystemLog, setIsBotActive, setUnlimitedTrades, isBotActiveRef]);
 
     const handleStartSimulation = useCallback(async (budget: number, selectedTicker: string) => {

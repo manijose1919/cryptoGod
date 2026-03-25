@@ -185,11 +185,15 @@ export function getMarketRegime(candles, ticker = '') {
     });
 
     // Cap cache size to prevent unbounded growth from unique tickers
+    // Use iterator-based eviction (O(n)) instead of sort (O(n log n))
     if (regimeCache.size > 50) {
-      const oldest = [...regimeCache.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
-      for (let i = 0; i < oldest.length - 50; i++) {
-        regimeCache.delete(oldest[i][0]);
-        regimeHistory.delete(oldest[i][0]);
+      const deleteCount = regimeCache.size - 50;
+      let deleted = 0;
+      for (const key of regimeCache.keys()) {
+        if (deleted >= deleteCount) break;
+        regimeCache.delete(key);
+        regimeHistory.delete(key);
+        deleted++;
       }
     }
 
@@ -413,8 +417,13 @@ export function getDynamicTargets(candles) {
   }
 
   const atr = calcATR(candles, 14);
-  const price = candles[candles.length - 1].c;
+  const price = candles[candles.length - 1]?.c;
   const atrPercent = (atr / price) * 100;
+
+  // Guard: if ATR or price produced NaN/Infinity, return safe defaults
+  if (!isFinite(atrPercent) || !isFinite(price) || price <= 0) {
+    return { takeProfitPct: 0.8, stopLossPct: 0.5, regime: 'NORMAL' };
+  }
 
   // Fee-aware minimum: target must exceed round-trip fee + margin
   const feeFloor = roundTripFeePercent + 0.30;

@@ -381,7 +381,10 @@ export class SignalScanner {
           const lastCandle = candles[candles.length - 1];
           const maxAge = TF_MAX_AGE_MS[tf] || 3_600_000;
           const candleAge = lastCandle.t ? (Date.now() - lastCandle.t) : 0;
-          if (candleAge > maxAge) continue; // Skip stale data — signal would be unreliable
+          if (candleAge > maxAge) {
+            if (this.scanCount % 10 === 0) this.addLog(`[STALE] ${ticker}/${tf}: candle age ${(candleAge / 60000).toFixed(1)}min > max ${(maxAge / 60000).toFixed(1)}min — skipping`, 'WARN');
+            continue;
+          }
           results.get(ticker)[tf] = analyzeCandles(candles, ticker);
         }
       }
@@ -425,7 +428,8 @@ export class SignalScanner {
           confidence: Math.min(100, Math.round(combined.totalScore * 8)),
         };
 
-        this.signals = [signalObj, ...this.signals].slice(0, MAX_SIGNALS);
+        this.signals.unshift(signalObj);
+        if (this.signals.length > MAX_SIGNALS) this.signals.length = MAX_SIGNALS;
         this.lastSignalTime.set(ticker, Date.now());
         this.injectSignal(signalObj);
         newSignals++;

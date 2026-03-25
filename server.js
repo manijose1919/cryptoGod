@@ -1347,23 +1347,27 @@ app.get('/api/market-intelligence', async (req, res) => {
         const data = {};
         const promises = [];
 
+        const safeCall = (name, fn) => fn?.()?.then(r => r).catch(e => {
+            if (Math.random() < 0.05) console.warn(`[market-intelligence] ${name} failed: ${e.message}`);
+            return null;
+        });
         if (coinMarketCapService) promises.push(
-            coinMarketCapService.getGlobalMetrics?.().then(r => { data.globalMetrics = r; }).catch(() => {})
+            safeCall('globalMetrics', () => coinMarketCapService.getGlobalMetrics()).then(r => { if (r) data.globalMetrics = r; })
         );
         if (coinMarketCapService) promises.push(
-            coinMarketCapService.getMarketDominance?.().then(r => { data.dominance = r; }).catch(() => {})
+            safeCall('dominance', () => coinMarketCapService.getMarketDominance()).then(r => { if (r) data.dominance = r; })
         );
         if (coinMarketCapService) promises.push(
-            coinMarketCapService.getFearGreedIndex?.().then(r => { data.fearGreed = r; }).catch(() => {})
+            safeCall('fearGreed', () => coinMarketCapService.getFearGreedIndex()).then(r => { if (r) data.fearGreed = r; })
         );
         if (etherscanService) promises.push(
-            etherscanService.getNetworkStats?.().then(r => { data.ethNetwork = r; }).catch(() => {})
+            safeCall('ethNetwork', () => etherscanService.getNetworkStats()).then(r => { if (r) data.ethNetwork = r; })
         );
         if (coinDeskService) promises.push(
-            coinDeskService.getBitcoinPriceIndex?.().then(r => { data.btcPrice = r; }).catch(() => {})
+            safeCall('btcPrice', () => coinDeskService.getBitcoinPriceIndex()).then(r => { if (r) data.btcPrice = r; })
         );
         if (messariService) promises.push(
-            messariService.getMarketOverview?.().then(r => { data.messariOverview = r; }).catch(() => {})
+            safeCall('messariOverview', () => messariService.getMarketOverview()).then(r => { if (r) data.messariOverview = r; })
         );
 
         await Promise.all(promises);
@@ -2696,6 +2700,7 @@ async function checkTickExit(ticker, price) {
 // Trading Bot Loop (Optimized for Large Universes)
 // ============================================
 let botLoopRunning = false;
+let _botLoopLock = Promise.resolve(); // Async mutex: serializes bot loop executions
 let _signalScannerRef = null; // Reference to signal scanner for bot loop access
 let botLoopStartTime = 0;
 // Monte Carlo risk gate: cached results refreshed every 30 minutes
@@ -2727,7 +2732,14 @@ let _mtfCache4h = { data: null, ts: 0 };
 let _mtfCache1d = { data: null, ts: 0 };
 async function tradingBotLoop() {
     if (!botState.isActive) return;
-    if (botLoopRunning) return; // prevent overlapping async iterations
+    if (botLoopRunning) return; // prevent overlapping async iterations — fast path
+    // Async mutex: serialize access so concurrent calls queue instead of overlapping
+    let _unlockBot;
+    const prev = _botLoopLock;
+    _botLoopLock = new Promise(resolve => { _unlockBot = resolve; });
+    await prev; // wait for any prior iteration to fully finish
+    if (!botState.isActive) { _unlockBot(); return; } // re-check after await
+    if (botLoopRunning) { _unlockBot(); return; }     // re-check after await
     botLoopRunning = true;
     botLoopStartTime = Date.now();
 
@@ -2875,7 +2887,7 @@ async function tradingBotLoop() {
 
         // C8: Candle gap validation — skip tickers with stale data
         for (const [ticker, candles] of marketDataMap) {
-            if (candles.length < 3) continue;
+            if (!candles || candles.length < 3) { marketDataMap.delete(ticker); continue; }
             const lastCandle = candles[candles.length - 1];
             const prevCandle = candles[candles.length - 2];
             if (lastCandle.t && prevCandle.t) {
@@ -5432,6 +5444,7 @@ async function tradingBotLoop() {
         // a 60-second delay — this immediate reset is the primary safety mechanism.
         botLoopRunning = false;
         botLoopStartTime = 0;
+        if (typeof _unlockBot === 'function') _unlockBot(); // release async mutex
     }
 }
 
@@ -5640,9 +5653,12 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                     for (let i = 0; i < 5; i++) {
                         await new Promise(r => setTimeout(r, 2000));
                         const status = await withTimeout(adapter.getOrderStatus(limitOrder.orderId, botState.sessionId), 10000, 'getOrderStatus');
-                        if (status.status === 'closed' || status.filledQty >= vol * 0.95) {
-                            quantity = status.filledQty || vol;
-                            avgPrice = status.avgPrice || limitPrice;
+                        if (!status) continue; // guard: API returned null/undefined
+                        const sFilled = Number(status.filledQty) || 0;
+                        const sPrice = Number(status.avgPrice) || 0;
+                        if (status.status === 'closed' || sFilled >= vol * 0.95) {
+                            quantity = sFilled > 0 ? sFilled : vol;
+                            avgPrice = sPrice > 0 ? sPrice : limitPrice;
                             filled = true;
                             usedLimit = true;
                             break;
@@ -5652,8 +5668,8 @@ const handleBuy = async (ticker, price, strategy, reason, notional, entryMeta = 
                     // If not fully filled, check for partial fill before cancelling
                     if (!filled) {
                         const finalStatus = await withTimeout(adapter.getOrderStatus(limitOrder.orderId, botState.sessionId), 10000, 'getOrderStatus');
-                        partialFillQty = finalStatus.filledQty || 0;
-                        partialFillCost = partialFillQty * (finalStatus.avgPrice || limitPrice);
+                        partialFillQty = Number(finalStatus?.filledQty) || 0;
+                        partialFillCost = partialFillQty * (Number(finalStatus?.avgPrice) || limitPrice);
 
                         await withTimeout(adapter.cancelOrder(limitOrder.orderId, botState.sessionId), 15000, 'cancelOrder');
 
