@@ -202,9 +202,10 @@ export function generateSignals(
       ? evals.reduce((sum, e) => sum + e.score * e.weight, 0) / totalWeight
       : 0;
 
-    // Regime bonus: reward trend alignment (we only trade UP/STRONG_UP/SIDEWAYS)
+    // Regime bonus: reward trend alignment
     if (regime.regime === 'STRONG_UP') compositeScore += 8;
     else if (regime.regime === 'UP') compositeScore += 5;
+    else if (regime.regime === 'PULLBACK_UP') compositeScore += 3;  // 4h bullish but 15m dipped
 
     compositeScore = Math.min(compositeScore, 100);
 

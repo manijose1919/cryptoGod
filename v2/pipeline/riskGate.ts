@@ -4,6 +4,7 @@
 // ============================================
 
 import type { SignalResult, RiskResult, V2PortfolioState } from './types.ts';
+import { REGIME } from './types.ts';
 import { V2_CONFIG } from '../engine/config.ts';
 
 // --- Fear & Greed (lazy-loaded from existing service) ---
@@ -130,9 +131,12 @@ export function evaluateRisk(
       continue;
     }
 
-    // Position sizing: scale by confidence × Fear & Greed multiplier
+    // Position sizing: scale by confidence × Fear & Greed multiplier × pullback multiplier
     const maxPositionUsd = portfolio.availableCapital * V2_CONFIG.MAX_POSITION_PERCENT;
-    const positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier;
+    const pullbackMult = signal.regime === REGIME.PULLBACK_UP
+      ? V2_CONFIG.MTF_POSITION_MULTIPLIER
+      : 1.0;
+    const positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier * pullbackMult;
 
     // Gate 6: Minimum order size ($10 Kraken minimum)
     if (positionSizeUsd < 10) {
@@ -147,6 +151,7 @@ export function evaluateRisk(
     const takeProfit = lastPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
     const quantity = lastPrice > 0 ? positionSizeUsd / lastPrice : 0;
 
+    const pullbackNote = signal.regime === REGIME.PULLBACK_UP ? `, pullback=${pullbackMult}x` : '';
     results.push({
       ticker: signal.ticker,
       passed: true,
@@ -155,7 +160,7 @@ export function evaluateRisk(
       stopLoss,
       takeProfit,
       expectedReturn,
-      reason: `APPROVED: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x`,
+      reason: `APPROVED: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x${pullbackNote}`,
     });
   }
 

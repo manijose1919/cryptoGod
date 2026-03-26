@@ -8,7 +8,8 @@ import { V2_CONFIG } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // Pipeline imports
-import { scanMarket, getPassedTickers } from '../pipeline/marketScanner.ts';
+import { scanMarket, getPassedTickers, setHTFRegime } from '../pipeline/marketScanner.ts';
+import { detectRegime } from '../indicators/indicators.ts';
 import { generateSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
 import { evaluateRisk, getApproved } from '../pipeline/riskGate.ts';
 import { executeTrade } from '../pipeline/executor.ts';
@@ -42,6 +43,7 @@ const stats = {
   rejectedByRisk: 0,
   lastScanReasons: [] as { ticker: string; reason: string }[],
   candleCounts: {} as Record<string, number>,
+  htfRegimes: {} as Record<string, string>,
 };
 
 // --- Status Interface ---
@@ -56,6 +58,7 @@ export interface V2EngineStatus {
   rejectedByScan: number;
   rejectedBySignal: number;
   rejectedByRisk: number;
+  htfRegimes?: Record<string, string>;
   openPositions: number;
   totalTrades: number;
   portfolioCash: number;
@@ -84,11 +87,12 @@ async function sendEntryAlert(trade: V2Trade): Promise<void> {
   try {
     const tg = await import('../../services/telegramService.js');
     if (tg.isEnabled()) {
+      const pullbackTag = trade.entryRegime === 'PULLBACK_UP' ? ' [PULLBACK]' : '';
       tg.alertTradeExecution({
         type: 'BUY',
         ticker: trade.ticker,
         price: trade.entryPrice,
-        strategy: `${V2_CONFIG.TELEGRAM_TAG} ${trade.entryRegime} conf=${trade.entryConfidence.toFixed(2)}`,
+        strategy: `${V2_CONFIG.TELEGRAM_TAG}${pullbackTag} ${trade.entryRegime} conf=${trade.entryConfidence.toFixed(2)}`,
       });
     }
   } catch {
@@ -158,6 +162,34 @@ async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   return null;
 }
 
+// --- 4h Candle Cache for MTF Regime ---
+
+const _4hCache = new Map<string, { candles: Candle[]; fetchedAt: number }>();
+
+async function fetch4hCandles(ticker: string): Promise<Candle[] | null> {
+  // Check cache
+  const cached = _4hCache.get(ticker);
+  if (cached && Date.now() - cached.fetchedAt < V2_CONFIG.MTF_REGIME_CACHE_TTL_MS) {
+    return cached.candles;
+  }
+
+  try {
+    const adapterModule = await import('../../services/exchangeAdapters/krakenAdapter.js');
+    const adapter = adapterModule.krakenAdapter;
+    const candles = await adapter.getCandles(ticker, V2_CONFIG.MTF_HIGHER_TIMEFRAME, 200);
+    if (candles && candles.length > 0) {
+      const normalized = normalizeCandles(candles);
+      _4hCache.set(ticker, { candles: normalized, fetchedAt: Date.now() });
+      return normalized;
+    }
+  } catch {
+    // 4h fetch failed — return cached if available (even if stale)
+    if (cached) return cached.candles;
+  }
+
+  return null;
+}
+
 // --- Init / Start / Stop ---
 
 /**
@@ -222,6 +254,7 @@ export function getV2Status(): V2EngineStatus {
     rejectedByScan: stats.rejectedByScan,
     rejectedBySignal: stats.rejectedBySignal,
     rejectedByRisk: stats.rejectedByRisk,
+    htfRegimes: stats.htfRegimes,
     openPositions: openTrades.length,
     totalTrades: closedTrades.length + openTrades.length,
     portfolioCash: budget + totalPnlNet,
@@ -269,6 +302,29 @@ async function runLoop(): Promise<void> {
     stats.candleCounts = {};
     for (const [ticker, candles] of tickerCandles) {
       stats.candleCounts[ticker] = candles.length;
+    }
+
+    // ==============================
+    // Stage 0b: Fetch 4h candles for MTF regime (parallel)
+    // ==============================
+    if (V2_CONFIG.MTF_ENABLED) {
+      await Promise.allSettled(
+        V2_CONFIG.SCAN_TICKERS.map(async (ticker) => {
+          const candles4h = await fetch4hCandles(ticker);
+          if (candles4h && candles4h.length >= 50) {
+            const regime4h = detectRegime(candles4h);
+            setHTFRegime(ticker, regime4h.regime);
+            stats.htfRegimes[ticker] = regime4h.regime;
+          }
+        }),
+      );
+      // Log HTF regimes every 10 loops
+      if (stats.loopCount % 10 === 1) {
+        const htfEntries = Object.entries(stats.htfRegimes);
+        if (htfEntries.length > 0) {
+          console.log(`[V2] HTF regimes: ${htfEntries.map(([t, r]) => `${t}=${r}`).join(', ')}`);
+        }
+      }
     }
 
     // ==============================

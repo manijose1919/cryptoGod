@@ -50,6 +50,7 @@ export const REGIME = {
   SIDEWAYS: 'SIDEWAYS',
   DOWN: 'DOWN',
   STRONG_DOWN: 'STRONG_DOWN',
+  PULLBACK_UP: 'PULLBACK_UP',
 } as const;
 export type Regime = typeof REGIME[keyof typeof REGIME];
 

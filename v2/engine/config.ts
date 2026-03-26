@@ -80,6 +80,14 @@ export const V2_CONFIG = {
   TC_BUY_ZONE: 20,           // TC below this = strong buy zone
   TC_SELL_ZONE: 80,          // TC above this = sell zone / avoid
   TC_CONSENSUS_MIN: 50,      // Minimum multi-TF consensus to boost score
+
+  // --- Multi-Timeframe Regime ---
+  MTF_ENABLED: true,
+  MTF_HIGHER_TIMEFRAME: '4h' as string,
+  MTF_ALLOWED_HIGHER_REGIMES: ['STRONG_UP', 'UP'] as readonly string[],
+  MTF_POSITION_MULTIPLIER: 0.75,       // 75% of normal size for pullback entries
+  MTF_REGIME_CACHE_TTL_MS: 15 * 60 * 1000,  // Cache 4h regime for 15 minutes
+  MTF_MAX_15M_REGIME: ['DOWN'] as readonly string[],  // Only rescue DOWN (not STRONG_DOWN)
 } as const;
 
 // --- Exchange-specific fee configs ---
