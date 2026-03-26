@@ -1,6 +1,7 @@
 // ============================================
 // Phoenix V2 Market Scanner
 // Filters tickers by volume, volatility, regime
+// With Multi-Timeframe (MTF) pullback rescue
 // ============================================
 
 import type { Candle, ScanResult } from './types.ts';
@@ -22,10 +23,35 @@ function makeReject(ticker: string, reason: string): ScanResult {
   };
 }
 
+// --- HTF Regime Cache (populated by tradeEngine, read by scanner) ---
+
+const _htfRegimeCache = new Map<string, { regime: string; fetchedAt: number }>();
+
+/**
+ * Set higher-timeframe regime for a ticker.
+ * Called from tradeEngine after fetching 4h candles and running detectRegime().
+ */
+export function setHTFRegime(ticker: string, regime: string): void {
+  _htfRegimeCache.set(ticker, { regime, fetchedAt: Date.now() });
+}
+
+/**
+ * Get cached higher-timeframe regime for a ticker.
+ * Returns null if not cached or expired.
+ */
+function getHTFRegime(ticker: string): string | null {
+  const cached = _htfRegimeCache.get(ticker);
+  if (!cached) return null;
+  if (Date.now() - cached.fetchedAt > V2_CONFIG.MTF_REGIME_CACHE_TTL_MS) return null;
+  return cached.regime;
+}
+
 // --- Scanner ---
 
 /**
  * Scan all tickers and reject any that fail volume, volatility, or regime checks.
+ * When MTF is enabled, tickers in DOWN regime on 15m can pass if the 4h regime
+ * is UP or STRONG_UP (pullback-in-uptrend pattern).
  * Returns one ScanResult per ticker (passed or rejected).
  */
 export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
@@ -42,23 +68,52 @@ export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
     // Compute regime
     const regimeResult = detectRegime(candles);
 
-    // Gate 2: regime filter
+    // Gate 2: regime filter (with MTF pullback rescue)
+    let effectiveRegime = regimeResult.regime;
+    let isPullback = false;
+
     if (!allowedRegimes.has(regimeResult.regime)) {
-      results.push({
-        ticker,
-        passed: false,
-        regime: regimeResult.regime,
-        atrPercent: regimeResult.atrPercent,
-        volumeUsd24h: 0,
-        spreadPercent: 0,
-        reason: `Regime ${regimeResult.regime} not in allowed: [${V2_CONFIG.ALLOWED_REGIMES.join(', ')}]`,
-      });
-      continue;
+      // Check MTF rescue: 15m is DOWN, 4h might be bullish
+      if (
+        V2_CONFIG.MTF_ENABLED &&
+        (V2_CONFIG.MTF_MAX_15M_REGIME as readonly string[]).includes(regimeResult.regime)
+      ) {
+        const htfRegime = getHTFRegime(ticker);
+        if (htfRegime && (V2_CONFIG.MTF_ALLOWED_HIGHER_REGIMES as readonly string[]).includes(htfRegime)) {
+          effectiveRegime = REGIME.PULLBACK_UP;
+          isPullback = true;
+          // Fall through to remaining gates
+        } else {
+          // 4h not bullish or not cached — reject
+          const htfNote = htfRegime ? `, 4h=${htfRegime}` : ', 4h=unknown';
+          results.push({
+            ticker,
+            passed: false,
+            regime: regimeResult.regime,
+            atrPercent: regimeResult.atrPercent,
+            volumeUsd24h: 0,
+            spreadPercent: 0,
+            reason: `Regime ${regimeResult.regime} not in allowed: [${V2_CONFIG.ALLOWED_REGIMES.join(', ')}]${htfNote}`,
+          });
+          continue;
+        }
+      } else {
+        results.push({
+          ticker,
+          passed: false,
+          regime: regimeResult.regime,
+          atrPercent: regimeResult.atrPercent,
+          volumeUsd24h: 0,
+          spreadPercent: 0,
+          reason: `Regime ${regimeResult.regime} not in allowed: [${V2_CONFIG.ALLOWED_REGIMES.join(', ')}]`,
+        });
+        continue;
+      }
     }
 
     // Gate 2b: Regime momentum — catch deteriorating SIDEWAYS before it flips to DOWN.
-    // If regime is SIDEWAYS but EMA20 is falling, price is likely heading into DOWN.
-    if (regimeResult.regime === REGIME.SIDEWAYS) {
+    // Skip for pullbacks — they're already in DOWN, slope is expected negative.
+    if (!isPullback && effectiveRegime === REGIME.SIDEWAYS) {
       const closes = candles.map((c) => c.close);
       const ema20 = ema(closes, 20);
       const lookback = V2_CONFIG.REGIME_MOMENTUM_LOOKBACK;
@@ -86,7 +141,7 @@ export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
       results.push({
         ticker,
         passed: false,
-        regime: regimeResult.regime,
+        regime: effectiveRegime,
         atrPercent: regimeResult.atrPercent,
         volumeUsd24h: 0,
         spreadPercent: 0,
@@ -100,7 +155,7 @@ export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
       results.push({
         ticker,
         passed: false,
-        regime: regimeResult.regime,
+        regime: effectiveRegime,
         atrPercent: regimeResult.atrPercent,
         volumeUsd24h: 0,
         spreadPercent: 0,
@@ -126,7 +181,7 @@ export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
       results.push({
         ticker,
         passed: false,
-        regime: regimeResult.regime,
+        regime: effectiveRegime,
         atrPercent: regimeResult.atrPercent,
         volumeUsd24h,
         spreadPercent: 0,
@@ -142,14 +197,15 @@ export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
       : 0;
 
     // All gates passed
+    const pullbackNote = isPullback ? ' (pullback-in-uptrend)' : '';
     results.push({
       ticker,
       passed: true,
-      regime: regimeResult.regime,
+      regime: effectiveRegime,
       atrPercent: regimeResult.atrPercent,
       volumeUsd24h,
       spreadPercent,
-      reason: `PASS: regime=${regimeResult.regime}, ATR%=${regimeResult.atrPercent.toFixed(3)}, vol24h=$${volumeUsd24h.toFixed(0)}`,
+      reason: `PASS: regime=${effectiveRegime}, ATR%=${regimeResult.atrPercent.toFixed(3)}, vol24h=$${volumeUsd24h.toFixed(0)}${pullbackNote}`,
     });
   }
 
