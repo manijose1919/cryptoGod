@@ -50,18 +50,18 @@ export const V2_CONFIG = {
   CANDLE_INTERVAL: '15m' as string, // '1m', '5m', '15m', '1h', '4h'
 
   // --- Exit Management ---
-  STOP_LOSS_ATR_MULT: 2.5,         // Was 2.0 — too tight, normal 15m noise triggered SL
-  TAKE_PROFIT_ATR_MULT: 4.0,      // Was 3.0 — wider TP for 1.6:1 R:R (2.5 SL : 4.0 TP); 1.2:1 was churning fees
-  TRAILING_ACTIVATE_PERCENT: 0.025,        // 2.5% — break-even stop covers 1.5-2.5%, trailing takes over above
-  TRAILING_GIVEBACK_PERCENT: 0.25,        // Was 40% — tighter trail locks in more profit
-  TIME_KILL_MS: 3 * 60 * 60 * 1000,      // 3h — was 2h which killed winners mid-move; 4h was too long
-  TIME_KILL_MIN_MOVE: 0.004,              // Was 0.5% — slightly tighter threshold
+  STOP_LOSS_ATR_MULT: 3.0,         // Was 2.5 — 15m noise regularly hit 2.5x; 3.0x absorbs normal pullbacks
+  TAKE_PROFIT_ATR_MULT: 5.0,      // Was 4.0 — maintains ~1.67:1 R:R with 3.0 SL; lets trends run further
+  TRAILING_ACTIVATE_PERCENT: 0.015,        // Was 2.5% — lowered to 1.5% so trailing protects winners sooner
+  TRAILING_GIVEBACK_PERCENT: 0.30,        // Was 25% — slightly wider to avoid noise exits on good trends
+  TIME_KILL_MS: 5 * 60 * 60 * 1000,      // Was 3h — extended to 5h; 15m consolidation needs more room
+  TIME_KILL_MIN_MOVE: 0.006,              // Was 0.4% — raised to 0.6%; only kill truly dead trades
   EXIT_CHECK_INTERVAL_MS: 5_000,
 
   // --- Quick-Kill (dud trade detection) ---
-  QUICK_KILL_AFTER_MS: 45 * 60 * 1000,   // 45 min: if trade never showed life, tighten SL
-  QUICK_KILL_MIN_GAIN: 0.003,             // Must have reached +0.3% at some point to avoid quick-kill
-  QUICK_KILL_SL_ATR_MULT: 1.5,            // Tighten SL from 2.5x to 1.5x ATR
+  QUICK_KILL_AFTER_MS: 90 * 60 * 1000,   // Was 45min — extended to 90min; good setups often consolidate first
+  QUICK_KILL_MIN_GAIN: 0.004,             // Was 0.3% — raised to 0.4%; small moves aren't duds
+  QUICK_KILL_SL_ATR_MULT: 2.0,            // Was 1.5x — less aggressive tightening to avoid premature stops
 
   // --- Regime Momentum Gate ---
   REGIME_MOMENTUM_LOOKBACK: 5,            // Compare EMA20 slope over last 5 bars

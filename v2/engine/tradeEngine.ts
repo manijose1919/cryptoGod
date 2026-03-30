@@ -32,6 +32,7 @@ import { loadPortfolio, getCircuitBreakerState } from './positionManager.ts';
 
 let loopTimer: ReturnType<typeof setInterval> | null = null;
 let isRunning = false;
+let loopInProgress = false; // Prevents concurrent runLoop() calls
 let exchange: ExchangeAdapter | null = null;
 let budget = 0;
 
@@ -269,6 +270,13 @@ export function getV2Status(): V2EngineStatus {
 async function runLoop(): Promise<void> {
   if (!exchange) return;
 
+  // Concurrency guard: skip if previous loop is still running
+  if (loopInProgress) {
+    console.log('[V2] Loop skipped — previous iteration still running');
+    return;
+  }
+  loopInProgress = true;
+
   const loopStart = Date.now();
   stats.loopCount++;
 
@@ -471,6 +479,8 @@ async function runLoop(): Promise<void> {
     console.error(`[V2] Loop error: ${err.message}`);
     if (err.stack) console.error(`[V2] Stack: ${err.stack.split('\n').slice(1, 4).join(' | ')}`);
     stats.lastLoopTime = Date.now() - loopStart;
+  } finally {
+    loopInProgress = false;
   }
 }
 
