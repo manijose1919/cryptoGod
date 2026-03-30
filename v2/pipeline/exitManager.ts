@@ -111,10 +111,11 @@ export async function checkExits(
     let newStop = trade.currentStop;
 
     // --- 2b. Break-Even Stop ---
-    // Once price moves +1.5% (covers round-trip fees + buffer), move SL to entry.
+    // Once price moves +0.8% (covers round-trip fees), move SL to entry.
     // Turns potential losers into scratches — critical for win rate.
+    // At +1.5% trailing takes over, so this covers the 0.8%-1.5% gap.
     const rawPnlPercent = pnlPercent; // pnlPercent is already raw (no fee adjustment)
-    if (rawPnlPercent >= 0.015 && rawPnlPercent < V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
+    if (rawPnlPercent >= 0.008 && rawPnlPercent < V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
       const breakEvenStop = trade.entryPrice * 1.001; // Slightly above entry to cover slippage
       if (breakEvenStop > trade.currentStop) {
         newStop = breakEvenStop;

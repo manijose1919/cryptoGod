@@ -11,6 +11,7 @@ import { getScorecard } from '../attribution/signalScorecard.ts';
 import { recomputeAllScores } from '../attribution/postTradeAnalyzer.ts';
 import { getV2Status } from '../engine/tradeEngine.ts';
 import { getDualStatus, getDualTrades, initDualEngine, startDualEngine, stopDualEngine } from '../engine/dualExchangeEngine.ts';
+import { getBearishStatus, stopBearishServices, startBearishServices, initBearishServices } from '../engine/bearishServices.ts';
 import { initKrakenAdapter, krakenV2 } from '../exchange/krakenAdapter.ts';
 import { initCryptoComAdapter, cryptoComV2 } from '../exchange/cryptoComV2Adapter.ts';
 
@@ -108,6 +109,37 @@ v2Router.post('/dual/stop', (_req: Request, res: Response) => {
     stopDualEngine();
     const status = getDualStatus();
     res.json({ status: 'stopped', finalStatus: status });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// --- Bearish Services ---
+
+v2Router.get('/bearish/status', (_req: Request, res: Response) => {
+  try {
+    const status = getBearishStatus();
+    res.json(status);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+v2Router.post('/bearish/stop', (_req: Request, res: Response) => {
+  try {
+    stopBearishServices();
+    res.json({ status: 'stopped' });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+v2Router.post('/bearish/start', async (_req: Request, res: Response) => {
+  try {
+    await initKrakenAdapter();
+    initBearishServices(krakenV2);
+    startBearishServices();
+    res.json({ status: 'started' });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
