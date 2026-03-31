@@ -324,20 +324,24 @@ async function evaluateFearDCA(): Promise<void> {
       const price = await exchange.getLatestPrice(ticker);
       if (!price || price <= 0) continue;
 
-      const quantity = BEARISH_CONFIG.DCA_AMOUNT_USD / price;
+      // Kraken price precision: BTC=1 decimal, ETH/SOL/etc=2 decimals, small coins=4+
+      const priceDecimals = price > 10000 ? 1 : price > 10 ? 2 : price > 1 ? 4 : 6;
+      const qtyDecimals = price > 10000 ? 8 : price > 10 ? 6 : price > 1 ? 4 : 2;
+      const buyPrice = parseFloat((price * 0.999).toFixed(priceDecimals));
+      const quantity = parseFloat((BEARISH_CONFIG.DCA_AMOUNT_USD / price).toFixed(qtyDecimals));
 
       if (BEARISH_CONFIG.DCA_SIM_ONLY) {
         // Sim mode — just record the buy
         console.log(
           `[Bearish] DCA BUY (sim): ${ticker} $${BEARISH_CONFIG.DCA_AMOUNT_USD} @ $${price.toFixed(2)}`,
-          `(${quantity.toFixed(6)} units, F&G=${fgIndex})`
+          `(${quantity} units, F&G=${fgIndex})`
         );
       } else {
         // Real mode — place maker buy via V1 Kraken adapter
         try {
           const mod = await import('../../services/exchangeAdapters/krakenAdapter.js');
           const krakenAdapter = mod.krakenAdapter;
-          await krakenAdapter.placePostOnlyBuy(ticker, price * 0.999, quantity);
+          await krakenAdapter.placePostOnlyBuy(ticker, buyPrice, quantity);
           console.log(
             `[Bearish] DCA BUY (REAL): ${ticker} $${BEARISH_CONFIG.DCA_AMOUNT_USD} @ $${price.toFixed(2)}`,
             `(${quantity.toFixed(6)} units, F&G=${fgIndex})`
