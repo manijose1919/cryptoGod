@@ -48,7 +48,7 @@ const BEARISH_CONFIG = {
   DCA_AMOUNT_USD: 10,              // Was $25 sim — now $10 real money (conservative)
   DCA_COOLDOWN_MS: 4 * 60 * 60 * 1000, // Max 1 buy per ticker per 4 hours
   DCA_MAX_DAILY_BUYS: 6,           // Was 4 — bumped for 3 tickers (2 rounds/day each)
-  DCA_SIM_ONLY: false,             // REAL MODE — placing actual orders on Kraken
+  DCA_SIM_ONLY: true,              // Back to sim — Kraken account has insufficient USD. Fund account then set to false.
 };
 
 // ─── State ─────────────────────────────────────────────────
