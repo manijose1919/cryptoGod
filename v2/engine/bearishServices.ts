@@ -44,11 +44,11 @@ const BEARISH_CONFIG = {
 
   // Extreme Fear DCA
   DCA_FEAR_THRESHOLD: 15,          // F&G index below this triggers DCA
-  DCA_TICKERS: ['BTCUSD', 'ETHUSD'] as string[],  // Only accumulate blue chips
-  DCA_AMOUNT_USD: 25,              // Per DCA buy
+  DCA_TICKERS: ['BTCUSD', 'ETHUSD', 'SOLUSD'] as string[],  // Blue chips + SOL at discount
+  DCA_AMOUNT_USD: 10,              // Was $25 sim — now $10 real money (conservative)
   DCA_COOLDOWN_MS: 4 * 60 * 60 * 1000, // Max 1 buy per ticker per 4 hours
-  DCA_MAX_DAILY_BUYS: 4,           // Max total DCA buys per day
-  DCA_SIM_ONLY: true,              // Start in sim mode
+  DCA_MAX_DAILY_BUYS: 6,           // Was 4 — bumped for 3 tickers (2 rounds/day each)
+  DCA_SIM_ONLY: false,             // REAL MODE — placing actual orders on Kraken
 };
 
 // ─── State ─────────────────────────────────────────────────
@@ -368,17 +368,15 @@ function startStaking(): void {
   try {
     // Import adapters from V1 (staking needs real exchange adapters, not V2 wrappers)
     import('../../services/exchangeAdapters/krakenAdapter.js').then(mod => {
-      const krakenAdapter = mod.default || mod;
-      if (krakenAdapter) {
-        stakingEngine.registerAdapter('kraken', krakenAdapter);
+      if (mod.krakenAdapter) {
+        stakingEngine.registerAdapter('kraken', mod.krakenAdapter);
         console.log('[Bearish] Registered Kraken adapter with staking engine');
       }
     }).catch(() => {});
 
     import('../../services/exchangeAdapters/cryptocomAdapter.js').then(mod => {
-      const ccAdapter = mod.default || mod;
-      if (ccAdapter) {
-        stakingEngine.registerAdapter('crypto.com', ccAdapter);
+      if (mod.cryptoComAdapter) {
+        stakingEngine.registerAdapter('crypto.com', mod.cryptoComAdapter);
         console.log('[Bearish] Registered Crypto.com adapter with staking engine');
       }
     }).catch(() => {});
@@ -403,8 +401,8 @@ function startArbitrage(): void {
       import('../../services/krakenWebsocketService.js'),
       import('../../services/websocketService.js'),
     ]).then(([krakenMod, ccMod, krakenWs, ccWs]) => {
-      const kraken = krakenMod.default || krakenMod;
-      const cc = ccMod.default || ccMod;
+      const kraken = krakenMod.krakenAdapter || krakenMod.default || krakenMod;
+      const cc = ccMod.cryptoComAdapter || ccMod.default || ccMod;
       const kws = krakenWs.default || krakenWs;
       const cws = ccWs.default || ccWs;
 
