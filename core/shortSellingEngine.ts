@@ -105,10 +105,10 @@ class ShortSellingEngine {
     // If RSI provided, require either RSI > 65 OR strong bearish momentum (price drop > 2%)
     const rsiVal = rsi ?? 50;
     const priceChg = priceChange5 ?? 0;
-    const hasOverboughtRSI = rsiVal > 65;
-    const hasBearishMomentum = priceChg < -2.0; // >2% drop in last 5 candles
+    const hasOverboughtRSI = rsiVal > 60;    // Was 65 — relaxed to catch more entries in slow bleeds
+    const hasBearishMomentum = priceChg < -1.5; // Was -2.0% — relaxed for gradual downtrends
     if (!hasOverboughtRSI && !hasBearishMomentum) {
-      return { shouldShort: false, reason: `No short signal: RSI=${rsiVal.toFixed(0)} (need>65), 5-bar chg=${priceChg.toFixed(1)}% (need<-2%)` };
+      return { shouldShort: false, reason: `No short signal: RSI=${rsiVal.toFixed(0)} (need>60), 5-bar chg=${priceChg.toFixed(1)}% (need<-1.5%)` };
     }
 
     // Position limit check
