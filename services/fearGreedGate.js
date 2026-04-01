@@ -90,17 +90,18 @@ async function loadOnChainModules() {
  */
 function fundingRateToScore() {
   try {
-    const getDeriv = _derivativesModule?.getDerivativesStatus || _derivativesModule?.default?.getDerivativesStatus;
-    if (!getDeriv) return 50;
+    const getAllData = _derivativesModule?.getAllDerivativesData || _derivativesModule?.default?.getAllDerivativesData;
+    if (!getAllData) return 50;
 
-    const status = getDeriv();
-    if (!status?.tickers) return 50;
-
-    // Average funding across tracked tickers
-    const tickers = Object.values(status.tickers);
+    const allData = getAllData();
+    const tickers = Object.values(allData || {});
     if (tickers.length === 0) return 50;
 
-    const avgFunding = tickers.reduce((sum, t) => sum + (t.fundingRateAnnualized || 0), 0) / tickers.length;
+    // Average annualized funding across tracked tickers
+    const fundingValues = tickers.filter(t => t.fundingRateAnnualized != null);
+    if (fundingValues.length === 0) return 50;
+
+    const avgFunding = fundingValues.reduce((sum, t) => sum + t.fundingRateAnnualized, 0) / fundingValues.length;
 
     // Map: -50% annualized → score 10 (extreme fear)
     //       0% annualized  → score 50 (neutral)
@@ -133,12 +134,12 @@ function exchangeFlowToScore() {
     const btcFlow = getSignal('BTCUSD');
     if (!btcFlow || btcFlow.direction === 'NEUTRAL') return 50;
 
-    // OUTFLOW (bullish, coins leaving exchanges) → higher score (toward greed/confidence)
-    // INFLOW (bearish, coins entering exchanges) → lower score (toward fear)
+    // BULLISH (outflow, coins leaving exchanges) → higher score (confidence)
+    // BEARISH (inflow, coins entering exchanges) → lower score (fear)
     let score = 50;
-    if (btcFlow.direction === 'OUTFLOW') {
+    if (btcFlow.direction === 'BULLISH') {
       score = 50 + Math.min(40, btcFlow.strength * 0.4); // Max 90
-    } else if (btcFlow.direction === 'INFLOW') {
+    } else if (btcFlow.direction === 'BEARISH') {
       score = 50 - Math.min(40, btcFlow.strength * 0.4); // Min 10
     }
 
