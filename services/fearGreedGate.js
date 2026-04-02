@@ -280,7 +280,10 @@ async function fetchFearGreedIndex() {
 
 // ─── Public API (same interface as before) ──────────────────
 
+let _initialized = false;
 export function initFearGreedGate() {
+  if (_initialized) return; // Prevent duplicate intervals on re-init
+  _initialized = true;
   loadOnChainModules();
   fetchFearGreedIndex();
   setInterval(fetchFearGreedIndex, FETCH_INTERVAL_MS);

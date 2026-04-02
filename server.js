@@ -6566,7 +6566,13 @@ app.use('/api', createMarketRouter(ctx));
 app.use('/api', createExchangeRouter(ctx));
 app.use('/api', createAuthRouter(ctx));
 // Questrade router removed
-app.use('/api', createSessionsRouter(ctx));
+const sessionsRouter = createSessionsRouter(ctx);
+if (!sessionsRouter || typeof sessionsRouter !== 'function') {
+    console.error('[Server] CRITICAL: Sessions router failed to initialize — session/start will not work');
+} else {
+    console.log('[Server] Sessions router mounted at /api/session/*');
+}
+app.use('/api', sessionsRouter);
 app.use('/api', createIntelligenceRouter(ctx));
 app.use('/api', createSentimentRouter(ctx));
 app.use('/api', createSignalsRouter(ctx));
@@ -6576,6 +6582,34 @@ app.use('/api', createBacktestRouter(ctx));
 app.use('/api', createMultiExchangeRouter(ctx));
 app.use('/api', createEngineRouter(ctx));
 app.use('/api', createNewsRouter(ctx));
+
+// ─── Auto-start on-chain pollers (independent of bot session) ───
+// These must run on boot so the blended F&G gate has real on-chain data
+// even before a trading session is started via /api/session/start.
+try {
+    if (derivativesIntel && typeof derivativesIntel.startDerivativesPolling === 'function') {
+        derivativesIntel.startDerivativesPolling();
+        console.log('[Server] Derivatives Intelligence auto-started on boot (5min polling)');
+    }
+} catch (e) {
+    console.warn('[Server] Derivatives Intelligence boot-start failed:', e.message);
+}
+try {
+    if (whaleFlowTracker && typeof whaleFlowTracker.startWhaleFlowPolling === 'function') {
+        whaleFlowTracker.startWhaleFlowPolling();
+        console.log('[Server] Whale Flow Tracker auto-started on boot (15min polling)');
+    }
+} catch (e) {
+    console.warn('[Server] Whale Flow Tracker boot-start failed:', e.message);
+}
+try {
+    if (fearGreedGate && typeof fearGreedGate.initFearGreedGate === 'function') {
+        fearGreedGate.initFearGreedGate();
+        console.log('[Server] Fear & Greed Gate auto-started on boot');
+    }
+} catch (e) {
+    console.warn('[Server] Fear & Greed Gate boot-start failed:', e.message);
+}
 
 // ─── Health & Monitoring Endpoints ──────────────────────────
 const SERVER_STARTED_AT = new Date().toISOString();
