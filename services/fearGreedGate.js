@@ -289,6 +289,8 @@ export async function initFearGreedGate() {
   setInterval(fetchFearGreedIndex, FETCH_INTERVAL_MS);
   // Also recompute blended score every 5 min (on-chain data updates more often)
   setInterval(computeBlendedIndex, 5 * 60 * 1000);
+  // Recompute after 30s — by then derivatives/whale-flow pollers should have data from their first fetch
+  setTimeout(computeBlendedIndex, 30_000);
   console.log('[FearGreedGate] Initialized — blended mode (Alt.me 40% + Funding 30% + Flow 20% + Liq 10%)');
 }
 

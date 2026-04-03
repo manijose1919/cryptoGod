@@ -378,14 +378,15 @@ function startStaking(): void {
       }
     }).catch(() => {});
 
-    import('../../services/exchangeAdapters/cryptocomAdapter.js').then(mod => {
+    import('../../services/exchangeAdapters/cryptocomAdapter.js').then(async (mod) => {
       if (mod.cryptoComAdapter) {
-        const hasCreds = process.env.SESSION_API_KEY && process.env.SESSION_SECRET_KEY;
-        if (hasCreds) {
+        // Validate credentials actually work before registering (avoid hourly auth error spam)
+        try {
+          await mod.cryptoComAdapter.getBalance();
           stakingEngine.registerAdapter('crypto.com', mod.cryptoComAdapter);
           console.log('[Bearish] Registered Crypto.com adapter with staking engine');
-        } else {
-          console.log('[Bearish] Skipping Crypto.com staking (no credentials configured)');
+        } catch {
+          console.log('[Bearish] Skipping Crypto.com staking (auth failed — credentials missing or expired)');
         }
       }
     }).catch(() => {});
