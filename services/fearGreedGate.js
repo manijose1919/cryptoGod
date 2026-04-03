@@ -281,11 +281,11 @@ async function fetchFearGreedIndex() {
 // ─── Public API (same interface as before) ──────────────────
 
 let _initialized = false;
-export function initFearGreedGate() {
+export async function initFearGreedGate() {
   if (_initialized) return; // Prevent duplicate intervals on re-init
   _initialized = true;
-  loadOnChainModules();
-  fetchFearGreedIndex();
+  await loadOnChainModules();
+  await fetchFearGreedIndex();
   setInterval(fetchFearGreedIndex, FETCH_INTERVAL_MS);
   // Also recompute blended score every 5 min (on-chain data updates more often)
   setInterval(computeBlendedIndex, 5 * 60 * 1000);
