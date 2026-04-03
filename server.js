@@ -6602,10 +6602,14 @@ try {
 } catch (e) {
     console.warn('[Server] Whale Flow Tracker boot-start failed:', e.message);
 }
+// F&G init is async (awaits on-chain module loading) — fire and let it resolve
 try {
     if (fearGreedGate && typeof fearGreedGate.initFearGreedGate === 'function') {
-        fearGreedGate.initFearGreedGate();
-        console.log('[Server] Fear & Greed Gate auto-started on boot');
+        fearGreedGate.initFearGreedGate().then(() => {
+            console.log('[Server] Fear & Greed Gate auto-started on boot (on-chain modules loaded)');
+        }).catch(e => {
+            console.warn('[Server] Fear & Greed Gate async init failed:', e.message);
+        });
     }
 } catch (e) {
     console.warn('[Server] Fear & Greed Gate boot-start failed:', e.message);
@@ -7579,11 +7583,11 @@ const startServer = async () => {
         }
     }
 
-    // Start Fear & Greed Gate (Tier 1B)
+    // Start Fear & Greed Gate (Tier 1B) — async to await on-chain module loading
     if (fearGreedGate) {
         try {
-            fearGreedGate.initFearGreedGate();
-            console.log('[Server] Fear & Greed Gate initialized');
+            await fearGreedGate.initFearGreedGate();
+            console.log('[Server] Fear & Greed Gate initialized (on-chain modules loaded)');
         } catch (e) {
             console.warn('[Server] Fear & Greed Gate init failed:', e.message);
         }

@@ -50,18 +50,18 @@ export const V2_CONFIG = {
   CANDLE_INTERVAL: '15m' as string, // '1m', '5m', '15m', '1h', '4h'
 
   // --- Exit Management ---
-  STOP_LOSS_ATR_MULT: 3.0,         // Was 2.5 — 15m noise regularly hit 2.5x; 3.0x absorbs normal pullbacks
-  TAKE_PROFIT_ATR_MULT: 5.0,      // Was 4.0 — maintains ~1.67:1 R:R with 3.0 SL; lets trends run further
-  TRAILING_ACTIVATE_PERCENT: 0.015,        // Was 2.5% — lowered to 1.5% so trailing protects winners sooner
+  STOP_LOSS_ATR_MULT: 2.5,         // Was 3.0 — tighter SL to cut losers faster; 3.0x let too many trades bleed for 5h before time-kill
+  TAKE_PROFIT_ATR_MULT: 3.5,      // Was 5.0 — 5x rarely hit on 15m; 3.5x is achievable (1.4:1 R:R) and reduces time-kills
+  TRAILING_ACTIVATE_PERCENT: 0.012,        // Was 1.5% — lowered to 1.2% so trailing locks in gains earlier with tighter TP target
   TRAILING_GIVEBACK_PERCENT: 0.30,        // Was 25% — slightly wider to avoid noise exits on good trends
-  TIME_KILL_MS: 5 * 60 * 60 * 1000,      // Was 3h — extended to 5h; 15m consolidation needs more room
-  TIME_KILL_MIN_MOVE: 0.006,              // Was 0.4% — raised to 0.6%; only kill truly dead trades
+  TIME_KILL_MS: 8 * 60 * 60 * 1000,      // Was 5h — extended to 8h; 75% of trades were time-killed at 5h with small moves still developing
+  TIME_KILL_MIN_MOVE: 0.010,              // Was 0.6% — raised to 1.0%; only kill truly dead trades (fee round-trip is 0.52%)
   EXIT_CHECK_INTERVAL_MS: 5_000,
 
   // --- Quick-Kill (dud trade detection) ---
-  QUICK_KILL_AFTER_MS: 90 * 60 * 1000,   // Was 45min — extended to 90min; good setups often consolidate first
-  QUICK_KILL_MIN_GAIN: 0.004,             // Was 0.3% — raised to 0.4%; small moves aren't duds
-  QUICK_KILL_SL_ATR_MULT: 2.0,            // Was 1.5x — less aggressive tightening to avoid premature stops
+  QUICK_KILL_AFTER_MS: 60 * 60 * 1000,   // Was 90min — back to 60min; if no momentum after 1h, tighten stop rather than bleed
+  QUICK_KILL_MIN_GAIN: 0.005,             // Was 0.4% — raised to 0.5%; need to clear fees (0.52% RT) to prove the trade is working
+  QUICK_KILL_SL_ATR_MULT: 1.5,            // Was 2.0x — tighter after quick-kill triggers; forces dud trades to exit sooner
 
   // --- Regime Momentum Gate ---
   REGIME_MOMENTUM_LOOKBACK: 5,            // Compare EMA20 slope over last 5 bars
