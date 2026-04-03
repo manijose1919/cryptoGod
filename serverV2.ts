@@ -20,8 +20,13 @@ import { initializeDatabase } from './services/database.js';
 // --- 2. Telegram (optional) ---
 import { initTelegram, isEnabled as telegramEnabled, alertCircuitBreaker } from './services/telegramService.js';
 
-// --- 3. Fear & Greed Gate ---
+// --- 3. Fear & Greed Gate + Data Sources ---
 import { initFearGreedGate, getFearGreedStatus } from './services/fearGreedGate.js';
+
+let derivativesIntel: any = null;
+let whaleFlowTracker: any = null;
+try { derivativesIntel = await import('./services/derivativesIntelligence.js'); } catch {}
+try { whaleFlowTracker = await import('./services/whaleFlowTracker.js'); } catch {}
 
 // --- 4. Kraken WebSocket ---
 import { initWebSocket as initKrakenWS } from './services/krakenWebsocketService.js';
@@ -123,23 +128,33 @@ async function start() {
   // 2. Telegram
   initTelegram();
 
-  // 3. Fear & Greed Gate
-  initFearGreedGate();
+  // 3. On-chain data pollers (must start before F&G gate so it has real data)
+  if (derivativesIntel?.startDerivativesPolling) {
+    derivativesIntel.startDerivativesPolling();
+    console.log('[V2-Server] Derivatives Intelligence polling started');
+  }
+  if (whaleFlowTracker?.startWhaleFlowPolling) {
+    whaleFlowTracker.startWhaleFlowPolling();
+    console.log('[V2-Server] Whale Flow Tracker polling started');
+  }
 
-  // 4. Kraken WebSocket — warm up candle buffers for V2 tickers
+  // 4. Fear & Greed Gate (async — awaits on-chain module loading)
+  await initFearGreedGate();
+
+  // 5. Kraken WebSocket — warm up candle buffers for V2 tickers
   initKrakenWS(V2_TICKERS, {
     onConnect: () => console.log('[V2-Server] Kraken WS connected'),
   });
   console.log('[V2-Server] Kraken WebSocket initializing...');
 
-  // 5. ML Pipeline (non-blocking)
+  // 6. ML Pipeline (non-blocking)
   await initML();
 
-  // 6. Boot V2 engine (paper mode by default via V2_MODE env)
+  // 7. Boot V2 engine (paper mode by default via V2_MODE env)
   const budget = parseInt(process.env.V2_BUDGET || '1000', 10);
   await bootV2(budget);
 
-  // 6. Start HTTP server
+  // 8. Start HTTP server
   const server = createServer(app);
   server.listen(PORT, () => {
     console.log(`[V2-Server] Listening on port ${PORT}`);
