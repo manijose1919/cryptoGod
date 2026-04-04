@@ -312,15 +312,13 @@ async function evaluateShorts(): Promise<void> {
 async function evaluateFearDCA(): Promise<void> {
   if (!exchange || !BEARISH_CONFIG.DCA_FEAR_ENABLED) return;
 
-  // Get Fear & Greed index from the global gate
+  // Get raw Alternative.me Fear & Greed index (not blended — DCA should trigger on real retail fear)
   let fgIndex = 50;
   try {
     const fg = await import('../../services/fearGreedGate.js');
-    if (fg.getFearGreedIndex) {
-      fgIndex = fg.getFearGreedIndex() ?? 50;
-    } else if (fg.default?.getFearGreedIndex) {
-      fgIndex = fg.default.getFearGreedIndex() ?? 50;
-    }
+    const getRaw = fg.getAlternativeMeRaw || fg.default?.getAlternativeMeRaw;
+    const getBlended = fg.getFearGreedIndex || fg.default?.getFearGreedIndex;
+    fgIndex = getRaw ? (getRaw() ?? 50) : (getBlended ? (getBlended() ?? 50) : 50);
   } catch { return; }
 
   if (fgIndex >= BEARISH_CONFIG.DCA_FEAR_THRESHOLD) return;
