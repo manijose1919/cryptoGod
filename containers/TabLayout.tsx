@@ -13,8 +13,9 @@ import { useToast } from '../components/ToastNotification';
 const TickerTape = lazy(() => import('../components/TickerTape'));
 const MLIntelligenceTab = lazy(() => import('../components/MLIntelligenceTab'));
 const SystemConfigPanel = lazy(() => import('../components/SystemConfigPanel'));
+const V2AttributionTab = lazy(() => import('../components/V2AttributionTab'));
 
-export type TabId = 'dashboard' | 'kraken' | 'crypto.com' | 'portfolio' | 'ml' | 'config';
+export type TabId = 'dashboard' | 'kraken' | 'crypto.com' | 'portfolio' | 'ml' | 'config' | 'v2';
 
 interface TabDef {
   id: TabId;
@@ -30,6 +31,7 @@ const TABS: TabDef[] = [
   { id: 'portfolio', label: 'Portfolio', key: 'F4', color: '#10b981' },
   { id: 'ml', label: 'ML', key: 'F5', color: '#a78bfa' },
   { id: 'config', label: 'Config', key: 'F6', color: '#f59e0b' },
+  { id: 'v2', label: 'V2', key: 'F7', color: '#ec4899' },
 ];
 
 interface Props {
@@ -43,6 +45,7 @@ const SHORTCUTS = [
   { key: 'F4', desc: 'Portfolio Overview' },
   { key: 'F5', desc: 'ML Intelligence' },
   { key: 'F6', desc: 'System Config' },
+  { key: 'F7', desc: 'V2 Attribution' },
   { key: '?', desc: 'Show this help' },
 ];
 
@@ -74,7 +77,7 @@ export function TabLayout({ renderDashboard }: Props) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const fKeyMap: Record<string, TabId> = {
         F1: 'dashboard', F2: 'kraken', F3: 'crypto.com',
-        F4: 'portfolio', F5: 'ml', F6: 'config',
+        F4: 'portfolio', F5: 'ml', F6: 'config', F7: 'v2',
       };
       if (fKeyMap[e.key]) {
         e.preventDefault();
@@ -205,6 +208,11 @@ export function TabLayout({ renderDashboard }: Props) {
         {activeTab === 'config' && (
           <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading config...</div>}>
             <SystemConfigPanel />
+          </Suspense>
+        )}
+        {activeTab === 'v2' && (
+          <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading V2 attribution...</div>}>
+            <V2AttributionTab />
           </Suspense>
         )}
       </div>

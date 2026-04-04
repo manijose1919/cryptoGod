@@ -80,6 +80,7 @@ class ShortSellingEngine {
     tcScore: number,
     rsi?: number,
     priceChange5?: number,
+    extraSignals?: { emaSlope?: number; bbPercentB?: number; priceChange20?: number },
   ): { shouldShort: boolean; reason: string; size?: number } {
     if (!this.config.enabled) {
       return { shouldShort: false, reason: 'Short selling disabled' };
@@ -95,20 +96,9 @@ class ShortSellingEngine {
       return { shouldShort: false, reason: `ML confidence ${(mlConfidence * 100).toFixed(0)}% < ${this.config.minConfidence * 100}%` };
     }
 
-    // SHORT SIGNAL: TC should be LOW (bearish trend) for shorts, NOT high
-    // TC < 30 = strong bearish trend confirmation
-    if (tcScore > 40) {
-      return { shouldShort: false, reason: `TC score ${tcScore} too bullish for short (need <40)` };
-    }
-
-    // RSI overbought check: RSI > 70 = overextended = mean-reversion short opportunity
-    // If RSI provided, require either RSI > 65 OR strong bearish momentum (price drop > 2%)
-    const rsiVal = rsi ?? 50;
-    const priceChg = priceChange5 ?? 0;
-    const hasOverboughtRSI = rsiVal > 60;    // Was 65 — relaxed to catch more entries in slow bleeds
-    const hasBearishMomentum = priceChg < -1.5; // Was -2.0% — relaxed for gradual downtrends
-    if (!hasOverboughtRSI && !hasBearishMomentum) {
-      return { shouldShort: false, reason: `No short signal: RSI=${rsiVal.toFixed(0)} (need>60), 5-bar chg=${priceChg.toFixed(1)}% (need<-1.5%)` };
+    // TC check — relaxed to 45 (was 40). In slow bleeds TC hovers near 40.
+    if (tcScore > 45) {
+      return { shouldShort: false, reason: `TC score ${tcScore} too bullish for short (need <45)` };
     }
 
     // Position limit check
@@ -127,19 +117,56 @@ class ShortSellingEngine {
       return { shouldShort: false, reason: `Short exposure ${((totalExposure / this.simBalance) * 100).toFixed(1)}% >= ${this.config.maxExposurePct * 100}%` };
     }
 
-    // Calculate position size (conservative: 5-15% of sim balance)
-    // Higher size for stronger signals
-    const signalStrength = (hasOverboughtRSI ? 0.05 : 0) + (hasBearishMomentum ? 0.05 : 0);
-    const sizePct = 0.05 + signalStrength + (mlConfidence - this.config.minConfidence) * 0.10;
-    const size = this.simBalance * Math.min(sizePct, 0.15);
+    // ─── Short signal detection (need at least 1 of 4 signals) ───
+    const rsiVal = rsi ?? 50;
+    const priceChg = priceChange5 ?? 0;
+    const emaSlope = extraSignals?.emaSlope ?? 0;
+    const bbPctB = extraSignals?.bbPercentB ?? 0.5;
+    const priceChg20 = extraSignals?.priceChange20 ?? 0;
 
-    const signals = [];
-    if (hasOverboughtRSI) signals.push(`RSI=${rsiVal.toFixed(0)}`);
-    if (hasBearishMomentum) signals.push(`5bar=${priceChg.toFixed(1)}%`);
+    const signals: string[] = [];
+    let signalCount = 0;
+
+    // Signal 1: RSI overbought bounce (mean-reversion short)
+    const hasOverboughtRSI = rsiVal > 60;
+    if (hasOverboughtRSI) { signals.push(`RSI=${rsiVal.toFixed(0)}`); signalCount++; }
+
+    // Signal 2: Sharp bearish momentum (5-bar drop)
+    const hasBearishMomentum = priceChg < -1.2;
+    if (hasBearishMomentum) { signals.push(`5bar=${priceChg.toFixed(1)}%`); signalCount++; }
+
+    // Signal 3: Trend-following — EMA slope negative (all EMAs declining)
+    // emaSlope is (ema20 - ema50) / ema50 as percentage. Negative = bearish trend.
+    const hasTrendFollow = emaSlope < -0.5;
+    if (hasTrendFollow) { signals.push(`slope=${emaSlope.toFixed(2)}%`); signalCount++; }
+
+    // Signal 4: BB lower break — price near or below lower Bollinger Band in downtrend
+    // bbPercentB < 0.1 means price is at or below the lower band
+    const hasBBBreak = bbPctB < 0.15;
+    if (hasBBBreak) { signals.push(`BB%B=${bbPctB.toFixed(2)}`); signalCount++; }
+
+    // Signal 5: Sustained decline — 20-bar price change deeply negative
+    const hasSustainedDecline = priceChg20 < -3.0;
+    if (hasSustainedDecline) { signals.push(`20bar=${priceChg20.toFixed(1)}%`); signalCount++; }
+
+    // Need at least 1 signal to short
+    if (signalCount === 0) {
+      return { shouldShort: false, reason: `No short signal: RSI=${rsiVal.toFixed(0)}, 5bar=${priceChg.toFixed(1)}%, slope=${emaSlope.toFixed(2)}%, BB%B=${bbPctB.toFixed(2)}, 20bar=${priceChg20.toFixed(1)}%` };
+    }
+
+    // STRONG_DOWN regime: relax to just 1 signal. DOWN regime: need 2+.
+    if (regime === 'DOWN' && signalCount < 2) {
+      return { shouldShort: false, reason: `DOWN regime needs 2+ signals, got ${signalCount}: ${signals.join(', ')}` };
+    }
+
+    // Calculate position size (conservative: 5-15% of sim balance)
+    // Scale with signal count: more signals = more conviction
+    const sizePct = 0.05 + Math.min(signalCount, 3) * 0.025 + (mlConfidence - this.config.minConfidence) * 0.10;
+    const size = this.simBalance * Math.min(sizePct, 0.15);
 
     return {
       shouldShort: true,
-      reason: `Bearish ${regime}, TC=${tcScore}, ML=${(mlConfidence * 100).toFixed(0)}%, ${signals.join(', ')}`,
+      reason: `Bearish ${regime}, TC=${tcScore}, ${signalCount} signals: ${signals.join(', ')}`,
       size,
     };
   }
