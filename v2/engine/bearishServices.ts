@@ -241,10 +241,29 @@ async function evaluateShorts(): Promise<void> {
         ? ((closes[closes.length - 1] - closes[closes.length - 6]) / closes[closes.length - 6]) * 100
         : 0;
 
+      // EMA slope: (ema20 - ema50) / ema50 as percentage
+      const emaSlope = ema50 > 0 ? ((ema20 - ema50) / ema50) * 100 : 0;
+
+      // Bollinger Band %B
+      let bbPercentB = 0.5;
+      if (closes.length >= 20) {
+        const sma20 = ema20; // Close enough approximation
+        const stdev = Math.sqrt(closes.slice(-20).reduce((s, c) => s + (c - sma20) ** 2, 0) / 20);
+        const bbUpper = sma20 + 2 * stdev;
+        const bbLower = sma20 - 2 * stdev;
+        bbPercentB = bbUpper !== bbLower ? (closes[closes.length - 1] - bbLower) / (bbUpper - bbLower) : 0.5;
+      }
+
+      // 20-bar price change
+      const priceChange20 = closes.length >= 21
+        ? ((closes[closes.length - 1] - closes[closes.length - 21]) / closes[closes.length - 21]) * 100
+        : 0;
+
       const shortEval = shortSellingEngine.evaluateShortEntry(
         ticker, 'kraken', price, regime.regime,
         0.5, // Base confidence (no ML for shorts yet)
         tcScore, rsiValue, priceChange5,
+        { emaSlope, bbPercentB, priceChange20 },
       );
 
       if (shortEval.shouldShort && shortEval.size) {
