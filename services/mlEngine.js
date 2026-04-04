@@ -1405,9 +1405,18 @@ class MLEngine {
     if (model) {
       predictions = features2D.map(features => model.predict(features));
     } else {
+      // Ensemble evaluation: features may already be scaled (from _trainSingleSplit),
+      // so use model weights directly instead of this.predict() which re-scales.
       predictions = features2D.map(features => {
-        const result = this.predict(features);
-        return result.prediction === 'UP' ? 1 : 0;
+        const finalFeatures = this._applyFeatureMask(features);
+        const rfProba = this.randomForest.predictProba(finalFeatures);
+        const gbProba = this.gradientBoosted.predictProba(finalFeatures);
+        const lrProba = this.logisticRegression.predictProba(finalFeatures);
+        const upProb =
+          this.modelWeights.rf * rfProba[1] +
+          this.modelWeights.gb * gbProba[1] +
+          this.modelWeights.lr * lrProba[1];
+        return upProb >= 0.5 ? 1 : 0;
       });
     }
 
