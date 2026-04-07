@@ -209,6 +209,21 @@ export function generateSignals(
 
     compositeScore = Math.min(compositeScore, 100);
 
+    // MACD cross gate: winning trades (DOGE 3/3) always had MACD cross confirmed.
+    // Losing trades (LINK 0/4) entered 3/4 times without it. Penalize entries without MACD confirmation.
+    const macdCrossActive = signals.macd_cross as boolean;
+    const macdHistPositive = (signals.macd_histogram as number) > 0;
+    if (!macdCrossActive && !macdHistPositive) {
+      compositeScore -= 12; // Heavy penalty — no MACD momentum confirmation at all
+    }
+
+    // S/R position gate: DOGE wins entered at SR 0.03-0.08 (near support).
+    // Entries above 0.65 (upper channel) are risky — penalize proportionally.
+    const srPos = signals.sr_channel_position as number ?? 0.5;
+    if (srPos > 0.65) {
+      compositeScore -= Math.round(5 + (srPos - 0.65) * 30); // -5 at 0.65, -15 at 0.98
+    }
+
     // BB overbought filter: proportional penalty near upper band.
     // Was flat -12/-6 — now curves up to -30pts at %B=1.0.
     // This prevents buying at the top of Bollinger Bands.

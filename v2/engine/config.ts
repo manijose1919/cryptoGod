@@ -12,7 +12,8 @@ export const V2_CONFIG = {
   // --- Scan ---
   SCAN_TICKERS: [
     'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD',
-    'LINKUSD', 'DOTUSD', 'AVAXUSD', 'DOGEUSD', 'BNBUSD',
+    'DOTUSD', 'AVAXUSD', 'DOGEUSD', 'BNBUSD',
+    // LINKUSD removed — 0/4 trades, -$9.02, 3 SL hits, enters overbought without MACD confirmation
   ],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 0.05, // Calibrated for 1-minute candles (0.3 was for hourly)
@@ -54,14 +55,14 @@ export const V2_CONFIG = {
   TAKE_PROFIT_ATR_MULT: 3.5,      // Was 5.0 — 5x rarely hit on 15m; 3.5x is achievable (1.4:1 R:R) and reduces time-kills
   TRAILING_ACTIVATE_PERCENT: 0.012,        // Was 1.5% — lowered to 1.2% so trailing locks in gains earlier with tighter TP target
   TRAILING_GIVEBACK_PERCENT: 0.30,        // Was 25% — slightly wider to avoid noise exits on good trends
-  TIME_KILL_MS: 8 * 60 * 60 * 1000,      // Was 5h — extended to 8h; 75% of trades were time-killed at 5h with small moves still developing
-  TIME_KILL_MIN_MOVE: 0.010,              // Was 0.6% — raised to 1.0%; only kill truly dead trades (fee round-trip is 0.52%)
+  TIME_KILL_MS: 5 * 60 * 60 * 1000,      // Was 8h — back to 5h; data shows avg time_kill hold is 4.4h, trades that haven't moved by 5h never do
+  TIME_KILL_MIN_MOVE: 0.007,              // Was 1.0% — lowered to 0.7%; 1.0% killed trades that moved 0.5-0.8% (profitable after 0.52% fees)
   EXIT_CHECK_INTERVAL_MS: 5_000,
 
   // --- Quick-Kill (dud trade detection) ---
-  QUICK_KILL_AFTER_MS: 60 * 60 * 1000,   // Was 90min — back to 60min; if no momentum after 1h, tighten stop rather than bleed
-  QUICK_KILL_MIN_GAIN: 0.005,             // Was 0.4% — raised to 0.5%; need to clear fees (0.52% RT) to prove the trade is working
-  QUICK_KILL_SL_ATR_MULT: 1.5,            // Was 2.0x — tighter after quick-kill triggers; forces dud trades to exit sooner
+  QUICK_KILL_AFTER_MS: 45 * 60 * 1000,   // Was 60min — shortened to 45min; data shows losers are identifiable early (avg SL hit at 2.2h vs TP at 3.5h)
+  QUICK_KILL_MIN_GAIN: 0.004,             // Was 0.5% — lowered to 0.4%; if trade hasn't moved 0.4% in 45min, it's a dud
+  QUICK_KILL_SL_ATR_MULT: 1.2,            // Was 1.5x — tighter to force quicker exits; time_kill avg loss was -$0.75, quick-kill should reduce this
 
   // --- Regime Momentum Gate ---
   REGIME_MOMENTUM_LOOKBACK: 5,            // Compare EMA20 slope over last 5 bars

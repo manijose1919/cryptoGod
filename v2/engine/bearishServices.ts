@@ -43,11 +43,11 @@ const BEARISH_CONFIG = {
   DCA_FEAR_ENABLED: true,
 
   // Extreme Fear DCA
-  DCA_FEAR_THRESHOLD: 15,          // F&G index below this triggers DCA
+  DCA_FEAR_THRESHOLD: 20,          // Was 15 — raised to catch "Fear" not just "Extreme Fear"; F&G 15-20 is still deeply fearful
   DCA_TICKERS: ['BTCUSD', 'ETHUSD', 'SOLUSD'] as string[],  // Blue chips + SOL at discount
   DCA_AMOUNT_USD: 10,              // Was $25 sim — now $10 real money (conservative)
   DCA_COOLDOWN_MS: 4 * 60 * 60 * 1000, // Max 1 buy per ticker per 4 hours
-  DCA_MAX_DAILY_BUYS: 6,           // Was 4 — bumped for 3 tickers (2 rounds/day each)
+  DCA_MAX_DAILY_BUYS: 9,           // Was 6 — bumped to 3 rounds/day (3 tickers × 3 rounds); DCA is the most profitable strategy
   DCA_SIM_ONLY: true,              // Back to sim — Kraken account has insufficient USD. Fund account then set to false.
 };
 
@@ -341,27 +341,30 @@ async function evaluateFearDCA(): Promise<void> {
       const price = await exchange.getLatestPrice(ticker);
       if (!price || price <= 0) continue;
 
+      // Graduated DCA: buy more when fear is deeper
+      // F&G 15-20: 1x base, 10-14: 1.25x, 5-9: 1.5x, 0-4: 2x
+      const fearMultiplier = fgIndex <= 4 ? 2.0 : fgIndex <= 9 ? 1.5 : fgIndex <= 14 ? 1.25 : 1.0;
+      const buyAmount = Math.round(BEARISH_CONFIG.DCA_AMOUNT_USD * fearMultiplier);
+
       // Kraken price precision: BTC=1 decimal, ETH/SOL/etc=2 decimals, small coins=4+
       const priceDecimals = price > 10000 ? 1 : price > 10 ? 2 : price > 1 ? 4 : 6;
       const qtyDecimals = price > 10000 ? 8 : price > 10 ? 6 : price > 1 ? 4 : 2;
       const buyPrice = parseFloat((price * 0.999).toFixed(priceDecimals));
-      const quantity = parseFloat((BEARISH_CONFIG.DCA_AMOUNT_USD / price).toFixed(qtyDecimals));
+      const quantity = parseFloat((buyAmount / price).toFixed(qtyDecimals));
 
       if (BEARISH_CONFIG.DCA_SIM_ONLY) {
-        // Sim mode — just record the buy
         console.log(
-          `[Bearish] DCA BUY (sim): ${ticker} $${BEARISH_CONFIG.DCA_AMOUNT_USD} @ $${price.toFixed(2)}`,
-          `(${quantity} units, F&G=${fgIndex})`
+          `[Bearish] DCA BUY (sim): ${ticker} $${buyAmount} @ $${price.toFixed(2)}`,
+          `(${quantity} units, F&G=${fgIndex}, ${fearMultiplier}x)`
         );
       } else {
-        // Real mode — place maker buy via V1 Kraken adapter
         try {
           const mod = await import('../../services/exchangeAdapters/krakenAdapter.js');
           const krakenAdapter = mod.krakenAdapter;
           await krakenAdapter.placePostOnlyBuy(ticker, buyPrice, quantity);
           console.log(
-            `[Bearish] DCA BUY (REAL): ${ticker} $${BEARISH_CONFIG.DCA_AMOUNT_USD} @ $${price.toFixed(2)}`,
-            `(${quantity.toFixed(6)} units, F&G=${fgIndex})`
+            `[Bearish] DCA BUY (REAL): ${ticker} $${buyAmount} @ $${price.toFixed(2)}`,
+            `(${quantity.toFixed(6)} units, F&G=${fgIndex}, ${fearMultiplier}x)`
           );
         } catch (err: any) {
           console.error(`[Bearish] DCA real buy failed for ${ticker}: ${err.message}`);
@@ -369,7 +372,7 @@ async function evaluateFearDCA(): Promise<void> {
         }
       }
 
-      persistDCABuy(ticker, price, BEARISH_CONFIG.DCA_AMOUNT_USD, quantity, fgIndex);
+      persistDCABuy(ticker, price, buyAmount, quantity, fgIndex);
       dcaLastBuy.set(ticker, Date.now());
       dcaBuysToday++;
       bearishStats.dcaBuys++;
