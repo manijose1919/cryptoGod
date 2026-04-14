@@ -83,54 +83,65 @@ export function evaluateSignals(signals: Record<string, number | boolean | strin
   const rsiVal = signals.rsi as number;
   const macdCross = signals.macd_cross as boolean;
   const macdHist = signals.macd_histogram as number;
+  const prevMacdHist = signals.prev_macd_histogram as number ?? macdHist;
   const trendStr = signals.trend_strength as number;
   const volRatio = signals.volume_ratio as number;
   const pctB = signals.bb_percent_b as number;
 
   const evals: SignalEval[] = [];
 
-  // 1. RSI momentum (weight 20)
-  // In uptrends RSI 50-70 is healthy — don't penalize it
+  // 1. RSI momentum (weight 15)
+  // TREND-following: RSI 45-65 is the sweet spot (healthy uptrend momentum)
+  // Not mean-reversion — we don't need oversold, we need momentum
   let rsiScore: number;
-  if (rsiVal < 30) rsiScore = 90;       // deeply oversold — strong buy
-  else if (rsiVal < 40) rsiScore = 75;
-  else if (rsiVal < 50) rsiScore = 60;
-  else if (rsiVal < 65) rsiScore = 45;   // trend-appropriate range
-  else if (rsiVal < 75) rsiScore = 30;   // getting overbought
-  else rsiScore = 10;                     // overbought — avoid
-  evals.push({ name: 'rsi_momentum', score: rsiScore, active: rsiVal < 65, weight: adaptWeight('rsi_momentum', 20) });
+  if (rsiVal < 30) rsiScore = 50;        // oversold — could be reversal but risky for trend entry
+  else if (rsiVal < 45) rsiScore = 65;   // pullback zone — good for trend re-entry
+  else if (rsiVal < 55) rsiScore = 80;   // ideal trend momentum
+  else if (rsiVal < 65) rsiScore = 75;   // strong momentum, still healthy
+  else if (rsiVal < 75) rsiScore = 50;   // getting extended
+  else rsiScore = 15;                     // overbought — avoid
+  evals.push({ name: 'rsi_momentum', score: rsiScore, active: rsiVal > 40 && rsiVal < 70, weight: adaptWeight('rsi_momentum', 15) });
 
-  // 2. MACD cross (base weight 25, adapted by scorecard)
+  // 2. MACD cross (base weight 20, adapted by scorecard)
+  // Fresh cross is best, but sustained positive histogram also valuable in trends
   let macdScore: number;
-  if (macdCross) macdScore = 95;
-  else if (macdHist > 0) macdScore = 60;
+  if (macdCross) macdScore = 95;                    // fresh bullish cross
+  else if (macdHist > 0 && macdHist > prevMacdHist) macdScore = 80;  // rising histogram — accelerating
+  else if (macdHist > 0) macdScore = 65;            // positive but decelerating
   else macdScore = 20;
-  evals.push({ name: 'macd_cross', score: macdScore, active: macdCross || macdHist > 0, weight: adaptWeight('macd_cross', 25) });
+  evals.push({ name: 'macd_cross', score: macdScore, active: macdCross || macdHist > 0, weight: adaptWeight('macd_cross', 20) });
 
   // 3. Trend strength (base weight 25, adapted by scorecard)
+  // This is the most important signal for a TREND strategy — weight it highest
   let trendScore: number;
   if (trendStr > 2) trendScore = 90;
-  else if (trendStr > 1) trendScore = 75;
-  else if (trendStr > 0.5) trendScore = 60;
-  else if (trendStr > 0) trendScore = 40;
+  else if (trendStr > 1) trendScore = 80;
+  else if (trendStr > 0.5) trendScore = 70;
+  else if (trendStr > 0) trendScore = 50;
   else trendScore = 10;
-  evals.push({ name: 'trend_strength', score: trendScore, active: trendStr > 0.5, weight: adaptWeight('trend_strength', 25) });
+  evals.push({ name: 'trend_strength', score: trendScore, active: trendStr > 0.3, weight: adaptWeight('trend_strength', 25) });
 
-  // 4. Volume spike (base weight 15, adapted by scorecard)
+  // 4. Volume confirmation (base weight 10, adapted by scorecard)
+  // Volume confirms moves but shouldn't gate entries — reduced weight
   let volScore: number;
   if (volRatio > 2) volScore = 90;
-  else if (volRatio > 1.5) volScore = 75;
-  else if (volRatio > 1) volScore = 55;
+  else if (volRatio > 1.5) volScore = 80;
+  else if (volRatio > 1) volScore = 65;
+  else if (volRatio > 0.7) volScore = 50;   // slightly below avg is ok in steady trends
   else volScore = 30;
-  evals.push({ name: 'volume_spike', score: volScore, active: volRatio > 1.2, weight: adaptWeight('volume_spike', 15) });
+  evals.push({ name: 'volume_spike', score: volScore, active: volRatio > 0.8, weight: adaptWeight('volume_spike', 10) });
 
-  // 5. Bollinger lower touch (base weight 10, adapted by scorecard)
+  // 5. Bollinger position (base weight 10, adapted by scorecard)
+  // TREND-following: price in upper half of bands is bullish, not bearish
+  // Only avoid extremes (>0.95 = overextended)
   let bbScore: number;
-  if (pctB < 0.2) bbScore = 85;
-  else if (pctB < 0.4) bbScore = 65;
-  else if (pctB < 0.6) bbScore = 45;
-  else bbScore = 25;
-  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.35, weight: adaptWeight('bb_lower_touch', 10) });
+  if (pctB < 0.2) bbScore = 55;        // near lower band — potential trend entry on pullback
+  else if (pctB < 0.4) bbScore = 65;   // lower half — good pullback entry
+  else if (pctB < 0.6) bbScore = 70;   // mid-band — neutral-positive
+  else if (pctB < 0.8) bbScore = 65;   // upper half — trending, still ok
+  else if (pctB < 0.95) bbScore = 40;  // near upper — getting stretched
+  else bbScore = 15;                    // above upper band — overextended
+  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.85, weight: adaptWeight('bb_lower_touch', 10) });
 
   // ── TC (Trend Composite) Signals ──────────────────
 
@@ -151,25 +162,27 @@ export function evaluateSignals(signals: Record<string, number | boolean | strin
   evals.push({ name: 'tc_momentum', score: tcScore, active: tcVal < 40, weight: adaptWeight('tc_momentum', 20) });
 
   // 7. S/R channel position (base weight 10) — buy near support, avoid near resistance
+  // In trends, mid-channel is fine — only heavily penalize entries right at resistance
   const srPos = signals.sr_channel_position as number ?? 0.5;
   let srScore: number;
-  if (srPos < 0.15) srScore = 90;      // Right at support
+  if (srPos < 0.15) srScore = 85;      // Right at support — excellent
   else if (srPos < 0.30) srScore = 75; // Near support
-  else if (srPos < 0.50) srScore = 55; // Lower half of channel
-  else if (srPos < 0.70) srScore = 35; // Upper half
-  else if (srPos < 0.85) srScore = 20; // Near resistance
-  else srScore = 10;                    // At resistance — worst entry
-  evals.push({ name: 'sr_position', score: srScore, active: srPos < 0.40, weight: adaptWeight('sr_position', 10) });
+  else if (srPos < 0.50) srScore = 65; // Lower half of channel — good
+  else if (srPos < 0.70) srScore = 55; // Upper half — acceptable in uptrend
+  else if (srPos < 0.85) srScore = 35; // Near resistance — caution
+  else srScore = 15;                    // At resistance — worst entry
+  evals.push({ name: 'sr_position', score: srScore, active: srPos < 0.70, weight: adaptWeight('sr_position', 10) });
 
-  // 8. Trend Dashboard consensus (base weight 10) — 6-indicator bull/bear vote
+  // 8. Trend Dashboard consensus (base weight 15) — 6-indicator bull/bear vote
+  // Bumped weight — strong consensus is a reliable trend confirmation
   const tdScore = signals.td_score as number ?? 50;
   let dashScore: number;
   if (tdScore >= 83) dashScore = 90;    // 5-6 bullish indicators
-  else if (tdScore >= 67) dashScore = 75; // 4 bullish
-  else if (tdScore >= 50) dashScore = 55; // 3 bullish (neutral)
+  else if (tdScore >= 67) dashScore = 80; // 4 bullish — strong
+  else if (tdScore >= 50) dashScore = 60; // 3 bullish (neutral-bullish)
   else if (tdScore >= 33) dashScore = 35; // 2 bullish
   else dashScore = 15;                    // 0-1 bullish — bearish
-  evals.push({ name: 'td_consensus', score: dashScore, active: tdScore >= 50, weight: adaptWeight('td_consensus', 10) });
+  evals.push({ name: 'td_consensus', score: dashScore, active: tdScore >= 50, weight: adaptWeight('td_consensus', 15) });
 
   return evals;
 }
@@ -209,28 +222,25 @@ export function generateSignals(
 
     compositeScore = Math.min(compositeScore, 100);
 
-    // MACD cross gate: winning trades (DOGE 3/3) always had MACD cross confirmed.
-    // Losing trades (LINK 0/4) entered 3/4 times without it. Penalize entries without MACD confirmation.
-    const macdCrossActive = signals.macd_cross as boolean;
+    // MACD gate: only penalize when MACD histogram is fully negative
+    // In sustained uptrends, histogram stays positive without fresh crosses — that's fine
     const macdHistPositive = (signals.macd_histogram as number) > 0;
-    if (!macdCrossActive && !macdHistPositive) {
-      compositeScore -= 12; // Heavy penalty — no MACD momentum confirmation at all
+    if (!macdHistPositive) {
+      compositeScore -= 8; // Moderate penalty — bearish MACD momentum
     }
 
-    // S/R position gate: DOGE wins entered at SR 0.03-0.08 (near support).
-    // Entries above 0.65 (upper channel) are risky — penalize proportionally.
+    // S/R position gate: only penalize entries very near resistance (>0.85)
+    // In uptrends, price naturally sits in upper half of its channel
     const srPos = signals.sr_channel_position as number ?? 0.5;
-    if (srPos > 0.65) {
-      compositeScore -= Math.round(5 + (srPos - 0.65) * 30); // -5 at 0.65, -15 at 0.98
+    if (srPos > 0.85) {
+      compositeScore -= Math.round(5 + (srPos - 0.85) * 40); // -5 at 0.85, -11 at 1.0
     }
 
-    // BB overbought filter: proportional penalty near upper band.
-    // Was flat -12/-6 — now curves up to -30pts at %B=1.0.
-    // This prevents buying at the top of Bollinger Bands.
+    // BB overbought filter: only penalize extreme overextension (>0.95)
+    // In trends, price riding upper band is normal behavior
     const pctB = signals.bb_percent_b as number;
-    if (pctB > 0.80) {
-      // Proportional: 6 + (pctB - 0.80) * 120 → -6 at 0.80, -18 at 0.90, -30 at 1.0
-      compositeScore -= Math.round(6 + (pctB - 0.80) * 120);
+    if (pctB > 0.95) {
+      compositeScore -= Math.round(10 + (pctB - 0.95) * 200); // -10 at 0.95, -20 at 1.0
     }
 
     const confidence = compositeScore / 100;
@@ -238,7 +248,7 @@ export function generateSignals(
     const passed = compositeScore >= V2_CONFIG.MIN_COMPOSITE_SCORE;
 
     const activeSignals = evals.filter((e) => e.active).map((e) => e.name);
-    const bbNote = pctB > 0.80 ? `, BB%B=${pctB.toFixed(2)}(penalty)` : '';
+    const bbNote = pctB > 0.95 ? `, BB%B=${pctB.toFixed(2)}(penalty)` : '';
     const reason = passed
       ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}`
       : `REJECT: score=${compositeScore.toFixed(1)} < min ${V2_CONFIG.MIN_COMPOSITE_SCORE}${bbNote}`;
