@@ -24,7 +24,7 @@ export const V2_CONFIG = {
   ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // SIDEWAYS removed — backtest showed 10.4% WR, -$252 (worst regime)
 
   // --- Signal ---
-  MIN_COMPOSITE_SCORE: 70,                // Was 60 — backtest showed 12.4% WR at 60; 49% of trades time-killed (no momentum)
+  MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
   MIN_CONFIDENCE: 0.70,
   MIN_CANDLES: 50,
 

@@ -334,8 +334,8 @@ export function computeSignals(candles: Candle[]): { signals: SignalSnapshot; re
   const lastMacdValue = macdResult.macd[lastIdx] ?? 0;
   const lastMacdSignal = macdResult.signal[lastIdx] ?? 0;
   const lastMacdHist = macdResult.histogram[lastIdx] ?? 0;
-  const prevMacdHist = lastIdx > 0 ? (macdResult.histogram[lastIdx - 1] ?? 0) : 0;
-  const macdCross = prevMacdHist < 0 && lastMacdHist >= 0;
+  const prevMacdHistVal = lastIdx > 0 ? (macdResult.histogram[lastIdx - 1] ?? 0) : 0;
+  const macdCross = prevMacdHistVal < 0 && lastMacdHist >= 0;
 
   const lastEma12 = ema12[lastIdx] ?? currentPrice;
   const lastEma26 = ema26[lastIdx] ?? currentPrice;
@@ -376,6 +376,7 @@ export function computeSignals(candles: Candle[]): { signals: SignalSnapshot; re
     macd_value: lastMacdValue,
     macd_signal: lastMacdSignal,
     macd_histogram: lastMacdHist,
+    prev_macd_histogram: prevMacdHistVal,
     macd_cross: macdCross,
     ema_12: lastEma12,
     ema_26: lastEma26,
