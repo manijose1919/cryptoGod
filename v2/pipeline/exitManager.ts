@@ -133,7 +133,7 @@ export async function checkExits(
       holdMs > V2_CONFIG.QUICK_KILL_AFTER_MS &&
       peakPnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
       pnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
-      trade.atrPercent
+      trade.atrPercent != null && trade.atrPercent > 0
     ) {
       const tighterStop = trade.entryPrice - (trade.entryPrice * trade.atrPercent / 100) * V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
       if (tighterStop > trade.currentStop) {
