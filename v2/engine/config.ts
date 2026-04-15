@@ -36,7 +36,7 @@ export const V2_CONFIG = {
 
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
-  MAX_POSITION_PERCENT: 0.25,
+  BASE_POSITION_PERCENT: 0.25,  // Base size as % of equity — actual size = base × confidence × F&G multiplier (can exceed this)
   MAX_OPEN_POSITIONS: 2,         // Was 3 — fewer concurrent trades = cleaner signal attribution
 
   // --- Risk ---

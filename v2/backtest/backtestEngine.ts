@@ -311,7 +311,7 @@ function simulateTicker(
     if (expectedReturn < V2_CONFIG.MIN_EXPECTED_RETURN) continue;
 
     // Position sizing
-    const maxPositionUsd = state.cash * V2_CONFIG.MAX_POSITION_PERCENT;
+    const maxPositionUsd = state.cash * V2_CONFIG.BASE_POSITION_PERCENT;
     const positionSizeUsd = maxPositionUsd * confidence;
     if (positionSizeUsd < 10 || positionSizeUsd > state.cash) continue;
 

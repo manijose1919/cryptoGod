@@ -51,7 +51,8 @@ function getScorecardVerdicts(): Map<string, string> {
       else verdict = 'inconclusive';
       _cachedVerdicts.set(s.signalName, verdict);
     }
-  } catch {
+  } catch (err) {
+    console.warn('[SignalGenerator] Scorecard verdicts failed — using default weights:', (err as Error).message);
     _cachedVerdicts = new Map();
   }
   _verdictCacheTime = now;

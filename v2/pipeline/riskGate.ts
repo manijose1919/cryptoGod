@@ -17,7 +17,8 @@ async function loadFearGreed(): Promise<void> {
   try {
     _fgModule = await import('../../services/fearGreedGate.js');
     _fgLoaded = true;
-  } catch {
+  } catch (err) {
+    console.warn('[RiskGate] Fear & Greed module failed to load — using defaults (1.0x, no blocking):', (err as Error).message);
     _fgLoaded = true; // Don't retry
   }
 }
@@ -115,7 +116,11 @@ export function evaluateRisk(
     }
 
     // Compute position sizing
-    const atrPercent = signal.signals.atr_percent;
+    const atrPercent = signal.signals.atr_percent as number;
+    if (!atrPercent || !isFinite(atrPercent)) {
+      results.push(makeReject(signal, `ATR% missing or invalid (${atrPercent})`));
+      continue;
+    }
     const tpPercent = atrPercent * V2_CONFIG.TAKE_PROFIT_ATR_MULT / 100;
     const slPercent = atrPercent * V2_CONFIG.STOP_LOSS_ATR_MULT / 100;
     // Use maker fees when USE_MAKER_ORDERS is on, taker otherwise
@@ -132,7 +137,7 @@ export function evaluateRisk(
     }
 
     // Position sizing: scale by confidence × Fear & Greed multiplier × pullback multiplier
-    const maxPositionUsd = portfolio.availableCapital * V2_CONFIG.MAX_POSITION_PERCENT;
+    const maxPositionUsd = portfolio.availableCapital * V2_CONFIG.BASE_POSITION_PERCENT;
     const pullbackMult = signal.regime === REGIME.PULLBACK_UP
       ? V2_CONFIG.MTF_POSITION_MULTIPLIER
       : 1.0;
