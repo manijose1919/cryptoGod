@@ -111,6 +111,25 @@ export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
       }
     }
 
+    // Gate 2a: HTF veto — block trades when 4h regime is bearish, even if 15m says UP
+    // This is the symmetric counterpart to the MTF rescue logic.
+    // Missing this gate caused DOTUSD entry at 15m=UP while 4h=STRONG_DOWN/DOWN.
+    if (V2_CONFIG.MTF_ENABLED && !isPullback) {
+      const htfRegime = getHTFRegime(ticker);
+      if (htfRegime && (htfRegime === REGIME.DOWN || htfRegime === REGIME.STRONG_DOWN)) {
+        results.push({
+          ticker,
+          passed: false,
+          regime: regimeResult.regime,
+          atrPercent: regimeResult.atrPercent,
+          volumeUsd24h: 0,
+          spreadPercent: 0,
+          reason: `HTF veto: 15m=${regimeResult.regime} but 4h=${htfRegime} (bearish higher timeframe)`,
+        });
+        continue;
+      }
+    }
+
     // Gate 2b: Regime momentum — catch deteriorating SIDEWAYS before it flips to DOWN.
     // Skip for pullbacks — they're already in DOWN, slope is expected negative.
     if (!isPullback && effectiveRegime === REGIME.SIDEWAYS) {
