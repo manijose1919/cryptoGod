@@ -244,15 +244,25 @@ export function generateSignals(
       compositeScore -= Math.round(10 + (pctB - 0.95) * 200); // -10 at 0.95, -20 at 1.0
     }
 
+    // TC sell-zone veto: when TC >= 80, the trend is exhausted (per TC indicator's own design)
+    // Data evidence: TC >= 80 had 16.7% WR and -$1.64 avg PnL across all tickers (as of 2026-04-16)
+    // Code comment in evaluateSignals() already says "Sell zone — avoid" but weighted avg let it through
+    const tcVal = signals.tc_value as number ?? 50;
+    const tcVeto = tcVal >= 80;
+    if (tcVeto) {
+      compositeScore -= 30; // Strong penalty — should push score below threshold
+    }
+
     const confidence = compositeScore / 100;
 
     const passed = compositeScore >= V2_CONFIG.MIN_COMPOSITE_SCORE;
 
     const activeSignals = evals.filter((e) => e.active).map((e) => e.name);
     const bbNote = pctB > 0.95 ? `, BB%B=${pctB.toFixed(2)}(penalty)` : '';
+    const tcNote = tcVeto ? `, TC=${tcVal.toFixed(1)}(sell-zone)` : '';
     const reason = passed
-      ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}`
-      : `REJECT: score=${compositeScore.toFixed(1)} < min ${V2_CONFIG.MIN_COMPOSITE_SCORE}${bbNote}`;
+      ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}${tcNote}`
+      : `REJECT: score=${compositeScore.toFixed(1)} < min ${V2_CONFIG.MIN_COMPOSITE_SCORE}${bbNote}${tcNote}`;
 
     results.push({
       ticker: scan.ticker,
