@@ -53,19 +53,6 @@ export function initV2Tables(): void {
     CREATE INDEX IF NOT EXISTS idx_v2_trades_ticker ON v2_trades(ticker);
     CREATE INDEX IF NOT EXISTS idx_v2_trades_created_at ON v2_trades(created_at);
 
-    -- Migration: add strategy column for multi-strategy support
-    INSERT OR IGNORE INTO _migrations (name) VALUES ('v2_trades_strategy');`);
-
-  const hasMigration = db.prepare(`SELECT 1 FROM _migrations WHERE name = 'v2_trades_strategy'`).get();
-  if (hasMigration) {
-    try {
-      db.exec(`ALTER TABLE v2_trades ADD COLUMN strategy TEXT NOT NULL DEFAULT 'TREND'`);
-    } catch { /* column already exists */ }
-  }
-
-  db.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
-    INSERT OR IGNORE INTO _migrations VALUES ('v2_trades_strategy');
-
     CREATE TABLE IF NOT EXISTS v2_signal_scores (
       signal_name TEXT PRIMARY KEY,
       total_trades INTEGER NOT NULL DEFAULT 0,
@@ -77,6 +64,11 @@ export function initV2Tables(): void {
       last_updated INTEGER
     );
   `);
+
+  // Migration: add strategy column
+  try {
+    db.exec(`ALTER TABLE v2_trades ADD COLUMN strategy TEXT NOT NULL DEFAULT 'TREND'`);
+  } catch { /* column already exists */ }
 }
 
 // --- Prepared Statements (lazily initialized) ---
