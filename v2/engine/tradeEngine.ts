@@ -21,6 +21,7 @@ import {
   insertTrade,
   closeTrade,
   getOpenTrades,
+  getOpenTradesByStrategy,
   getClosedTrades,
 } from '../attribution/attributionStore.ts';
 import { analyzeClosedTrade } from '../attribution/postTradeAnalyzer.ts';
@@ -489,7 +490,7 @@ async function runLoop(): Promise<void> {
 async function checkOpenExits(): Promise<void> {
   if (!exchange) return;
 
-  const openTrades = getOpenTrades();
+  const openTrades = getOpenTradesByStrategy('TREND');
   if (openTrades.length === 0) return;
 
   try {

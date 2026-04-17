@@ -53,6 +53,19 @@ export function initV2Tables(): void {
     CREATE INDEX IF NOT EXISTS idx_v2_trades_ticker ON v2_trades(ticker);
     CREATE INDEX IF NOT EXISTS idx_v2_trades_created_at ON v2_trades(created_at);
 
+    -- Migration: add strategy column for multi-strategy support
+    INSERT OR IGNORE INTO _migrations (name) VALUES ('v2_trades_strategy');`);
+
+  const hasMigration = db.prepare(`SELECT 1 FROM _migrations WHERE name = 'v2_trades_strategy'`).get();
+  if (hasMigration) {
+    try {
+      db.exec(`ALTER TABLE v2_trades ADD COLUMN strategy TEXT NOT NULL DEFAULT 'TREND'`);
+    } catch { /* column already exists */ }
+  }
+
+  db.exec(`CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY);
+    INSERT OR IGNORE INTO _migrations VALUES ('v2_trades_strategy');
+
     CREATE TABLE IF NOT EXISTS v2_signal_scores (
       signal_name TEXT PRIMARY KEY,
       total_trades INTEGER NOT NULL DEFAULT 0,
@@ -87,13 +100,13 @@ function getInsertStmt() {
         quantity, position_size_usd, exit_price, exit_time, exit_reason,
         pnl_gross, pnl_net, fees_paid, hold_duration_ms,
         initial_stop, current_stop, take_profit_target, trailing_activated,
-        entry_signals, entry_regime, entry_confidence, decision_log, created_at
+        entry_signals, entry_regime, entry_confidence, decision_log, strategy, created_at
       ) VALUES (
         @id, @ticker, @side, @status, @entryPrice, @entryTime, @entryOrderType,
         @quantity, @positionSizeUsd, @exitPrice, @exitTime, @exitReason,
         @pnlGross, @pnlNet, @feesPaid, @holdDurationMs,
         @initialStop, @currentStop, @takeProfitTarget, @trailingActivated,
-        @entrySignals, @entryRegime, @entryConfidence, @decisionLog, @createdAt
+        @entrySignals, @entryRegime, @entryConfidence, @decisionLog, @strategy, @createdAt
       )
     `);
   }
@@ -128,6 +141,7 @@ export function insertTrade(trade: V2Trade): void {
     entryRegime: trade.entryRegime,
     entryConfidence: trade.entryConfidence,
     decisionLog: JSON.stringify(trade.decisionLog),
+    strategy: trade.strategy ?? 'TREND',
     createdAt: trade.createdAt,
   });
 }
@@ -331,6 +345,15 @@ function rowToTrade(row: Record<string, unknown>): V2Trade {
     entryRegime: row.entry_regime as Regime,
     entryConfidence: row.entry_confidence as number,
     decisionLog,
+    strategy: (row.strategy as string) ?? 'TREND',
     createdAt: row.created_at as number,
   };
+}
+
+export function getOpenTradesByStrategy(strategy: string): V2Trade[] {
+  const stmt = getDb().prepare(
+    `SELECT * FROM v2_trades WHERE status = 'open' AND strategy = @strategy ORDER BY created_at DESC`
+  );
+  const rows = stmt.all({ strategy }) as Record<string, unknown>[];
+  return rows.map(rowToTrade);
 }

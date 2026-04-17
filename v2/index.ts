@@ -8,10 +8,11 @@ import { initKrakenAdapter, krakenV2 } from './exchange/krakenAdapter.ts';
 import { initCryptoComAdapter, cryptoComV2 } from './exchange/cryptoComV2Adapter.ts';
 import { initDualEngine, startDualEngine, stopDualEngine, getDualStatus } from './engine/dualExchangeEngine.ts';
 import { initBearishServices, startBearishServices, stopBearishServices, getBearishStatus } from './engine/bearishServices.ts';
+import { initMREngine, startMREngine, stopMREngine, getMRStatus } from './engine/meanReversionEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
-import { V2_CONFIG } from './engine/config.ts';
+import { V2_CONFIG, MR_CONFIG } from './engine/config.ts';
 
-export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices };
+export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine };
 
 export async function bootV2(initialBudget = 1000): Promise<void> {
   console.log(`[V2] Booting Phoenix V2 in ${V2_CONFIG.MODE} mode...`);
@@ -28,6 +29,17 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       console.log('[V2] Bearish services running (shorts, staking, arb, DCA)');
     } catch (err: any) {
       console.warn(`[V2] Bearish services failed to start: ${err.message}`);
+    }
+
+    // Boot Mean Reversion engine (15m, maker orders, independent loop)
+    if (MR_CONFIG.ENABLED) {
+      try {
+        initMREngine(krakenV2, initialBudget);
+        startMREngine();
+        console.log('[V2] Mean Reversion engine running (15m, maker fees)');
+      } catch (err: any) {
+        console.warn(`[V2] Mean Reversion engine failed to start: ${err.message}`);
+      }
     }
   } catch (err: any) {
     console.error(`[V2] Boot failed: ${err.message}`);

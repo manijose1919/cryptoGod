@@ -92,6 +92,40 @@ export const V2_CONFIG = {
   MTF_MAX_15M_REGIME: ['DOWN'] as readonly string[],  // Only rescue DOWN (not STRONG_DOWN)
 } as const;
 
+// ============================================
+// MEAN_REVERSION Strategy Config
+// Profitable on 15m with maker fees: +$6.33, 52% WR, PF 1.73
+// ============================================
+
+export const MR_CONFIG = {
+  ENABLED: true,
+  CANDLE_INTERVAL: '15m' as string,
+  ALLOWED_REGIMES: ['SIDEWAYS', 'UP'] as readonly string[],
+  SCAN_TICKERS: ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'DOGEUSD'] as string[],
+
+  RSI_THRESHOLD: 30,
+  BB_PERCENT_B_THRESHOLD: 0.15,
+  MAX_ATR_PERCENT: 3.0,
+  MIN_CANDLES: 50,
+
+  POSITION_SIZE_PERCENT: 0.15,
+  MAX_POSITION_PERCENT: 0.20,
+  MAX_OPEN_POSITIONS: 3,
+
+  STOP_LOSS_ATR_MULT: 1.5,
+  TIME_KILL_BARS: 4,            // 4 × 15m = 1 hour
+  TIME_KILL_MIN_MOVE: 0.003,
+  QUICK_KILL_AFTER_BARS: 2,     // 2 × 15m = 30 min
+  QUICK_KILL_MIN_GAIN: 0.002,
+  QUICK_KILL_SL_ATR_MULT: 0.8,
+
+  USE_MAKER_ORDERS: true,
+  FEE_ROUND_TRIP: 0.0032,       // Maker fees — critical for profitability
+
+  BOT_LOOP_INTERVAL_MS: 60_000,
+  LOOP_OFFSET_MS: 30_000,       // Stagger 30s from TREND loop to avoid API rate limits
+} as const;
+
 // --- Exchange-specific fee configs ---
 
 export const EXCHANGE_FEES = {
