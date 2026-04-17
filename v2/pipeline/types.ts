@@ -169,7 +169,8 @@ export interface V2Trade {
   entryConfidence: number;
   atrPercent?: number;           // ATR% at entry — used for ATR-aware trailing stops
   peakPrice?: number;            // Highest price seen since entry — used by Chandelier exit
-  strategy?: string;             // 'TREND' | 'MEAN_REVERSION' — tags which strategy opened this trade
+  peakHistogram?: number;        // Peak MACD histogram since entry — used by Momentum exit
+  strategy?: string;             // 'TREND' | 'MEAN_REVERSION' | 'BREAKOUT' | 'MOMENTUM'
   decisionLog: DecisionRecord[];
   createdAt: number;
 }

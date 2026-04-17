@@ -9,10 +9,12 @@ import { initCryptoComAdapter, cryptoComV2 } from './exchange/cryptoComV2Adapter
 import { initDualEngine, startDualEngine, stopDualEngine, getDualStatus } from './engine/dualExchangeEngine.ts';
 import { initBearishServices, startBearishServices, stopBearishServices, getBearishStatus } from './engine/bearishServices.ts';
 import { initMREngine, startMREngine, stopMREngine, getMRStatus } from './engine/meanReversionEngine.ts';
+import { initBreakoutEngine, startBreakoutEngine, stopBreakoutEngine, getBreakoutStatus } from './engine/breakoutEngine.ts';
+import { initMomentumEngine, startMomentumEngine, stopMomentumEngine, getMomentumStatus } from './engine/momentumEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
 import { V2_CONFIG, MR_CONFIG } from './engine/config.ts';
 
-export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine };
+export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine };
 
 export async function bootV2(initialBudget = 1000): Promise<void> {
   console.log(`[V2] Booting Phoenix V2 in ${V2_CONFIG.MODE} mode...`);
@@ -40,6 +42,24 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       } catch (err: any) {
         console.warn(`[V2] Mean Reversion engine failed to start: ${err.message}`);
       }
+    }
+
+    // Boot Breakout engine (1h, Chandelier trail)
+    try {
+      initBreakoutEngine(krakenV2, initialBudget);
+      startBreakoutEngine();
+      console.log('[V2] Breakout engine running (1h, maker fees)');
+    } catch (err: any) {
+      console.warn(`[V2] Breakout engine failed to start: ${err.message}`);
+    }
+
+    // Boot Momentum engine (1h, histogram decay exit)
+    try {
+      initMomentumEngine(krakenV2, initialBudget);
+      startMomentumEngine();
+      console.log('[V2] Momentum engine running (1h, maker fees)');
+    } catch (err: any) {
+      console.warn(`[V2] Momentum engine failed to start: ${err.message}`);
     }
   } catch (err: any) {
     console.error(`[V2] Boot failed: ${err.message}`);
