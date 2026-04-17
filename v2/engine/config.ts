@@ -52,17 +52,17 @@ export const V2_CONFIG = {
   CANDLE_INTERVAL: '4h' as string, // Was 15m — backtest: 15m=21%WR/-$1030, 1h=26%WR/-$1669, 4h=27%WR/-$455. 4h gives trends room past 0.52% fees.
 
   // --- Exit Management ---
-  STOP_LOSS_ATR_MULT: 2.5,          // Best WR at 2.5x (54%); 1.5x tested at 29% — too much whipsaw on 4h
-  TAKE_PROFIT_ATR_MULT: 2.0,       // Reachable on 4h; 3.0x barely fires
-  TRAILING_ACTIVATE_PERCENT: 0.008,        // 0.8% — produces 54% WR; 1.5% tested at 34%
-  TRAILING_GIVEBACK_PERCENT: 0.30,         // 30% — tighter trails lock in gains; tested 45% but WR dropped
-  TIME_KILL_MS: 16 * 60 * 60 * 1000,     // Was 5h — raised to 16h (4 bars on 4h candles); 4h trends need more time to develop
+  STOP_LOSS_ATR_MULT: 2.5,
+  TAKE_PROFIT_ATR_MULT: 2.0,       // Reachable on 4h; produces 54% WR with % trailing
+  TRAILING_ACTIVATE_PERCENT: 0.008,
+  TRAILING_GIVEBACK_PERCENT: 0.30,
+  TIME_KILL_MS: 16 * 60 * 60 * 1000,     // 16h — 4 bars on 4h candles
   TIME_KILL_MIN_MOVE: 0.007,
-  EXIT_CHECK_INTERVAL_MS: 15_000,         // Was 5s — 15s is fine for 4h candles
+  EXIT_CHECK_INTERVAL_MS: 15_000,
 
   // --- Quick-Kill (dud trade detection) ---
-  QUICK_KILL_AFTER_MS: 8 * 60 * 60 * 1000,  // Was 45min — raised to 8h (2 bars on 4h); need at least 2 bars to judge a 4h trade
-  QUICK_KILL_MIN_GAIN: 0.006,                // Was 0.4% — raised to 0.6%; 4h moves are bigger, so 0.4% is too tight
+  QUICK_KILL_AFTER_MS: 8 * 60 * 60 * 1000,
+  QUICK_KILL_MIN_GAIN: 0.006,
   QUICK_KILL_SL_ATR_MULT: 1.2,
 
   // --- Regime Momentum Gate ---

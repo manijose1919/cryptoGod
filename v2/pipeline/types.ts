@@ -168,6 +168,7 @@ export interface V2Trade {
   entryRegime: Regime;
   entryConfidence: number;
   atrPercent?: number;           // ATR% at entry — used for ATR-aware trailing stops
+  peakPrice?: number;            // Highest price seen since entry — used by Chandelier exit
   decisionLog: DecisionRecord[];
   createdAt: number;
 }
