@@ -5,17 +5,19 @@
 
 import type { V2Trade, V2PortfolioState } from '../pipeline/types.ts';
 import type { CircuitBreakerState } from '../pipeline/riskGate.ts';
-import { getOpenTrades, getClosedTrades } from '../attribution/attributionStore.ts';
+import { getOpenTrades, getClosedTrades, getOpenTradesByStrategy, getClosedTradesByStrategy } from '../attribution/attributionStore.ts';
 
 // --- Load Portfolio ---
 
 /**
  * Load open trades into a portfolio state.
+ * When strategy is provided, only counts that strategy's trades — each strategy
+ * gets its own independent budget and position tracking.
  * Cash = initialBudget + totalClosedPnlNet - lockedCapital (sum of open position sizes).
  */
-export function loadPortfolio(initialBudget: number): V2PortfolioState {
-  const openTrades = getOpenTrades();
-  const closedTrades = getClosedTrades(1000);
+export function loadPortfolio(initialBudget: number, strategy?: string): V2PortfolioState {
+  const openTrades = strategy ? getOpenTradesByStrategy(strategy) : getOpenTrades();
+  const closedTrades = strategy ? getClosedTradesByStrategy(strategy, 1000) : getClosedTrades(1000);
 
   const openPositions = new Map<string, V2Trade>();
   let lockedCapital = 0;

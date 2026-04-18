@@ -234,6 +234,14 @@ export function getClosedTrades(limit: number = 100): V2Trade[] {
   return rows.map(rowToTrade);
 }
 
+export function getClosedTradesByStrategy(strategy: string, limit: number = 100): V2Trade[] {
+  const stmt = getDb().prepare(
+    `SELECT * FROM v2_trades WHERE status = 'closed' AND strategy = @strategy ORDER BY created_at DESC LIMIT @limit`
+  );
+  const rows = stmt.all({ strategy, limit }) as Record<string, unknown>[];
+  return rows.map(rowToTrade);
+}
+
 export function getTradeById(tradeId: string): V2Trade | null {
   if (!_byIdStmt) {
     _byIdStmt = getDb().prepare(`SELECT * FROM v2_trades WHERE id = @tradeId`);

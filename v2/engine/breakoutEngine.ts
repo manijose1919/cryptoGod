@@ -64,7 +64,7 @@ async function runLoop(): Promise<void> {
       return;
     }
 
-    const portfolio = loadPortfolio(budget);
+    const portfolio = loadPortfolio(budget, 'BREAKOUT');
 
     for (const ticker of BO_CONFIG.SCAN_TICKERS) {
       if (currentBO.some(t => t.ticker === ticker)) continue;
