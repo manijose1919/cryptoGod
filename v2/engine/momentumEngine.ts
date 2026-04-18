@@ -71,7 +71,7 @@ async function runLoop(): Promise<void> {
       return;
     }
 
-    const portfolio = loadPortfolio(budget);
+    const portfolio = loadPortfolio(budget, 'MOMENTUM');
 
     for (const ticker of MOM_CONFIG.SCAN_TICKERS) {
       if (currentMOM.some(t => t.ticker === ticker)) continue;

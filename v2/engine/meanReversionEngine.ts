@@ -78,7 +78,7 @@ async function runMRLoop(): Promise<void> {
       return;
     }
 
-    const portfolio = loadPortfolio(budget);
+    const portfolio = loadPortfolio(budget, 'MEAN_REVERSION');
     let signalCount = 0;
     let rejectCount = 0;
 

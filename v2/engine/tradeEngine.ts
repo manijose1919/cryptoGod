@@ -384,7 +384,7 @@ async function runLoop(): Promise<void> {
     // ==============================
     // Stage 3: Risk Gate
     // ==============================
-    const portfolio = loadPortfolio(budget);
+    const portfolio = loadPortfolio(budget, 'TREND');
     const cbState = getCircuitBreakerState(portfolio);
     const riskResults = evaluateRisk(passedSignals, portfolio, cbState);
     const approved = getApproved(riskResults);
