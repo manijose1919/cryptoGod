@@ -103,7 +103,13 @@ export function evaluateRisk(
       continue;
     }
 
-    // Gate 3: Already holding this ticker (within same strategy — each strategy has its own portfolio)
+    // Gate 3: Max open positions per strategy (correlation risk cap)
+    if (portfolio.openPositions.size >= V2_CONFIG.MAX_OPEN_POSITIONS) {
+      results.push(makeReject(signal, `Max positions reached: ${portfolio.openPositions.size} >= ${V2_CONFIG.MAX_OPEN_POSITIONS}`));
+      continue;
+    }
+
+    // Gate 4: Already holding this ticker (within same strategy)
     if (portfolio.openPositions.has(signal.ticker)) {
       results.push(makeReject(signal, `Already holding ${signal.ticker}`));
       continue;
