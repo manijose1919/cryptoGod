@@ -44,14 +44,9 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       }
     }
 
-    // Boot Breakout engine (1h, Chandelier trail)
-    try {
-      initBreakoutEngine(krakenV2, initialBudget);
-      startBreakoutEngine();
-      console.log('[V2] Breakout engine running (1h, maker fees)');
-    } catch (err: any) {
-      console.warn(`[V2] Breakout engine failed to start: ${err.message}`);
-    }
+    // Breakout engine DISABLED — backtested 180 days: 341 trades, 28% WR, -$33 net
+    // Re-enable when strategy is reworked
+    console.log('[V2] Breakout engine disabled (unprofitable in backtest)');
 
     // Boot Momentum engine (1h, histogram decay exit)
     try {
