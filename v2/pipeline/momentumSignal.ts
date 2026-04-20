@@ -2,11 +2,11 @@ import type { Candle, SignalResult } from './types.ts';
 import { computeSignals, detectRegime, macd } from '../indicators/indicators.ts';
 
 const MOM_CONFIG = {
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP'],
-  HISTOGRAM_SPIKE_MULT: 1.5,
-  RSI_MIN: 45,
-  RSI_MAX: 75,
-  VOLUME_MULTIPLIER: 1.0,
+  ALLOWED_REGIMES: ['STRONG_UP', 'UP', 'SIDEWAYS'],  // Loosened: momentum can start in consolidation
+  HISTOGRAM_SPIKE_MULT: 1.2,   // Was 1.5 — produced 0 trades in 180-day backtest
+  RSI_MIN: 40,                  // Was 45 — allow slightly earlier momentum entries
+  RSI_MAX: 78,                  // Was 75 — don't cut off strong momentum
+  VOLUME_MULTIPLIER: 0.8,       // Was 1.0 — don't require above-average volume
   MIN_CANDLES: 50,
 };
 
