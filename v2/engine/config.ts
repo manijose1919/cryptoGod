@@ -22,7 +22,7 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // SIDEWAYS removed — backtest showed 10.4% WR, -$252 (worst regime)
+  ALLOWED_REGIMES: ['UP'] as const, // STRONG_UP removed — live 14 trades, 36% WR, -$38.09 net (avg -$2.72/trade, 6.6x worse than UP); momentum-peak entries reverse; re-evaluate once pullback-entry signal exists
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
