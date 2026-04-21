@@ -53,7 +53,7 @@ export const V2_CONFIG = {
 
   // --- Exit Management ---
   STOP_LOSS_ATR_MULT: 2.5,
-  TAKE_PROFIT_ATR_MULT: 2.0,       // Reachable on 4h; produces 54% WR with % trailing
+  TAKE_PROFIT_ATR_MULT: 3.5,       // 1.4:1 R:R — 43 live trades near break-even at this ratio; 2.0x gave 0.8:1 which is unsurvivable at 42.7% WR
   TRAILING_ACTIVATE_PERCENT: 0.015, // 1.5% — matches exitManager BE stop intent (BE covers 0.8–1.5% gap, trailing above)
   TRAILING_GIVEBACK_PERCENT: 0.30,
   TIME_KILL_MS: 16 * 60 * 60 * 1000,     // 16h — 4 bars on 4h candles
