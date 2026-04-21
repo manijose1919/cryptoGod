@@ -240,6 +240,7 @@ import {
 
 // ML Pipeline (4-Layer System)
 import { initSystemConfig, getAllFlags, setFlags, getFlag, killAll as killAllSystems } from './services/systemConfig.js';
+import { initTickerBlacklist, isTickerBlacklisted, getBlacklistStats, refreshTickerBlacklist } from './services/tickerBlacklist.js';
 import * as mlGatekeeper from './services/mlGatekeeper.js';
 import * as portfolioCorrelationEngine from './services/portfolioCorrelationEngine.js';
 import * as adversarialBrains from './services/adversarialBrains.js';
@@ -3955,9 +3956,16 @@ async function tradingBotLoop() {
                         if (vel.velocity < 0.1) trendEntryThreshold = optParams.TREND_BULLISH_ENTRY;
                     }
                     if (profileStrategies.includes('TREND') && tcValue < trendEntryThreshold) {
-                        // TREND: lower = more bullish, strength = how far below threshold
-                        const strength = (trendEntryThreshold - tcValue) / trendEntryThreshold;
-                        stratCandidates.push({ strategy: 'TREND', value: tcValue, strength, sniperEntry: sniperCandidate && trendEntryThreshold > optParams.TREND_BULLISH_ENTRY });
+                        if (isTickerBlacklisted(ticker)) {
+                            logThought({ type: 'SKIP', ticker, action: 'TICKER_BLACKLIST',
+                                confidence: score.compositeScore,
+                                reason: `TREND blocked — ${ticker} historical WR < ${((getFlag('TICKER_BLACKLIST_MAX_WIN_RATE') ?? 0.20) * 100).toFixed(0)}% with net loss`,
+                                regime: currentRegime });
+                        } else {
+                            // TREND: lower = more bullish, strength = how far below threshold
+                            const strength = (trendEntryThreshold - tcValue) / trendEntryThreshold;
+                            stratCandidates.push({ strategy: 'TREND', value: tcValue, strength, sniperEntry: sniperCandidate && trendEntryThreshold > optParams.TREND_BULLISH_ENTRY });
+                        }
                     }
                     // VOLUME-SPIKE BOUNCE: In Extreme Fear, a volume spike (>3x avg) with a
                     // positive close signals capitulation exhaustion → mean-reversion bounce
@@ -7409,6 +7417,14 @@ const startServer = async () => {
         console.log('[Server] System config initialized');
     } catch (e) {
         console.warn('[Server] System config init failed:', e.message);
+    }
+
+    // Initialize data-driven ticker blacklist (must come after systemConfig + database)
+    try {
+        initTickerBlacklist();
+        console.log('[Server] Ticker blacklist initialized');
+    } catch (e) {
+        console.warn('[Server] Ticker blacklist init failed:', e.message);
     }
 
     // Initialize ML prediction engine
