@@ -103,6 +103,11 @@ const DEFAULT_FLAGS = {
   SNIPER_SL: 0.015,                  // 1.5% stop-loss for SNIPER entries
   SNIPER_MAX_HOLD: 2,                // Max hold time in hours for SNIPER positions
   MICRO_BURST_THRESHOLD: 5,          // Volume burst detection: current 5s vol > Nx avg
+
+  // Data-driven ticker blacklist: block TREND entries on historically losing tickers
+  TICKER_BLACKLIST_ENABLED: true,
+  TICKER_BLACKLIST_MIN_TRADES: 10,    // min closed trades before a ticker is eligible
+  TICKER_BLACKLIST_MAX_WIN_RATE: 0.20,// block if WR is strictly below this AND net P&L < 0
 };
 
 // In-memory cache of current flags (seeded from defaults, overwritten by DB on init)
