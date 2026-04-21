@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { createLogger } from '../services/logger.js';
-import { getBlacklistStats, refreshTickerBlacklist } from '../services/tickerBlacklist.js';
 
 const log = createLogger('Config');
 
@@ -49,28 +48,6 @@ export default function createConfigRouter(ctx) {
             res.json({ success: true });
         } catch (e) {
             log.error('Config save failed', { error: e.message });
-            res.status(500).json({ error: e.message });
-        }
-    });
-
-    // GET /blacklist — Current ticker blacklist state (data-driven)
-    router.get('/blacklist', (req, res) => {
-        try {
-            res.json(getBlacklistStats());
-        } catch (e) {
-            log.error('Blacklist fetch failed', { error: e.message });
-            res.status(500).json({ error: e.message });
-        }
-    });
-
-    // POST /blacklist/refresh — Force immediate recompute (normally hourly)
-    router.post('/blacklist/refresh', (req, res) => {
-        try {
-            const result = refreshTickerBlacklist();
-            log.info('Blacklist refreshed manually', { count: result.count });
-            res.json(result);
-        } catch (e) {
-            log.error('Blacklist refresh failed', { error: e.message });
             res.status(500).json({ error: e.message });
         }
     });
