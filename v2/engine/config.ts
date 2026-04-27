@@ -11,10 +11,11 @@ export const V2_CONFIG = {
 
   // --- Scan ---
   SCAN_TICKERS: [
-    'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'DOGEUSD',
+    'BTCUSD', 'ETHUSD', 'XRPUSD', 'DOGEUSD',
+    // Removed: SOLUSD (31% WR, -$22.77 net over 13 live trades — worst performer)
     // Removed: ADAUSD (13.2% WR, -$73 on 4h backtest), DOTUSD (20% WR, -$65)
-    // Removed: LINKUSD (0/4 trades, -$9.02), AVAXUSD (24.2% WR, -$79), BNBUSD (22.6% WR, -$46)
-    // Keeping top 5 by win rate: BTC 38%, DOGE 37%, XRP 32%, SOL 30%, ETH 27%
+    // Removed: LINKUSD (0/4 trades, -$9.02), AVAXUSD (20% WR, -$11.71 live), BNBUSD (22.6% WR, -$46)
+    // Keeping top 4 by live PnL: DOT +$2.75, BTC +$1.25, DOGE -$3.13, ETH -$10.50
   ],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 0.3,  // Calibrated for 4h candles (0.05 was for 1m/15m)
@@ -53,15 +54,15 @@ export const V2_CONFIG = {
 
   // --- Exit Management ---
   STOP_LOSS_ATR_MULT: 2.5,
-  TAKE_PROFIT_ATR_MULT: 3.5,       // 1.4:1 R:R — 43 live trades near break-even at this ratio; 2.0x gave 0.8:1 which is unsurvivable at 42.7% WR
-  TRAILING_ACTIVATE_PERCENT: 0.015, // 1.5% — matches exitManager BE stop intent (BE covers 0.8–1.5% gap, trailing above)
-  TRAILING_GIVEBACK_PERCENT: 0.30,
-  TIME_KILL_MS: 16 * 60 * 60 * 1000,     // 16h — 4 bars on 4h candles
+  TAKE_PROFIT_ATR_MULT: 3.5,       // 1.4:1 R:R — restored from 5.0 (all 13 historical TP hits were at 1.2-2.4% distance; 5.0 ATR created 3-6% targets that never hit). Trailing at 1% catches moderate winners below TP.
+  TRAILING_ACTIVATE_PERCENT: 0.01,  // 1.0% — was 1.5%; activating earlier converts time-kills into trailing exits (27 time-kills avg +$0.06 gross were dying to fees)
+  TRAILING_GIVEBACK_PERCENT: 0.25,  // Was 0.30 — tighter trail keeps 75% of gains (vs 70%); combined with earlier activation, catches moderate winners
+  TIME_KILL_MS: 12 * 60 * 60 * 1000,     // 12h — 3 bars on 4h candles (was 16h/4 bars; trades stale after 10.8h avg hold were bleeding fees)
   TIME_KILL_MIN_MOVE: 0.007,
   EXIT_CHECK_INTERVAL_MS: 15_000,
 
   // --- Quick-Kill (dud trade detection) ---
-  QUICK_KILL_AFTER_MS: 8 * 60 * 60 * 1000,
+  QUICK_KILL_AFTER_MS: 4 * 60 * 60 * 1000,  // 4h (1 candle) — was 8h; kill duds faster to free position slots
   QUICK_KILL_MIN_GAIN: 0.006,
   QUICK_KILL_SL_ATR_MULT: 1.2,
 
@@ -98,10 +99,10 @@ export const V2_CONFIG = {
 // ============================================
 
 export const MR_CONFIG = {
-  ENABLED: true,
+  ENABLED: false,                  // DISABLED — live results: 0 wins, 4 losses, -$2.80. Backtest claimed +$6.33/52% WR but live is 0% WR. Re-enable when strategy is reworked.
   CANDLE_INTERVAL: '15m' as string,
   ALLOWED_REGIMES: ['SIDEWAYS', 'UP'] as readonly string[],
-  SCAN_TICKERS: ['BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'DOGEUSD'] as string[],
+  SCAN_TICKERS: ['BTCUSD', 'ETHUSD', 'XRPUSD', 'DOGEUSD'] as string[],
 
   RSI_THRESHOLD: 30,
   BB_PERCENT_B_THRESHOLD: 0.15,
