@@ -91,6 +91,12 @@ async function runLoop(): Promise<void> {
       const atrPct = signal.signals.atr_percent as number;
       const atrDollar = price * atrPct / 100;
       const sl = price - atrDollar * MOM_CONFIG.SL_ATR_MULT;
+      // MOMENTUM uses histogram-decay exit (momentumExitManager), not a fixed TP target.
+      // We persist a sentinel TP at SL-mirror distance (R:R = 1.0) so analytics
+      // queries computing (tp - entry)/(entry - sl) return a sensible value
+      // instead of -entry/(entry-sl). The main exitManager is never called for
+      // MOMENTUM trades, so this value is purely informational.
+      const tpSentinel = price + atrDollar * MOM_CONFIG.SL_ATR_MULT;
       const macdHist = signal.signals.macd_histogram as number;
       const qty = posSize / price;
 
@@ -101,7 +107,7 @@ async function runLoop(): Promise<void> {
         exitPrice: null, exitTime: null, exitReason: null,
         pnlGross: null, pnlNet: null, feesPaid: posSize * MOM_CONFIG.FEE_ROUND_TRIP / 2,
         holdDurationMs: null, initialStop: sl, currentStop: sl,
-        takeProfitTarget: 0, trailingActivated: false,
+        takeProfitTarget: tpSentinel, trailingActivated: false,
         entrySignals: signal.signals, entryRegime: signal.regime as any,
         entryConfidence: signal.confidence, atrPercent: atrPct,
         peakPrice: price, peakHistogram: macdHist,
