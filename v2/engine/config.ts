@@ -57,7 +57,7 @@ export const V2_CONFIG = {
 
   // --- Exit Management ---
   STOP_LOSS_ATR_MULT: 2.5,
-  TAKE_PROFIT_ATR_MULT: 3.5,       // 1.4:1 R:R — restored from 5.0 (all 13 historical TP hits were at 1.2-2.4% distance; 5.0 ATR created 3-6% targets that never hit). Trailing at 1% catches moderate winners below TP.
+  TAKE_PROFIT_ATR_MULT: 4.0,       // 2026-04-29: 3.5 → 4.0 (R:R 1.4 → 1.6). Avg_win problem: at R:R 1.4 the cohort was avg_win $0.97 vs needed ~$1.10 for 59% WR break-even. Wider TP makes individual TP hits +$2.00 instead of +$1.75. Risk: historical R:R 1.6 cohort underperformed R:R 1.4 (-$10.89 vs -$1.89), but that was without working BE/trailing stops. With current trailing-active@1% catching moderate winners, wider TP may behave differently. Deliberate test under user's risk-on framing 2026-04-29.
   TRAILING_ACTIVATE_PERCENT: 0.01,  // 1.0% — was 1.5%; activating earlier converts time-kills into trailing exits (27 time-kills avg +$0.06 gross were dying to fees)
   TRAILING_GIVEBACK_PERCENT: 0.25,  // Was 0.30 — tighter trail keeps 75% of gains (vs 70%); combined with earlier activation, catches moderate winners
   TIME_KILL_MS: 12 * 60 * 60 * 1000,     // 12h — 3 bars on 4h candles (was 16h/4 bars; trades stale after 10.8h avg hold were bleeding fees)
