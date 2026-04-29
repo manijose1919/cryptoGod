@@ -143,18 +143,26 @@ export function evaluateRisk(
       : 1.0;
     const positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier * pullbackMult;
 
-    // Gate 6: Minimum order size ($10 Kraken minimum)
-    if (positionSizeUsd < 10) {
-      results.push(makeReject(signal, `Position size $${positionSizeUsd.toFixed(2)} < $10 minimum`));
+    // Gate 6: Position size validity + minimum order size ($10 Kraken minimum)
+    // isFinite catches NaN from any upstream undefined/0 multiplier — `NaN < 10` is
+    // false so a bare `< 10` check would let NaN-sized orders through.
+    if (!isFinite(positionSizeUsd) || positionSizeUsd < 10) {
+      results.push(makeReject(signal, `Position size invalid or below minimum: $${positionSizeUsd}`));
       continue;
     }
 
     // Compute stop loss and take profit prices using actual close price (not EMA which lags)
     const lastPrice = (signal.signals.close_price || signal.signals.ema_12) as number;
     const atrValue = signal.signals.atr as number;
+    // Defensive: guard against missing/invalid pricing data — produces NaN stops
+    // that would never fire and leave trades open indefinitely.
+    if (!isFinite(lastPrice) || lastPrice <= 0 || !isFinite(atrValue) || atrValue <= 0) {
+      results.push(makeReject(signal, `Invalid pricing data: lastPrice=${lastPrice}, atr=${atrValue}`));
+      continue;
+    }
     const stopLoss = lastPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
     const takeProfit = lastPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
-    const quantity = lastPrice > 0 ? positionSizeUsd / lastPrice : 0;
+    const quantity = positionSizeUsd / lastPrice;
 
     const pullbackNote = signal.regime === REGIME.PULLBACK_UP ? `, pullback=${pullbackMult}x` : '';
     results.push({
