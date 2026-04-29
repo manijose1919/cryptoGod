@@ -37,6 +37,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-04-29 19:00 UTC — Round-2 bug sweep: 3 more fixes (incl. MOMENTUM regression) — local-claude
+
+**Commits:** `30762ff`, `09746f4`, `6c9127e`
+**Files changed:** `v2/index.ts`, `v2/engine/momentumEngine.ts`, `v2/pipeline/executor.ts`
+**Stats baseline reset:** no (per CLAUDE.md — bug fixes restoring intended behavior keep continuous stats)
+
+**What changed:**
+1. **`30762ff` — Re-disable MOMENTUM engine.** This was a regression from my own 17:39 UTC force-push to the VPS bare repo: VPS Claude's `2a96f56` (MOMENTUM disable) lived only on the bare repo and got overwritten when I pushed my origin history. The MOMENTUM init/start calls returned to v2/index.ts. Engine has been "running" for 4 days but produced 0 trades due to market conditions — pure luck. Now restored to disabled state, mirroring `2a96f56`'s edit.
+2. **`09746f4` — Set MOMENTUM `takeProfitTarget` to SL-mirror sentinel.** Was 0, which broke analytics queries (R:R formula produced -70.04 for SOL entries). Now: `entry + atrDollar * SL_ATR_MULT` (mirrors SL distance, R:R = 1.0). Functionally identical at runtime since `momentumExitManager` doesn't read the field; purely fixes analytics.
+3. **`6c9127e` — Live-mode SL retry + rollback in executor.** Previously a `placeStopLoss` failure was logged but the trade was kept — leaving a real exchange position with no native SL, exposed if the bot crashed. Now: 3-attempt retry with 1s/2s/4s backoff, market-sell rollback if all fail, CRITICAL log if rollback also fails. Currently masked by paper mode but ready for live transition.
+
+**Why:**
+Round-2 audit (user-requested "nothing too small to mention" check) caught the MOMENTUM regression, which was the most important finding by far. The other two are low-impact correctness/hardening fixes.
+
+**What to monitor / watch for:**
+- **MOMENTUM should NOT log "Momentum engine started" or open trades.** Boot log should now show `[V2] Momentum engine disabled (0% WR over 7 trades, buying overbought)`. If MOMENTUM trades appear in `v2_trades` with `entry_time > 1777485600000`, the regression returned — revert `30762ff` is not the fix; investigate why the disable didn't take.
+- **Exit reason classification fix from earlier (`8259538`) and this batch's MOMENTUM fixes both deployed in the same window.** Use `WHERE entry_time > <baseline>` to isolate cohort.
+- **Future force-pushes:** before any force-push to vps remote, check whether the bare repo has commits ahead that aren't in origin. The CHANGELOG system + this lesson should prevent silent commit loss going forward.
+
+**Process improvement:** the MOMENTUM regression is exactly what the new CHANGELOG.md system is designed to catch. Each entry from now on should help surface multi-agent state drift earlier.
+
+---
+
 ## 2026-04-29 18:30 UTC — Bug-fix sweep (5 issues) + bidirectional changelog system — local-claude
 
 **Commits:** `8259538`, `0e30f19`, `6cd1e24`, plus this changelog + CLAUDE.md handoff rule
