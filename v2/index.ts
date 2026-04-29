@@ -48,14 +48,12 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
     // Re-enable when strategy is reworked
     console.log('[V2] Breakout engine disabled (unprofitable in backtest)');
 
-    // Boot Momentum engine (1h, histogram decay exit)
-    try {
-      initMomentumEngine(krakenV2, initialBudget);
-      startMomentumEngine();
-      console.log('[V2] Momentum engine running (1h, maker fees)');
-    } catch (err: any) {
-      console.warn(`[V2] Momentum engine failed to start: ${err.message}`);
-    }
+    // Momentum engine DISABLED — 7 trades, 0 wins, -$9.78 net (commit 2a96f56)
+    // MACD histogram spikes on 1h candles happen at move exhaustion (BB%B>0.9, TC>75)
+    // not at move initiation — buys the top every time.
+    // Re-disabled 2026-04-29 after force-push to vps remote inadvertently restored
+    // the init/start calls. Re-enable only after redesigning the entry signal.
+    console.log('[V2] Momentum engine disabled (0% WR over 7 trades, buying overbought)');
   } catch (err: any) {
     console.error(`[V2] Boot failed: ${err.message}`);
   }
