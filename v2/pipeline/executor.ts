@@ -176,11 +176,37 @@ export async function executeTrade(
     const actualStop = fillPrice - atr * V2_CONFIG.STOP_LOSS_ATR_MULT;
     const actualTp = fillPrice + atr * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
 
-    // Place native stop loss on exchange
-    try {
-      await exchange.placeStopLoss(signal.ticker, fillQty, actualStop);
-    } catch (e) {
-      console.error(`[V2 Executor] Failed to place native SL: ${(e as Error).message}`);
+    // Place native stop loss on exchange — retry with backoff, rollback if all fail.
+    // A live position without an exchange-side SL is exposed to catastrophic loss
+    // if the bot crashes (in-process exitManager wouldn't run). We try 3 times
+    // with 1s/2s/4s backoff; if still failing, market-sell the position to close
+    // it cleanly rather than holding it naked.
+    let slPlaced = false;
+    let slError: Error | null = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await exchange.placeStopLoss(signal.ticker, fillQty, actualStop);
+        slPlaced = true;
+        break;
+      } catch (e) {
+        slError = e as Error;
+        console.warn(`[V2 Executor] SL placement attempt ${attempt}/3 failed: ${slError.message}`);
+        if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 1000));
+      }
+    }
+    if (!slPlaced) {
+      console.error(`[V2 Executor] SL placement failed after 3 attempts; rolling back position via market sell`);
+      try {
+        await exchange.placeMarketSell(signal.ticker, fillQty);
+        const rejectDecision = makeReject(tradeId, `SL placement failed (${slError?.message ?? 'unknown'}), position rolled back via market sell`);
+        return { trade: null, decision: rejectDecision };
+      } catch (rollbackErr) {
+        // Worst case: SL failed AND rollback failed. Position is NAKED on exchange.
+        // Surface this loudly — operator must intervene manually.
+        console.error(`[V2 Executor] CRITICAL: rollback also failed (${(rollbackErr as Error).message}). Position NAKED on exchange — manual intervention required.`);
+        const rejectDecision = makeReject(tradeId, `SL failed + rollback failed — NAKED POSITION, manual intervention required`);
+        return { trade: null, decision: rejectDecision };
+      }
     }
 
     const decision = makeExecuteDecision(
