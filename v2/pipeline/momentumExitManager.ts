@@ -1,7 +1,7 @@
 import type { V2Trade, DecisionRecord } from './types.ts';
 import { EXIT_REASON, PIPELINE_STAGE, DECISION } from './types.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
-import { updateTradeStop } from '../attribution/attributionStore.ts';
+import { updateTradeStop, updateTradePeakPrice, updateTradePeakHistogram } from '../attribution/attributionStore.ts';
 import type { ExitResult } from './exitManager.ts';
 import { computeSignals } from '../indicators/indicators.ts';
 import type { Candle } from './types.ts';
@@ -29,7 +29,10 @@ export async function checkMomentumExits(
 
   for (const trade of openTrades) {
     const currentPrice = await exchange.getLatestPrice(trade.ticker);
-    if (currentPrice > (trade.peakPrice ?? trade.entryPrice)) trade.peakPrice = currentPrice;
+    if (currentPrice > (trade.peakPrice ?? trade.entryPrice)) {
+      trade.peakPrice = currentPrice;
+      updateTradePeakPrice(trade.id, currentPrice);
+    }
     const pnlPercent = (currentPrice - trade.entryPrice) / trade.entryPrice;
     const holdMs = Date.now() - trade.entryTime;
     const holdBars = Math.floor(holdMs / BAR_MS);
@@ -61,6 +64,7 @@ export async function checkMomentumExits(
 
         if (currentHist > peakHist) {
           trade.peakHistogram = currentHist;
+          updateTradePeakHistogram(trade.id, currentHist);
         }
 
         if (peakHist > 0 && currentHist < peakHist * (1 - MOM_EXIT.HISTOGRAM_DECAY_THRESHOLD)) {
