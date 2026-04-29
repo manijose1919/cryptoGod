@@ -424,8 +424,12 @@ async function runLoop(): Promise<void> {
           }
           mlFiltered = mlResults;
         }
-      } catch {
-        // ML not available — pass through
+      } catch (e) {
+        // ML import or evaluation failed — pass approved signals through
+        // unfiltered. Log so a real bug doesn't silently disable ML gating.
+        if (stats.loopCount % 30 === 1) {
+          console.warn(`[V2] ML gatekeeper bypassed (${(e as Error).message}) — ${approved.length} signals passed through unfiltered`);
+        }
       }
     }
 
@@ -501,16 +505,13 @@ async function checkOpenExits(): Promise<void> {
 
       const trade = result.trade;
 
-      // Calculate fees: both entry and exit sides
+      // Calculate fees: both entry and exit sides.
+      // All exits use placeMarketSell (see V2_CONFIG.MODE === 'live' block below),
+      // which is always taker. Previously we assumed maker fee for take_profit and
+      // trailing exits — that under-counted by ~0.10% (taker - maker), inflating
+      // recorded P&L vs the actual exchange charge. Match accounting to reality.
       const entryFee = trade.feesPaid; // already paid at entry
-      let exitFee: number;
-      if (result.exitReason === 'take_profit' || result.exitReason === 'trailing') {
-        // Could use maker for planned exits
-        exitFee = result.exitPrice * trade.quantity * V2_CONFIG.FEE_MAKER_PERCENT;
-      } else {
-        // Stop loss / time kill = taker
-        exitFee = result.exitPrice * trade.quantity * V2_CONFIG.FEE_TAKER_PERCENT;
-      }
+      const exitFee = result.exitPrice * trade.quantity * V2_CONFIG.FEE_TAKER_PERCENT;
       const totalFees = entryFee + exitFee;
 
       // In live mode, actually sell
