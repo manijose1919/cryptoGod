@@ -26,7 +26,7 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['UP'] as const, // STRONG_UP removed — live 14 trades, 36% WR, -$38.09 net (avg -$2.72/trade, 6.6x worse than UP); momentum-peak entries reverse; re-evaluate once pullback-entry signal exists
+  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // 2026-04-29: STRONG_UP re-allowed. Original block (Apr 21) was based on R:R 0.8 era (14 trades, 36% WR, -$38). At current R:R 1.4: 5 trades, 60% WR, +$0.04 net (essentially break-even). Different config = different result. Re-evaluate if STRONG_UP underperforms UP in live data.
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
