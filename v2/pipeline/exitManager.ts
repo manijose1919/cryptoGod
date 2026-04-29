@@ -72,18 +72,26 @@ export async function checkExits(
     const pnlPercent = (currentPrice - trade.entryPrice) / trade.entryPrice;
     const holdMs = Date.now() - trade.entryTime;
 
-    // --- 1. Stop Loss ---
+    // --- 1. Stop Loss / Trailing Exit ---
+    // Both fire on `currentPrice <= currentStop`, but classify the exit
+    // reason based on whether the stop was raised above its initial level.
+    // A raised stop means BE-stop or trailing took effect — log as `trailing`
+    // so analytics distinguish protected exits from real losses.
     if (currentPrice <= trade.currentStop) {
+      const stopWasRaised = trade.trailingActivated || trade.currentStop > trade.initialStop;
+      const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
+      const reasonLabel = stopWasRaised ? 'Trailing/BE stop hit' : 'Stop loss hit';
       results.push({
         trade,
         shouldExit: true,
-        exitReason: EXIT_REASON.stop_loss,
+        exitReason,
         exitPrice: currentPrice,
         newStop: trade.currentStop,
         trailingJustActivated: false,
-        decision: makeDecision(trade.id, 'execute', `Stop loss hit: ${currentPrice.toFixed(2)} <= ${trade.currentStop.toFixed(2)}`, {
+        decision: makeDecision(trade.id, 'execute', `${reasonLabel}: ${currentPrice.toFixed(2)} <= ${trade.currentStop.toFixed(2)}`, {
           currentPrice,
           currentStop: trade.currentStop,
+          initialStop: trade.initialStop,
           pnlPercent,
         }),
       });
@@ -111,11 +119,15 @@ export async function checkExits(
     let newStop = trade.currentStop;
 
     // --- 2b. Break-Even Stop ---
-    // Once price moves +0.8% (covers round-trip fees), move SL to entry.
-    // Turns potential losers into scratches — critical for win rate.
-    // At +1.5% trailing takes over, so this covers the 0.8%-1.5% gap.
+    // Once price moves +0.8% (covers round-trip fees), raise SL to entry+0.1%.
+    // Acts as a floor — capital preservation for trades that haven't yet
+    // reached the trailing activation threshold. Below trailing, this is
+    // the only protection; above trailing, it's harmless because trailing
+    // computes a tighter (higher) stop and the `> trade.currentStop` guard
+    // means stops only ever tighten. Decoupled from TRAILING_ACTIVATE_PERCENT
+    // so config tweaks to trailing don't accidentally squeeze the BE window.
     const rawPnlPercent = pnlPercent; // pnlPercent is already raw (no fee adjustment)
-    if (rawPnlPercent >= 0.008 && rawPnlPercent < V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
+    if (rawPnlPercent >= 0.008) {
       const breakEvenStop = trade.entryPrice * 1.001; // Slightly above entry to cover slippage
       if (breakEvenStop > trade.currentStop) {
         newStop = breakEvenStop;
