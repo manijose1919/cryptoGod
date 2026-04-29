@@ -56,11 +56,20 @@ export function loadPortfolio(initialBudget: number, strategy?: string): V2Portf
 /**
  * Compute circuit breaker state from last 100 closed trades.
  * Returns daily P&L percent and most recent loss time.
+ *
+ * When `strategy` is provided, reads only that strategy's closed trades —
+ * each strategy gets its own circuit breaker so a string of MEAN_REVERSION
+ * losses doesn't trigger a cooldown that blocks TREND entries (cross-strategy
+ * contamination). Daily P&L still comes from the per-strategy `portfolio`
+ * which `loadPortfolio` already isolates correctly.
  */
 export function getCircuitBreakerState(
   portfolio: V2PortfolioState,
+  strategy?: string,
 ): CircuitBreakerState {
-  const closedTrades = getClosedTrades(100);
+  const closedTrades = strategy
+    ? getClosedTradesByStrategy(strategy, 100)
+    : getClosedTrades(100);
 
   // Daily P&L as percent of total equity
   const dailyPnlPercent =
