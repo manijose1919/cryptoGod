@@ -91,6 +91,36 @@ The `TradingStrategy` type includes: TREND, BREAKOUT, WHALE, CONFLUENCE, MOMENTU
 - `.env` / `.env.local` - Contains `ANTHROPIC_API_KEY` for Claude AI analysis
 - Vite exposes it via `process.env.ANTHROPIC_API_KEY` (defined in vite.config.ts)
 
+## Workflow Rules
+
+### Stats Baseline Resets After Material V2 Config Changes (STANDING RULE)
+
+When shipping changes that affect **trade-level expected outcomes** (R:R ratios, ALLOWED_REGIMES, SCAN_TICKERS, exit logic timers, position sizing, strategy enables/disables), set a new `stats_baseline_time` so reports/monitoring filter pre-change trades out of the current cohort.
+
+**How:** After deploy completes, run on VPS:
+```
+sqlite3 /opt/trading-bot/data/trading.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));"
+```
+Then notify all reporters (VPS Claude, future Claude sessions): primary stats use `WHERE entry_time >= <baseline>`; pre-baseline trades go in a "Legacy / Background" section and don't count toward daily/overall totals.
+
+**Open positions from before the baseline keep running** on their original config — don't force-close. Track outcomes as background data.
+
+**The engine's running `totalPnlNet` continues to aggregate everything** (preserves the historical record). Only reports filter by baseline.
+
+**When NOT to reset (advise the user instead):**
+- Bug fixes that restore intended behavior — keep continuous stats so the fix's value is visible.
+- Multiple small tweaks within a few days — baseline once at the end of a tuning sprint, not per tweak.
+- Active high-volume trading window — wait for a quieter moment to deploy + reset, otherwise you create many "in-flight legacy" positions.
+- Reverting a recent change with very few post-baseline trades — roll back to the previous baseline rather than create a third.
+- Trivial / non-trading changes (typos, comments, log messages, behavior-preserving refactors) — never reset.
+
+### Git Hygiene (STANDING RULE)
+
+- Commit all code/config changes with descriptive messages capturing the data-driven reasoning.
+- Push to origin (and to vps when changes need to deploy). Never leave material edits uncommitted.
+- For material trading changes, prefer **one logical change per commit** so individual rollbacks via `git revert <SHA>` are clean.
+- Even experimental changes get committed (and reverted in a later commit if they don't pan out) — git log is the audit trail of what was tried and learned.
+
 ## Common Issues
 1. **Blank window / app won't load**: Backend crash. Check `node server.js` output for missing module errors
 2. **Port conflicts**: Kill node processes before restart (`taskkill /F /IM node.exe` on Windows)
