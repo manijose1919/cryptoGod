@@ -11,11 +11,14 @@ export const V2_CONFIG = {
 
   // --- Scan ---
   SCAN_TICKERS: [
-    'BTCUSD', 'ETHUSD', 'XRPUSD', 'DOGEUSD',
-    // Removed: SOLUSD (31% WR, -$22.77 net over 13 live trades — worst performer)
-    // Removed: ADAUSD (13.2% WR, -$73 on 4h backtest), DOTUSD (20% WR, -$65)
-    // Removed: LINKUSD (0/4 trades, -$9.02), AVAXUSD (20% WR, -$11.71 live), BNBUSD (22.6% WR, -$46)
-    // Keeping top 4 by live PnL: DOT +$2.75, BTC +$1.25, DOGE -$3.13, ETH -$10.50
+    'ETHUSD', 'XRPUSD', 'DOGEUSD', 'DOTUSD', 'ADAUSD',
+    // 2026-04-29: data-driven swap based on R:R 1.4 live cohort (54 closed trades):
+    //   REMOVED BTCUSD: 0/3 = 0% WR, -$3.21/trade — worst per-trade performer
+    //   ADDED   DOTUSD: 6/8 = 75% WR, +$0.31/trade live (prior backtest 20% WR was misleading)
+    //   ADDED   ADAUSD: 3/5 = 60% WR, +$0.47/trade live (prior backtest 13% WR was misleading)
+    // Per-ticker R:R 1.4 net: DOGE +$7.66, XRP +$2.70, DOT +$2.51, ADA +$2.37, ETH -$1.99
+    // Counterfactual: this 5-ticker set on the same 54 trades would have netted +$13.25 vs actual -$7.38
+    // Removed earlier: SOLUSD (31% WR, -$22.77), AVAXUSD (22% WR, -$10.76), LINKUSD (0/4), BNBUSD (22.6% WR)
   ],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 0.3,  // Calibrated for 4h candles (0.05 was for 1m/15m)
