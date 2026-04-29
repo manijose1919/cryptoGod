@@ -37,6 +37,33 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-04-29 19:30 UTC — Round-3 bug sweep: schema migration + 2 more fixes — local-claude
+
+**Commits:** `1705b17`, `fa3e878`
+**Files changed:** `v2/attribution/attributionStore.ts`, `v2/pipeline/momentumExitManager.ts`, `v2/pipeline/breakoutExitManager.ts`, `v2/pipeline/meanReversionExitManager.ts`, `v2/engine/tradeEngine.ts`
+**Stats baseline reset:** no (per CLAUDE.md — bug fixes restoring intended behavior keep continuous stats so the impact is measurable)
+
+**What changed:**
+1. **`1705b17` — Schema migration: persist `atrPercent`, `peakPrice`, `peakHistogram`.** These were declared on the V2Trade type and set on entry, but missing from the v2_trades schema. So every loop after entry, the trade was loaded with these as `undefined`. Knock-on effects (verified):
+   - **TREND quick-kill stop tightening NEVER fired.** Condition `trade.atrPercent != null` was false on every loaded trade. Verified: 0/94 closed TREND trades had a stop tightened below entry. Recent QUICK_KILL_AFTER_MS tuning (8h → 4h) was doing nothing.
+   - **TREND ATR-aware trailing-giveback NEVER applied.** Just constant 0.25 giveback regardless of vol.
+   - **MOMENTUM histogram-decay exit could never trigger** (peakHist always = currentHist). Dormant — MOMENTUM disabled.
+   - **BREAKOUT chandelier and MR peak-trailing similarly broken.** Both dormant.
+   - Fix: idempotent ALTER TABLE adds 3 columns, insertTrade/rowToTrade updated, new `updateTradePeakPrice` / `updateTradePeakHistogram` helpers wired into the 3 exit managers that mutate peaks. Old rows (NULL columns) handled by existing `?? entry`/`!= null` fallbacks.
+
+2. **`fa3e878` — Exit fee accounting + ML gatekeeper logging.**
+   - **Exit fee:** was computing maker fee for take_profit/trailing exits, but actual exit path always uses `placeMarketSell` (taker). Recorded P&L over-stated by ~0.10% per planned exit. Now: always use FEE_TAKER_PERCENT to match reality.
+   - **ML gatekeeper:** changed `} catch { /* swallow */ }` to log a warning (capped at 1/30 loops). The existing catch hid both "ML not configured" *and* real evaluation bugs.
+
+**What to monitor / watch for:**
+- **Quick-kill should now actually fire.** Look for trades with `current_stop > initial_stop AND current_stop < entry_price` after 4+ hours of no profit. Query: `SELECT id, ticker, ROUND(current_stop,4), ROUND(initial_stop,4), ROUND(entry_price,4) FROM v2_trades WHERE status='closed' AND current_stop > initial_stop AND current_stop < entry_price AND entry_time > 1777485600000;` — should produce non-zero count over coming days.
+- **Schema migration:** boot logs should show no errors. Verify columns exist via `PRAGMA table_info(v2_trades)` — should include atr_percent, peak_price, peak_histogram REAL.
+- **New entries should populate the new columns.** Query `SELECT atr_percent, peak_price FROM v2_trades WHERE entry_time > <baseline>` — should see non-null values for trades after this deploy.
+- **ML bypass warnings** in logs would indicate gatekeeper failure — investigate if observed.
+- **Old trades** keep NULL for new columns; that's expected and safe.
+
+---
+
 ## 2026-04-29 19:00 UTC — Round-2 bug sweep: 3 more fixes (incl. MOMENTUM regression) — local-claude
 
 **Commits:** `30762ff`, `09746f4`, `6c9127e`
