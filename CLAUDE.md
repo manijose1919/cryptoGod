@@ -121,6 +121,18 @@ Then notify all reporters (VPS Claude, future Claude sessions): primary stats us
 - For material trading changes, prefer **one logical change per commit** so individual rollbacks via `git revert <SHA>` are clean.
 - Even experimental changes get committed (and reverted in a later commit if they don't pan out) — git log is the audit trail of what was tried and learned.
 
+### Bidirectional Changelog (STANDING RULE)
+
+`CHANGELOG.md` (in repo root) is the shared source of truth between local Claude and VPS Claude. Both agents must use it.
+
+**When you ship a material change:** add a top-of-file entry to `CHANGELOG.md` using the template at the top of that file. Include commits, files, why, and what to monitor. Commit the changelog update with the change.
+
+**When you (Claude, any instance) access the VPS for any reason:** read the latest `CHANGELOG.md` entries (at minimum entries since your previous interaction in this session) **before** acting. Don't assume your local view of the code matches what's running on the VPS — check the changelog so you're current on what changed and why.
+
+**Material changes that require an entry:** anything that affects trading behavior, monitoring criteria, deployment config, file structure, or rules. Commit-only edits (typo fixes, comment cleanup) don't need a changelog entry but the commit itself is still required.
+
+**Why this exists:** the 3-day V2 engine crash (commit `2a96f56` brace bug) happened in part because changes shipped from one agent weren't visible to the other in a structured way. The changelog is a compounding investment — every entry makes the next handoff faster.
+
 ## Common Issues
 1. **Blank window / app won't load**: Backend crash. Check `node server.js` output for missing module errors
 2. **Port conflicts**: Kill node processes before restart (`taskkill /F /IM node.exe` on Windows)

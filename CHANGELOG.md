@@ -1,0 +1,142 @@
+# Changelog
+
+Bidirectional change log between local Claude (developer machine) and VPS Claude (live trading host). Both agents must add an entry to this file for every material change they ship, and read this file before making changes when accessing the repo on the VPS.
+
+**Why this file exists:** Both agents work on the same code from different machines, with different views of the live trading state. Without a shared change log, drift accumulates: code changes happen in one place that the other doesn't see, monitoring criteria get out of sync, and miscommunications cause regressions (e.g., the 3-day V2 engine crash from commit `2a96f56` that local Claude initially flagged as "non-blocking").
+
+**Format:** Newest entries at top. Group changes shipped together as one entry. Each entry includes everything the *other* agent needs to act on the change correctly.
+
+## How to use this file
+
+**When you ship a change:** add an entry at the top with the template below. Push with the commit. The other agent's session will see the update on its next git pull / fetch.
+
+**When you access the VPS for any reason:** read the latest entries (at minimum entries since your previous interaction) so you're current on what changed, why, and what's being monitored. Don't assume your local view of the code matches what's running.
+
+**When you make a material trading-config change:** also follow the standing rule in CLAUDE.md ("Stats Baseline Resets") — note the new baseline timestamp in your changelog entry.
+
+## Entry template
+
+```
+## YYYY-MM-DD HH:MM UTC — <short title> — <agent: local-claude | vps-claude | user>
+
+**Commits:** <SHA short-list>
+**Files changed:** <brief list>
+**Stats baseline reset:** yes / no — if yes, new baseline = <epoch ms>
+
+**What changed:**
+<one or two short paragraphs>
+
+**Why:**
+<motivation, data references, hypothesis being tested>
+
+**What to monitor / watch for:**
+- <specific metric, query, or behavior>
+- <expected outcome and threshold for "this isn't working">
+- <how to roll back if needed>
+```
+
+---
+
+## 2026-04-29 18:30 UTC — Bug-fix sweep (5 issues) + bidirectional changelog system — local-claude
+
+**Commits:** `8259538`, `0e30f19`, `6cd1e24`, plus this changelog + CLAUDE.md handoff rule
+**Files changed:** `v2/pipeline/exitManager.ts`, `v2/pipeline/riskGate.ts`, `v2/engine/positionManager.ts`, `v2/engine/tradeEngine.ts`, `CHANGELOG.md` (new), `CLAUDE.md`
+**Stats baseline reset:** no (per CLAUDE.md — bug fixes restoring intended behavior keep continuous stats)
+
+**What changed:**
+1. **`8259538` — Exit reason classification:** when `currentPrice <= currentStop` AND the stop has been raised (`trailingActivated` OR `currentStop > initialStop`), label exit as `trailing` instead of `stop_loss`. Also: BE stop in `exitManager.ts:118` no longer has an upper bound on its trigger range (was `< TRAILING_ACTIVATE_PERCENT`, which silently squeezed to a 0.2% window when trailing activation tightened from 0.015 to 0.01). Now BE always tries to set stop floor at entry+0.1%; trailing tightens further if applicable.
+2. **`0e30f19` — riskGate defensive guards:** added `isFinite` checks on `positionSizeUsd` (NaN-comparisons-are-false bug), `lastPrice`, and `atrValue` to prevent silent NaN-priced trades from entering the system.
+3. **`6cd1e24` — Per-strategy circuit breaker:** `getCircuitBreakerState()` now accepts a `strategy` parameter and filters `getClosedTradesByStrategy()` accordingly. Previously a loss in any strategy would trigger TREND's cooldown.
+
+**Why:**
+Routine bug-check sweep (user-requested) found 5 issues in V2 logic. None were causing P&L damage but the misclassified exit reasons were obscuring our analytics — every BE/trailing save was logged as "stop_loss with positive PnL". Fix #2 restores the intended behavior of the BE stop after VPS Claude's earlier `c277bb4` config tweak inadvertently squeezed it. Fixes #3-#5 are defensive hardening (no current instances in DB).
+
+**What to monitor / watch for:**
+- **Exit reason distribution should change visibly.** Before: lots of `stop_loss` exits with positive PnL. After: those should now appear as `trailing`. Query: `SELECT exit_reason, COUNT(*), SUM(CASE WHEN pnl_net > 0 THEN 1 ELSE 0 END) wins FROM v2_trades WHERE exit_time > 1777485000000 GROUP BY exit_reason;`
+- **BE stop should fire more often** in trades that reach +0.8% but don't get to +1.0% trailing activation. Watch for trades exiting near entry+0.1% via `trailing` reason (those are BE saves under the new label).
+- **Per-strategy circuit breaker:** currently masked because only TREND is enabled. If MOMENTUM or MEAN_REVERSION are re-enabled, verify their lossy trades don't pause TREND.
+- **Rollback any single fix** with `git revert <SHA>` (8259538, 0e30f19, or 6cd1e24).
+
+---
+
+## 2026-04-29 17:39 UTC — Loss mitigation package (3 commits) + stats baseline reset — local-claude
+
+**Commits:** `5827dd5`, `254dce6`, `79656ff`, plus design doc `39d0e71`
+**Files changed:** `v2/engine/config.ts`, `docs/plans/2026-04-29-loss-mitigation-package-design.md`
+**Stats baseline reset:** **YES, new baseline = 1777484345000** (2026-04-29 17:39:05 UTC)
+
+**What changed:**
+1. **`5827dd5` — Ticker swap:** removed BTCUSD (0/3 = 0% WR live), added DOTUSD (75% WR) and ADAUSD (60% WR). New scan list: ETH, XRP, DOGE, DOT, ADA.
+2. **`254dce6` — Re-allowed STRONG_UP regime:** `ALLOWED_REGIMES: ['UP'] → ['STRONG_UP', 'UP']`. Previous block was based on R:R 0.8 era data; at R:R 1.4 STRONG_UP showed 60% WR break-even.
+3. **`79656ff` — Widened TP from 1.4:1 to 1.6:1 R:R:** `TAKE_PROFIT_ATR_MULT: 3.5 → 4.0`. Experimental — historical R:R 1.6 cohorts underperformed but those were before BE/trailing fixes were in place.
+
+**Why:**
+Per analysis in `docs/plans/2026-04-29-loss-mitigation-package-design.md`. R:R 1.4 cohort (54 closed trades) was -$7.38 net with avg_win < avg_loss. Per-ticker analysis showed losses heavily concentrated in BTCUSD, while removed-tickers DOT/ADA were actually winners in live data. STRONG_UP block was based on stale config-era data.
+
+**What to monitor / watch for:**
+- **Post-baseline cohort:** primary stats use `WHERE entry_time >= 1777484345000`. Legacy trades reported separately.
+- **R:R should be 1.6 on new TREND entries** (was 1.4). Any 0.8 entries are regressions from `79656ff`; revert that commit.
+- **Per-ticker WR:** DOT and ADA should deliver on their 60-75% historical WR. BTCUSD entries should not appear (would be regression from `5827dd5`).
+- **STRONG_UP entries should perform comparably to UP.** If significantly worse (per-trade), revert `254dce6`.
+- **TP widening test:** wide-TP avg_win should rise meaningfully from R:R 1.4 baseline of $0.97. If WR drops or avg_win doesn't improve after 10+ post-baseline closes, revert `79656ff` (the experimental commit).
+- Each commit independently revertable.
+
+---
+
+## 2026-04-29 13:42 UTC — Tune exit params + disable MR engine + remove SOLUSD — vps-claude
+
+**Commits:** `c277bb4` (relayed to origin via patch as `c277bb4`)
+**Files changed:** `v2/engine/config.ts`, `monitor.sh`
+**Stats baseline reset:** no (predates the standing rule)
+
+**What changed:**
+- TRAILING_ACTIVATE_PERCENT: 0.015 → 0.01
+- TRAILING_GIVEBACK_PERCENT: 0.30 → 0.25
+- TIME_KILL_MS: 16h → 12h
+- QUICK_KILL_AFTER_MS: 8h → 4h
+- SOLUSD removed from SCAN_TICKERS
+- TP=5.0 ATR experiment then reverted to 3.5
+- MR_CONFIG.ENABLED: true → false (0/4 WR live, -$2.80)
+
+**Why:** Per VPS Claude's analysis of live trade outcomes during the 3-day window after the brace-bug fix.
+
+**Note:** The TRAILING_ACTIVATE_PERCENT change inadvertently squeezed the BE stop window — fixed in subsequent `8259538` commit.
+
+---
+
+## 2026-04-25 23:31 UTC — Fix broken brace structure that crashed V2 engine for 3 days — vps-claude
+
+**Commits:** `5561e1e` (on VPS bare repo, not on origin)
+**Files changed:** `v2/index.ts`
+**Stats baseline reset:** n/a
+
+**What happened:** The MOM disable edit (`2a96f56`) left a stray `try {` block that broke the module parse. Node's TS stripper rejected the file with `ERR_INVALID_TYPESCRIPT_SYNTAX`. PM2 showed "online" but the V2 engine loop never started — 4 positions left unmanaged for 3 days with no exit checks.
+
+**Lesson:** Startup-time parse errors are NEVER non-blocking when they occur before the work loop initializes. Local Claude misclassified this as "non-blocking" in an earlier progress report.
+
+---
+
+## 2026-04-22 13:31 UTC — Disable MOMENTUM engine — vps-claude
+
+**Commits:** `2a96f56`
+**Files changed:** `v2/index.ts`
+**Stats baseline reset:** n/a
+
+**What:** Disabled MOMENTUM engine (7 trades, 0 wins, -$9.78 net). MACD histogram spikes on 1h candles catch end-of-move exhaustion, not initiation.
+
+---
+
+## 2026-04-21 15:39 UTC — Initial fix package: R:R restoration, BE stop revival, STRONG_UP block — local-claude
+
+**Commits:** `6868c42`, `83cf3b1`, `6166dae`
+**Files changed:** `v2/engine/config.ts`
+**Stats baseline reset:** n/a (predates the standing rule)
+
+**What:**
+- `6868c42` — TRAILING_ACTIVATE_PERCENT: 0.008 → 0.015 (revives the dead BE stop code path)
+- `83cf3b1` — TAKE_PROFIT_ATR_MULT: 2.0 → 3.5 (restores 1.4:1 R:R from inverted 0.8:1)
+- `6166dae` — ALLOWED_REGIMES: ['STRONG_UP', 'UP'] → ['UP'] (blocked STRONG_UP — 36% WR / -$38 in R:R 0.8 era)
+
+**Why:** First systematic V2 fix package. Identified that R:R was inverted (every trade structurally negative) and BE stop had a `>= 0.008 AND < 0.008` impossible condition.
+
+**Note:** The STRONG_UP block was later re-evaluated and reversed in `254dce6` after analysis showed the original block was based on stale R:R 0.8 era data.
