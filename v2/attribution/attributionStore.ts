@@ -69,6 +69,25 @@ export function initV2Tables(): void {
   try {
     db.exec(`ALTER TABLE v2_trades ADD COLUMN strategy TEXT NOT NULL DEFAULT 'TREND'`);
   } catch { /* column already exists */ }
+
+  // Migration (2026-04-29): persist atrPercent, peakPrice, peakHistogram
+  // These were in-memory-only on the V2Trade type but referenced by exit managers.
+  // Without persistence, every loop loaded them as undefined, silently breaking:
+  //   - quick-kill stop tightening (TREND exitManager) — verified 0/94 firings
+  //   - ATR-aware trailing giveback widening/tightening (TREND)
+  //   - histogram-decay exit (MOMENTUM)
+  //   - chandelier stop (BREAKOUT)
+  //   - peak-anchored trailing (MEAN_REVERSION)
+  // Old rows have NULL — code falls back to safe defaults via `?? entry`/`!= null` checks.
+  try {
+    db.exec(`ALTER TABLE v2_trades ADD COLUMN atr_percent REAL`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE v2_trades ADD COLUMN peak_price REAL`);
+  } catch { /* column already exists */ }
+  try {
+    db.exec(`ALTER TABLE v2_trades ADD COLUMN peak_histogram REAL`);
+  } catch { /* column already exists */ }
 }
 
 // --- Prepared Statements (lazily initialized) ---
@@ -92,13 +111,15 @@ function getInsertStmt() {
         quantity, position_size_usd, exit_price, exit_time, exit_reason,
         pnl_gross, pnl_net, fees_paid, hold_duration_ms,
         initial_stop, current_stop, take_profit_target, trailing_activated,
-        entry_signals, entry_regime, entry_confidence, decision_log, strategy, created_at
+        entry_signals, entry_regime, entry_confidence, decision_log, strategy,
+        atr_percent, peak_price, peak_histogram, created_at
       ) VALUES (
         @id, @ticker, @side, @status, @entryPrice, @entryTime, @entryOrderType,
         @quantity, @positionSizeUsd, @exitPrice, @exitTime, @exitReason,
         @pnlGross, @pnlNet, @feesPaid, @holdDurationMs,
         @initialStop, @currentStop, @takeProfitTarget, @trailingActivated,
-        @entrySignals, @entryRegime, @entryConfidence, @decisionLog, @strategy, @createdAt
+        @entrySignals, @entryRegime, @entryConfidence, @decisionLog, @strategy,
+        @atrPercent, @peakPrice, @peakHistogram, @createdAt
       )
     `);
   }
@@ -134,6 +155,9 @@ export function insertTrade(trade: V2Trade): void {
     entryConfidence: trade.entryConfidence,
     decisionLog: JSON.stringify(trade.decisionLog),
     strategy: trade.strategy ?? 'TREND',
+    atrPercent: trade.atrPercent ?? null,
+    peakPrice: trade.peakPrice ?? null,
+    peakHistogram: trade.peakHistogram ?? null,
     createdAt: trade.createdAt,
   });
 }
@@ -210,6 +234,40 @@ export function markTrailingActivated(tradeId: string): void {
     );
   }
   _trailingStmt.run({ tradeId });
+}
+
+let _updatePeakPriceStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
+let _updatePeakHistStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
+
+/**
+ * Update peak price for a trade — only if newPeak > stored peak (monotonic).
+ * Used by momentum/breakout/mr exit managers for chandelier and peak-anchored
+ * trailing logic. Without persistence, the peak resets to entryPrice each loop.
+ */
+export function updateTradePeakPrice(tradeId: string, newPeak: number): void {
+  if (!_updatePeakPriceStmt) {
+    _updatePeakPriceStmt = getDb().prepare(
+      `UPDATE v2_trades SET peak_price = @newPeak
+       WHERE id = @tradeId AND (peak_price IS NULL OR peak_price < @newPeak)`
+    );
+  }
+  _updatePeakPriceStmt.run({ tradeId, newPeak });
+}
+
+/**
+ * Update peak MACD histogram for a trade — only if newPeak > stored peak.
+ * Used by MOMENTUM histogram-decay exit. Without persistence the decay
+ * comparison `currentHist < peakHist * 0.5` is always false because
+ * peakHist defaults to currentHist each loop.
+ */
+export function updateTradePeakHistogram(tradeId: string, newPeak: number): void {
+  if (!_updatePeakHistStmt) {
+    _updatePeakHistStmt = getDb().prepare(
+      `UPDATE v2_trades SET peak_histogram = @newPeak
+       WHERE id = @tradeId AND (peak_histogram IS NULL OR peak_histogram < @newPeak)`
+    );
+  }
+  _updatePeakHistStmt.run({ tradeId, newPeak });
 }
 
 // --- Queries ---
@@ -346,6 +404,9 @@ function rowToTrade(row: Record<string, unknown>): V2Trade {
     entryConfidence: row.entry_confidence as number,
     decisionLog,
     strategy: (row.strategy as string) ?? 'TREND',
+    atrPercent: (row.atr_percent as number) ?? undefined,
+    peakPrice: (row.peak_price as number) ?? undefined,
+    peakHistogram: (row.peak_histogram as number) ?? undefined,
     createdAt: row.created_at as number,
   };
 }

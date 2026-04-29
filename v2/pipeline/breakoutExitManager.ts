@@ -1,7 +1,7 @@
 import type { V2Trade, DecisionRecord } from './types.ts';
 import { EXIT_REASON, PIPELINE_STAGE, DECISION } from './types.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
-import { updateTradeStop } from '../attribution/attributionStore.ts';
+import { updateTradeStop, updateTradePeakPrice } from '../attribution/attributionStore.ts';
 import type { ExitResult } from './exitManager.ts';
 
 const BO_EXIT = {
@@ -24,7 +24,10 @@ export async function checkBreakoutExits(
 
   for (const trade of openTrades) {
     const currentPrice = await exchange.getLatestPrice(trade.ticker);
-    if (currentPrice > (trade.peakPrice ?? trade.entryPrice)) trade.peakPrice = currentPrice;
+    if (currentPrice > (trade.peakPrice ?? trade.entryPrice)) {
+      trade.peakPrice = currentPrice;
+      updateTradePeakPrice(trade.id, currentPrice);
+    }
     const pnlPercent = (currentPrice - trade.entryPrice) / trade.entryPrice;
     const holdMs = Date.now() - trade.entryTime;
     const holdBars = Math.floor(holdMs / BAR_MS);
