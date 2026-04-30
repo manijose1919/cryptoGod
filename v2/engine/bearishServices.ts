@@ -400,13 +400,22 @@ function startStaking(): void {
 
     import('../../services/exchangeAdapters/cryptocomAdapter.js').then(async (mod) => {
       if (mod.cryptoComAdapter) {
-        // Validate credentials actually work before registering (avoid hourly auth error spam)
+        // Skip Crypto.com staking entirely if credentials aren't configured.
+        // Checking env upfront avoids the otherwise-unavoidable [Crypto.com]
+        // "Authentication not configured" warning emitted by the adapter when
+        // getBalance() runs without keys (logged once per process via
+        // _noCredsWarn / _authWarn, but PM2 restarts repeatedly reset that).
+        if (!process.env.SESSION_API_KEY || !process.env.SESSION_SECRET_KEY) {
+          console.log('[Bearish] Crypto.com staking skipped — no SESSION_API_KEY/SESSION_SECRET_KEY in env');
+          return;
+        }
+        // Credentials present — validate they work before registering
         try {
           await mod.cryptoComAdapter.getBalance();
           stakingEngine.registerAdapter('crypto.com', mod.cryptoComAdapter);
           console.log('[Bearish] Registered Crypto.com adapter with staking engine');
         } catch {
-          console.log('[Bearish] Skipping Crypto.com staking (auth failed — credentials missing or expired)');
+          console.log('[Bearish] Skipping Crypto.com staking (auth failed — credentials present but invalid)');
         }
       }
     }).catch(() => {});

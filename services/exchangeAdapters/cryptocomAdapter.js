@@ -102,11 +102,13 @@ export async function makeSignedRequest(method, params = {}, sessionId = null) {
     const data = await response.json();
 
     if (data.code != 0) {
-        // Suppress recurring auth failures (no API keys configured)
+        // Suppress recurring auth failures — log only once per process lifetime.
+        // The message distinguishes "creds invalid/expired" (40101 with our keys present)
+        // from "no creds configured" (which is caught earlier at line 83-89).
         if (data.code === 40101) {
             if (!makeSignedRequest._authWarn) {
                 makeSignedRequest._authWarn = true;
-                console.warn(`[Crypto.com] Authentication not configured — private API calls disabled`);
+                console.warn(`[Crypto.com] Auth code 40101 — API credentials invalid or expired. Private API calls disabled. Update keys to re-enable.`);
             }
         } else {
             console.error(`[Crypto.com] ${method} failed:`, JSON.stringify(data));
