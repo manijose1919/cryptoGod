@@ -5,15 +5,8 @@ import { updateTradeStop, updateTradePeakPrice, updateTradePeakHistogram } from 
 import type { ExitResult } from './exitManager.ts';
 import { computeSignals } from '../indicators/indicators.ts';
 import type { Candle } from './types.ts';
+import { MOM_EXIT_CONFIG as MOM_EXIT } from '../engine/config.ts';
 
-const MOM_EXIT = {
-  SL_ATR_MULT: 2.0,
-  HISTOGRAM_DECAY_THRESHOLD: 0.50,
-  BREAKEVEN_TRIGGER: 0.01,
-  BREAKEVEN_OFFSET: 0.001,
-  TIME_KILL_BARS: 6,
-  TIME_KILL_MIN_MOVE: 0.005,
-};
 const BAR_MS = 60 * 60 * 1000; // 1h bars
 
 function makeDecision(tradeId: string, decision: string, reason: string, signals: Record<string, number>): DecisionRecord {
@@ -38,9 +31,15 @@ export async function checkMomentumExits(
     const holdBars = Math.floor(holdMs / BAR_MS);
     let newStop = trade.currentStop;
 
-    // --- 1. Stop Loss ---
+    // --- 1. Stop Loss / Trailing Exit ---
+    // Mirrors the classification fix from main exitManager (commit 8259538):
+    // when stop has been raised above initial (BE-stop fired), label as
+    // `trailing` so analytics reflect that capital protection worked.
     if (currentPrice <= trade.currentStop) {
-      results.push({ trade, shouldExit: true, exitReason: EXIT_REASON.stop_loss, exitPrice: currentPrice, newStop, trailingJustActivated: false, decision: makeDecision(trade.id, 'execute', `MOM stop: ${currentPrice.toFixed(2)} <= ${newStop.toFixed(2)}`, { currentPrice, pnlPercent }) });
+      const stopWasRaised = trade.trailingActivated || trade.currentStop > trade.initialStop;
+      const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
+      const reasonLabel = stopWasRaised ? 'MOM BE/trail stop hit' : 'MOM stop loss';
+      results.push({ trade, shouldExit: true, exitReason, exitPrice: currentPrice, newStop, trailingJustActivated: false, decision: makeDecision(trade.id, 'execute', `${reasonLabel}: ${currentPrice.toFixed(2)} <= ${trade.currentStop.toFixed(2)}`, { currentPrice, currentStop: trade.currentStop, initialStop: trade.initialStop, pnlPercent }) });
       continue;
     }
 
@@ -74,9 +73,11 @@ export async function checkMomentumExits(
       }
     }
 
-    // --- 4. Check tightened stop ---
+    // --- 4. Check tightened stop (BE just raised newStop above initial) ---
+    // Always label `trailing` here — newStop > currentStop means BE just
+    // activated this loop, so the exit is BE-protected, not a real loss.
     if (currentPrice <= newStop && newStop > trade.currentStop) {
-      results.push({ trade, shouldExit: true, exitReason: EXIT_REASON.stop_loss, exitPrice: currentPrice, newStop, trailingJustActivated: false, decision: makeDecision(trade.id, 'execute', `MOM tightened stop: ${currentPrice.toFixed(2)} <= ${newStop.toFixed(2)}`, { currentPrice, pnlPercent }) });
+      results.push({ trade, shouldExit: true, exitReason: EXIT_REASON.trailing, exitPrice: currentPrice, newStop, trailingJustActivated: false, decision: makeDecision(trade.id, 'execute', `MOM BE stop hit: ${currentPrice.toFixed(2)} <= ${newStop.toFixed(2)}`, { currentPrice, pnlPercent }) });
       continue;
     }
 
