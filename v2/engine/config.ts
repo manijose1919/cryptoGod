@@ -97,6 +97,22 @@ export const V2_CONFIG = {
 } as const;
 
 // ============================================
+// MOMENTUM Exit Config (used by momentumExitManager)
+// Centralized so tuning doesn't require code edits.
+// MOMENTUM strategy currently DISABLED (see v2/index.ts) — these values are
+// preserved for when the strategy is reworked with a redesigned signal.
+// ============================================
+
+export const MOM_EXIT_CONFIG = {
+  SL_ATR_MULT: 2.0,
+  HISTOGRAM_DECAY_THRESHOLD: 0.50,   // exit when current MACD hist < 50% of peak
+  BREAKEVEN_TRIGGER: 0.01,           // raise SL to entry+offset at +1.0% PnL
+  BREAKEVEN_OFFSET: 0.001,           // BE stop sits at entry × 1.001
+  TIME_KILL_BARS: 6,                  // 6 × 1h = 6 hours
+  TIME_KILL_MIN_MOVE: 0.005,
+} as const;
+
+// ============================================
 // MEAN_REVERSION Strategy Config
 // Profitable on 15m with maker fees: +$6.33, 52% WR, PF 1.73
 // ============================================
