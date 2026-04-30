@@ -982,11 +982,17 @@ async function trainOnWorker(features2D, labels, config, labeledSamples) {
             }
             lastTrainTime = Date.now();
             samplesSinceLastTrain = 0;
-            // Save to DB
+            // Save to DB. msg.modelData is already a JSON string from
+            // engine.serialize() — passing it directly. Previously this was
+            // wrapped in JSON.stringify(...) which double-encoded the value,
+            // causing deserialize() to parse a string instead of an object
+            // and warn "Saved model has no scaler data". Verified in DB:
+            // models 380+ (saved via this worker path) had double-quoted
+            // model_data; model 4 (older path) was correctly single-encoded.
             if (db?.insertMLModel) {
               db.insertMLModel({
                 modelType: 'ensemble',
-                modelData: JSON.stringify(msg.modelData),
+                modelData: msg.modelData,
                 accuracy: msg.metrics?.accuracy,
                 precisionScore: msg.metrics?.precision,
                 recall: msg.metrics?.recall,
@@ -1365,13 +1371,15 @@ export async function trainModel() {
       console.warn('[ML Prediction] Calibration error:', calErr.message);
     }
 
-    // Save model to database
+    // Save model to database. mlEngine.serialize() already returns a JSON
+    // string; passing it directly. Wrapping in JSON.stringify(...) was the
+    // double-encoding bug that broke scaler restoration on model load.
     try {
       if (db.insertMLModel) {
         const modelData = mlEngine.serialize();
         db.insertMLModel({
           modelType: 'ensemble',
-          modelData: JSON.stringify(modelData),
+          modelData,
           accuracy: metrics.accuracy,
           precisionScore: metrics.precision,
           recall: metrics.recall,
