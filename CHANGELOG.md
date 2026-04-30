@@ -37,6 +37,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-04-30 16:00 UTC — Cleanup sweep: 4 deferred bugs fixed (incl. real ML save bug) — local-claude
+
+**Commits:** `1232a8d`, `a3ccb15`, `ee1b5bd`, `7e80042`
+**Files changed:** `v2/engine/bearishServices.ts`, `services/exchangeAdapters/cryptocomAdapter.js`, `v2/pipeline/momentumExitManager.ts`, `v2/engine/config.ts`, `services/mlPredictionService.js`
+**Stats baseline reset:** no (per CLAUDE.md — bug fixes / refactors / log cleanups keep continuous stats)
+
+**What changed:**
+1. **`1232a8d` — Crypto.com auth log noise (#31).** Two changes: bearishServices checks `SESSION_API_KEY/SECRET_KEY` env upfront and skips silently if missing (avoids triggering the adapter's auth-error chain). cryptocomAdapter's 40101 warning rewritten to "credentials invalid or expired" — was misleadingly saying "not configured" when keys were present but rejected. Both warnings remain once-per-process via existing guards.
+2. **`a3ccb15` — MOMENTUM exit reclassification (#28).** Mirror of `8259538`'s fix to momentumExitManager — when stop has been raised above initial, label as `trailing` instead of `stop_loss`. Currently dormant (MOMENTUM disabled) but ready for when strategy is reworked.
+3. **`ee1b5bd` — Centralize MOM_EXIT_CONFIG (#29).** Hardcoded config object moved from momentumExitManager.ts into v2/engine/config.ts as `MOM_EXIT_CONFIG`. No behavior change. Tuning consistency with TREND/MR.
+4. **`7e80042` — REAL bug found while investigating #32.** mlPredictionService was wrapping `engine.serialize()` (already a JSON string) in `JSON.stringify(...)`, producing double-encoded JSON in the DB. Caused `deserialize()` to parse a string and emit "Saved model has no scaler data" on every restart. Verified in DB: model id=4 (older path) was correctly single-encoded with scaler.means.length=103; models id=380+ (recent worker path) started with `"{\"version\"...` instead of `{"version":...`. Two save sites fixed, both at the worker callback and the inline training path.
+
+**Why:**
+User-requested cleanup of all deferred items from bug inventory. Items #28 (MOMENTUM exit) and #29 (MOMENTUM config) were known dormant issues. #31 (Crypto.com noise) was a clarity fix. #32 looked like a minor "scaler not persisted" issue — turned out to be a substantive double-encoding bug that broke model restoration entirely.
+
+**What to monitor / watch for:**
+- **No more "Saved model has no scaler data" warnings on restart** — should appear once for the next restart (still loading id=385 which is double-encoded), then disappear after the next training cycle saves a correctly-encoded model. Verify by querying: `SELECT id, substr(model_data, 1, 5) FROM ml_models ORDER BY id DESC LIMIT 5;` — new entries should start with `{"ver` (single-encoded), not `"{\\"`.
+- **Crypto.com auth warning wording is now more accurate** — should say "credentials invalid or expired" instead of "not configured" when keys are present but rejected.
+- **MOMENTUM engine should remain disabled** — boot logs show `[V2] Momentum engine disabled` and no MOM trades open.
+- **#30 (MOMENTUM signal redesign) deferred** — discussed with user; this is a strategy rebuild not a bug fix. Will revisit if/when MOMENTUM is to be re-enabled with a new approach (e.g., 15m timeframe with histogram acceleration).
+
+---
+
 ## 2026-04-29 19:30 UTC — Round-3 bug sweep: schema migration + 2 more fixes — local-claude
 
 **Commits:** `1705b17`, `fa3e878`
