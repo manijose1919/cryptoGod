@@ -47,14 +47,21 @@ export async function checkMeanReversionExits(
 
     let newStop = trade.currentStop;
 
-    // --- 1. Stop Loss ---
+    // --- 1. Stop Loss / Trailing Exit ---
+    // Mirrors the classification fix from main exitManager (commit 8259538) +
+    // momentumExitManager (a3ccb15): when stop has been raised above initial
+    // (BE/quick-kill fired), label as `trailing` instead of `stop_loss` so
+    // analytics reflect that capital protection worked. (H17)
     if (currentPrice <= trade.currentStop) {
+      const stopWasRaised = trade.currentStop > trade.initialStop;
+      const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
+      const reasonLabel = stopWasRaised ? 'MR trail/quick-kill stop hit' : 'MR stop loss';
       results.push({
-        trade, shouldExit: true, exitReason: EXIT_REASON.stop_loss,
+        trade, shouldExit: true, exitReason,
         exitPrice: currentPrice, newStop, trailingJustActivated: false,
         decision: makeDecision(trade.id, 'execute',
-          `MR stop loss: ${currentPrice.toFixed(4)} <= ${trade.currentStop.toFixed(4)}`,
-          { currentPrice, currentStop: trade.currentStop, pnlPercent }),
+          `${reasonLabel}: ${currentPrice.toFixed(4)} <= ${trade.currentStop.toFixed(4)}`,
+          { currentPrice, currentStop: trade.currentStop, initialStop: trade.initialStop, pnlPercent }),
       });
       continue;
     }
@@ -98,13 +105,16 @@ export async function checkMeanReversionExits(
     }
 
     // --- 5. Check tightened stop ---
+    // Reaching this branch means the quick-kill block above raised the stop
+    // AND price already dropped below the new stop in the same loop iteration.
+    // By construction this is a trailing exit, not a fresh stop_loss. (H17)
     if (currentPrice <= newStop && newStop > trade.currentStop) {
       results.push({
-        trade, shouldExit: true, exitReason: EXIT_REASON.stop_loss,
+        trade, shouldExit: true, exitReason: EXIT_REASON.trailing,
         exitPrice: currentPrice, newStop, trailingJustActivated: false,
         decision: makeDecision(trade.id, 'execute',
-          `MR tightened stop hit: ${currentPrice.toFixed(4)} <= ${newStop.toFixed(4)}`,
-          { currentPrice, newStop, pnlPercent }),
+          `MR quick-kill stop hit: ${currentPrice.toFixed(4)} <= ${newStop.toFixed(4)}`,
+          { currentPrice, newStop, initialStop: trade.initialStop, pnlPercent }),
       });
       continue;
     }
