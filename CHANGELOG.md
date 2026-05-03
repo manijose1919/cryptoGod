@@ -37,9 +37,43 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-03 22:00 UTC — Wave-1 audit-driven sweep: 7 fixes (CRITICAL+HIGH) — local-claude
+
+**Commits:** `d661cb2`, `5714526`, `97b7d99`, `5ef0ff5`, `914f3fe`
+**Files changed:** `server.js`, `services/exchangeAdapters/krakenAdapter.js`, `services/syntheticLabeler.js`, `v2/pipeline/meanReversionExitManager.ts`, `routes/tradingview.js`
+**Stats baseline reset:** no (per CLAUDE.md — bug fixes restoring intended behavior keep continuous stats so the impact is measurable)
+
+**What changed:**
+First wave of fixes from a 6-fork audit covering V2 pipeline, core/, ML, exchange adapters, database, server.js+routes. Audit reports identified ~100 issues; this wave is the small unambiguous CRITICAL/HIGH items that didn't need design decisions. Five logical commits:
+
+1. **`d661cb2` — `uncaughtException` flush + dead listener.** Crash handler now calls `dbBatcher.shutdown()` before `process.exit(1)` (SIGTERM/SIGINT already did via gracefulShutdown). Also removed a `tradingBus.on('engine:tick')` listener that received a payload missing the `priceMap` it tried to read — guarded so it didn't crash, but was dead code.
+2. **`5714526` — Kraken adapter: BTC pair corruption + monotonic nonce.** `fromKrakenPair('XXBTZUSD')` was producing `BTUSD` (the `XBT->BTC` step never fired because greedy `/^X{1,2}/` ate both X's first). Same bug class in `getBalance` asset normalize. Both now do `XBT->BTC` first then strip prefixes with lookahead so single-X assets like XRP aren't mangled. Separately, `krakenPrivateRequest` now uses a process-lifetime monotonic counter for nonces instead of `Date.now()*1000+attempt` — the old form produced identical nonces under sub-millisecond concurrent calls (multi-strategy V2 issuing concurrent private API calls per tick).
+3. **`97b7d99` — syntheticLabeler fail-loud.** Default `FEATURE_COUNT` was 103 fallback; real value is 109. If the dynamic import of `featureEngineering.js` ever failed, every newly built vector (length 109) was silently rejected by the `!== FEATURE_COUNT` check. Default is now `null` so `generateSamples()` short-circuits with a clear error instead of dropping every sample silently.
+4. **`5ef0ff5` — MR exit manager trailing reclassification.** Mirror of `8259538`/`a3ccb15` — when the MR stop has been raised above initial (BE/quick-kill fired), label exits as `trailing` instead of `stop_loss`. Two sites in MR; both fixed. Currently dormant (MR disabled) but ready when re-enabled.
+5. **`914f3fe` — TradingView webhook default-deny.** When `TRADINGVIEW_WEBHOOK_SECRET` env was unset, the secret check was skipped silently — anyone could inject signals into the 100-entry ring buffer. Now returns 503 when env is missing; opt-in by setting the env.
+
+**Why:**
+6-fork audit (yesterday + today) ran broad bug check across the codebase. CHANGELOG patterns from the 4 prior bug-fix rounds (`1705b17` schema drift, `7e80042` double-encode, `fa3e878` exit fee, `8259538` exit reason, `6c9127e` SL rollback) were used as templates to find similar issues elsewhere — and several were found. This wave clears the unambiguous ones; Waves 2-4 still pending (larger fixes that need user decisions on auth scheme, schema migrations, dual-engine design).
+
+**What to monitor / watch for:**
+- **BTC orders should now appear correctly in any UI/log that uses `fromKrakenPair`** — if `getOpenOrders` or balance breakdowns previously omitted BTC positions, they should now show. Verify after next BTC trade closes: `SELECT ticker FROM v2_trades WHERE ticker LIKE '%BTC%' ORDER BY entry_time DESC LIMIT 3`.
+- **Kraken "Invalid nonce" errors should drop to zero** under multi-strategy load. Search PM2 logs: `pm2 logs canuck-node --lines 200 --nostream | grep -i nonce`.
+- **No "Saved model has no scaler data" warnings combined with sample-rejection silence** in syntheticLabeler logs — if featureEngineering.js fails to load, you should now see `[SyntheticLabeler] CRITICAL: ...` instead of silent zero-sample runs.
+- **TradingView webhook**: if you previously called this without setting the env var, it now returns 503. Set `TRADINGVIEW_WEBHOOK_SECRET` to re-enable.
+- **MR exit reasons stay clean** — `EXIT_REASON.trailing` count for MR should be 0 today (engine disabled); when MR re-enables, the breakdown will be accurate from the start.
+
+**What's next (deferred to user):**
+- **Wave 2** (larger CRITICAL/HIGH, no input needed): C1 (cancelOrder signature double-fill on Crypto.com), C3 (Dead Man's Switch never wired), H4 (insertTrade rollback), H5 (per-trade try/catch in V2 exitManager), H6 (3 more fee-accounting sites), H7 (V2 fees always Kraken even when Crypto.com active), H13 (NaN/zero imputation), H14 (Crypto.com WS staleness).
+- **Wave 3** (BLOCKED on user decisions): C4 auth scheme (localhost-only vs API key vs gate-worst-only); C2 V2 native SL bookkeeping (needs schema migration); H1 ML feature count (88 vs 109); H2 ml_features.regime (is regime even used?); H3 dual-engine paper trades (fix vs document); H9 core/TradingEngine.ts (delete vs patch); H10 arbitrageEngine multiple.
+- **Wave 4**: 27 MEDIUM + LOW items — defer to a later sweep.
+
+**Note on coordination:** during this sweep, vps-claude pushed `79eed18` (MIN_CONFIDENCE enforcement) at ~18:00 UTC. Picked up via `git fetch origin`, integrated cleanly via rebase (only CHANGELOG conflict, which was the predictable interleave). The bidirectional CHANGELOG system worked as designed — VPS Claude's entry gave full context for the trading-config change without a sync call.
+
+---
+
 ## 2026-05-03 ~18:00 UTC — Enforce MIN_CONFIDENCE at signal gate (was dead code) — vps-claude
 
-**Commits:** (see below)
+**Commits:** `79eed18`
 **Files changed:** `v2/pipeline/signalGenerator.ts`
 **Stats baseline reset:** no (this is a filter tightening — want to see the contrast vs. prior trades in continuous stats)
 
@@ -54,6 +88,8 @@ Post-baseline data (9 trades) showed 6 of 9 entries had confidence 0.61–0.69, 
 - **Win rate and avg PnL should improve** — only higher-conviction setups get through.
 - **If trade frequency drops to near-zero** for >48h, the threshold may be too aggressive. Fallback: lower `MIN_CONFIDENCE` to 0.65 in config.ts.
 - Rollback: revert the single commit.
+
+---
 
 ## 2026-04-30 16:00 UTC — Cleanup sweep: 4 deferred bugs fixed (incl. real ML save bug) — local-claude
 
