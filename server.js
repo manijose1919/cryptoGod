@@ -7497,17 +7497,10 @@ const startServer = async () => {
     }
 
     // Wire EventBus to existing systems (bridge old → new architecture)
-    try {
-        // Forward trade exits to short selling engine for price tracking
-        tradingBus.on('engine:tick', (data) => {
-            if (data.priceMap) {
-                shortSellingEngine.checkExits(data.priceMap);
-            }
-        });
-        console.log('[Server] EventBus wired to core V2 modules');
-    } catch (e) {
-        console.warn('[Server] EventBus wiring failed:', e.message);
-    }
+    // Note: shortSellingEngine.checkExits is called from the main bot loop
+    // (server.js ~5384) with a real priceMap. The engine:tick payload does
+    // not include priceMap (it's {exchange, timestamp, activePositions}),
+    // so the listener that used to live here was dead code. (H11)
 
     // Start staking evaluation on interval (every hour)
     try {
@@ -8056,6 +8049,7 @@ process.on('uncaughtException', (error) => {
     console.error('[CRASH-GUARD] Uncaught exception:', error);
     try { addLog(`[CRASH-GUARD] Uncaught exception: ${error.message}`, 'ERROR'); } catch (e) {}
     try { saveSessionState(); } catch (e) {}
+    try { dbBatcher.shutdown(); } catch (e) {} // Flush buffered writes before exit (C5)
     process.exit(1); // Let PM2/systemd restart clean
 });
 
