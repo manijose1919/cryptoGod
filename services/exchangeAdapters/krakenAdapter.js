@@ -17,6 +17,16 @@ export function setKrakenSessionManager(sm) {
     _SessionManager = sm;
 }
 
+// Monotonic nonce counter — guarantees nonces are strictly increasing across
+// concurrent calls in the same millisecond. Persists for the lifetime of the
+// process. (H15: prevents "Invalid nonce" rejections under multi-strategy load.)
+let _lastKrakenNonce = 0;
+function nextKrakenNonce(attempt = 0) {
+    const candidate = Date.now() * 1000 + attempt;
+    _lastKrakenNonce = Math.max(_lastKrakenNonce + 1, candidate);
+    return _lastKrakenNonce;
+}
+
 // Timeframe mapping: internal → Kraken interval (minutes)
 const TIMEFRAME_MAP = {
     '1m': 1,
@@ -42,9 +52,14 @@ function toKrakenPair(ticker) {
 
 function fromKrakenPair(krakenPair) {
     let pair = krakenPair;
-    // Remove X prefix for crypto and Z prefix for fiat
-    pair = pair.replace(/^X{1,2}/, '').replace(/Z(?=USD|CAD|EUR|GBP)/, '');
-    pair = pair.replace('XBT', 'BTC');
+    // Normalize XBT/XXBT → BTC first so the prefix-strip doesn't mangle BTC pairs.
+    // Kraken returns BTC/USD as XXBTZUSD; greedy /^X{1,2}/ used to strip both X's
+    // (giving BTZUSD), Z(?=USD) then stripped Z (BTUSD), and XBT→BTC never fired.
+    pair = pair.replace(/X?XBT/g, 'BTC');
+    // Strip exactly ONE X prefix (Kraken uses XETH, XXRP, XLTC etc.) and ONE Z
+    // prefix on the quote (ZUSD, ZEUR, etc.). Lookahead ensures we only strip
+    // when there's a 3+ letter symbol following (so SOLUSD/ADAUSD are untouched).
+    pair = pair.replace(/^X(?=[A-Z]{3})/, '').replace(/Z(?=USD|CAD|EUR|GBP)/, '');
     return pair;
 }
 
@@ -121,8 +136,10 @@ async function krakenPrivateRequest(endpoint, params = {}, sessionId = null, max
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
             const path = `/0/private/${endpoint}`;
-            // Use unique nonce per attempt to avoid Kraken nonce-reuse rejection
-            const nonce = Date.now() * 1000 + attempt;
+            // Monotonic nonce: protects against two concurrent calls inside the
+            // same millisecond producing identical Date.now()*1000+0 nonces, which
+            // Kraken rejects as "Invalid nonce". (H15)
+            const nonce = nextKrakenNonce(attempt);
             const postParams = { ...params, nonce };
             const postData = new URLSearchParams(postParams).toString();
             const signature = createKrakenSignature(path, String(nonce), postData, secret);
@@ -273,9 +290,13 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             const qty = parseFloat(balance);
             if (qty <= 0) continue;
 
-            // Normalize: strip X prefix (crypto), Z prefix (fiat), XBT→BTC
-            // Also handle staked/flex suffixes: ETH2.S → ETH, CAD.F → CAD, DOT.S → DOT
-            let normalized = asset.replace(/^X/, '').replace(/^Z/, '').replace('XBT', 'BTC');
+            // Normalize: XBT→BTC first, then strip X/Z prefix (with lookahead so
+            // single-X assets like XRP aren't mangled). Also handle staked/flex
+            // suffixes: ETH2.S → ETH, CAD.F → CAD, DOT.S → DOT.
+            let normalized = asset
+                .replace(/X?XBT/g, 'BTC')
+                .replace(/^X(?=[A-Z]{3})/, '')
+                .replace(/^Z(?=USD|CAD|EUR|GBP)/, '');
             const baseAsset = normalized.replace(/[\d]*\.[A-Z]+$/, '');  // Strip any suffix like .S .F .M .HOLD
 
             console.log(`[Kraken] Asset: ${asset} → normalized: ${normalized}, base: ${baseAsset}, qty: ${qty}`);
