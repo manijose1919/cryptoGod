@@ -37,6 +37,24 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-03 ~18:00 UTC — Enforce MIN_CONFIDENCE at signal gate (was dead code) — vps-claude
+
+**Commits:** (see below)
+**Files changed:** `v2/pipeline/signalGenerator.ts`
+**Stats baseline reset:** no (this is a filter tightening — want to see the contrast vs. prior trades in continuous stats)
+
+**What changed:**
+`MIN_CONFIDENCE: 0.70` in config was never checked — the signal gate only checked `MIN_COMPOSITE_SCORE: 60`, allowing entries at confidence 0.60+. Added `&& confidence >= V2_CONFIG.MIN_CONFIDENCE` to the pass condition. Also added `confNote` to rejection log messages so filtered-out trades show the confidence shortfall.
+
+**Why:**
+Post-baseline data (9 trades) showed 6 of 9 entries had confidence 0.61–0.69, below the intended 0.70 threshold. These low-conviction entries accounted for most of the -$6.60 PnL drag (especially time_kill losses on stagnant positions). The 3 trades that would have passed the 0.70 gate included the two best wins.
+
+**What to monitor / watch for:**
+- **Trade frequency will drop** — most signals score 60–69 and will now be rejected. Watch for `[V2] REJECT` logs showing `conf=0.6x<0.7` to confirm the filter is working.
+- **Win rate and avg PnL should improve** — only higher-conviction setups get through.
+- **If trade frequency drops to near-zero** for >48h, the threshold may be too aggressive. Fallback: lower `MIN_CONFIDENCE` to 0.65 in config.ts.
+- Rollback: revert the single commit.
+
 ## 2026-04-30 16:00 UTC — Cleanup sweep: 4 deferred bugs fixed (incl. real ML save bug) — local-claude
 
 **Commits:** `1232a8d`, `a3ccb15`, `ee1b5bd`, `7e80042`
