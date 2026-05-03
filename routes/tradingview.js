@@ -25,13 +25,18 @@ export function injectSignal(signalObj) {
 // POST /api/tradingview/webhook - Receive TradingView alerts
 router.post('/webhook', (req, res) => {
     try {
-        // Webhook authentication: check header or body for secret
+        // Webhook authentication (H12): default-deny when secret env is unset.
+        // Previously the secret check was skipped when TRADINGVIEW_WEBHOOK_SECRET
+        // was missing, allowing anyone to inject signals (which then evict real
+        // signals from the 100-entry ring buffer). To use this endpoint set the
+        // env var; otherwise it stays disabled.
         const webhookSecret = process.env.TRADINGVIEW_WEBHOOK_SECRET;
-        if (webhookSecret) {
-            const providedSecret = req.headers['x-webhook-secret'] || (req.body && req.body.secret);
-            if (providedSecret !== webhookSecret) {
-                return res.status(401).json({ error: 'Unauthorized: invalid webhook secret' });
-            }
+        if (!webhookSecret) {
+            return res.status(503).json({ error: 'Webhook disabled: TRADINGVIEW_WEBHOOK_SECRET not configured' });
+        }
+        const providedSecret = req.headers['x-webhook-secret'] || (req.body && req.body.secret);
+        if (providedSecret !== webhookSecret) {
+            return res.status(401).json({ error: 'Unauthorized: invalid webhook secret' });
         }
 
         const alert = req.body;
