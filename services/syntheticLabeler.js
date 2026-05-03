@@ -7,7 +7,7 @@
 
 // Dynamic imports for resilience (pattern used throughout the codebase)
 let buildFeatureVector = null;
-let FEATURE_COUNT = 103;
+let FEATURE_COUNT = null; // null = uninitialized; set from featureEngineering.js
 let db = null;
 
 try {
@@ -15,7 +15,11 @@ try {
   buildFeatureVector = fe.buildFeatureVector;
   FEATURE_COUNT = fe.FEATURE_COUNT;
 } catch (err) {
-  console.warn('[SyntheticLabeler] featureEngineering.js not available:', err.message);
+  // H16: previously defaulted to 103, but real value is 109. If the import
+  // failed, every newly built vector (length 109) would be silently rejected
+  // by the !== FEATURE_COUNT check downstream. Leave FEATURE_COUNT as null
+  // so labelTicker() fails loudly instead of silently dropping every sample.
+  console.error('[SyntheticLabeler] CRITICAL: featureEngineering.js import failed; labeler disabled:', err.message);
 }
 
 try {
