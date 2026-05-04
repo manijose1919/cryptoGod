@@ -59,7 +59,10 @@ let running = false;
 let evalInProgress = false;
 
 // DCA tracking
+// M21: in-memory map; seeded from v2_dca_buys on first evaluateDCA call so
+// PM2 restarts don't allow back-to-back DCA buys on the same ticker.
 const dcaLastBuy: Map<string, number> = new Map();
+let dcaCooldownLoaded = false;
 let dcaBuysToday = 0;
 let dcaDayReset = 0;
 
@@ -143,11 +146,22 @@ function initShortTables(): void {
   }
 }
 
+// M22: rate-limited warn instead of silent swallow on persist failures.
+// Combined with M21, a DB outage during fear-DCA loses both the buy record
+// AND the cooldown state — silent failure here was the worst case.
+let _lastBearishPersistErrLog = 0;
+function _logPersistErr(label: string, err: unknown): void {
+  const now = Date.now();
+  if (now - _lastBearishPersistErrLog < 60_000) return;
+  _lastBearishPersistErrLog = now;
+  console.warn(`[BearishServices] ${label} persist failed: ${(err as Error).message}`);
+}
+
 function persistShortBalance(balance: number): void {
   try {
     const db = getDb();
     db.prepare('UPDATE v2_short_balance SET balance = ?, updated_at = ? WHERE id = 1').run(balance, Date.now());
-  } catch { /* fail silently */ }
+  } catch (err) { _logPersistErr('shortBalance', err); }
 }
 
 function loadShortBalance(): number {
@@ -162,7 +176,7 @@ function persistShortTrade(ticker: string, pnl: number): void {
   try {
     const db = getDb();
     db.prepare('INSERT INTO v2_short_history (ticker, pnl, closed_at) VALUES (?, ?, ?)').run(ticker, pnl, Date.now());
-  } catch { /* fail silently */ }
+  } catch (err) { _logPersistErr('shortTrade', err); }
 }
 
 function loadShortHistory(): { time: number; pnl: number; ticker: string }[] {
@@ -178,7 +192,7 @@ function persistDCABuy(ticker: string, price: number, amountUsd: number, quantit
     const db = getDb();
     db.prepare('INSERT INTO v2_dca_buys (ticker, price, amount_usd, quantity, fear_greed_index, simulated, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(ticker, price, amountUsd, quantity, fgIndex, BEARISH_CONFIG.DCA_SIM_ONLY ? 1 : 0, Date.now());
-  } catch { /* fail silently */ }
+  } catch (err) { _logPersistErr('dcaBuy', err); }
 }
 
 // ─── Short Selling Wrapper (uses V2 regime data) ───────────
@@ -328,6 +342,24 @@ async function evaluateFearDCA(): Promise<void> {
   if (today !== dcaDayReset) {
     dcaBuysToday = 0;
     dcaDayReset = today;
+  }
+
+  // M21: seed dcaLastBuy from DB on first call so PM2 restart doesn't bypass
+  // the cooldown. We pull most-recent created_at per ticker from v2_dca_buys.
+  if (!dcaCooldownLoaded) {
+    try {
+      const db = getDb();
+      const rows = db.prepare(
+        `SELECT ticker, MAX(created_at) AS last FROM v2_dca_buys GROUP BY ticker`
+      ).all() as Array<{ ticker: string; last: number }>;
+      for (const r of rows) {
+        if (r.ticker && Number.isFinite(r.last)) dcaLastBuy.set(r.ticker, r.last);
+      }
+      dcaCooldownLoaded = true;
+    } catch (e) {
+      // Best-effort — if v2_dca_buys doesn't exist yet, just proceed with empty map.
+      dcaCooldownLoaded = true;
+    }
   }
 
   if (dcaBuysToday >= BEARISH_CONFIG.DCA_MAX_DAILY_BUYS) return;
