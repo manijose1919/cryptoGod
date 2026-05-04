@@ -127,7 +127,10 @@ import { portfolioManager } from './core/portfolioManager.ts';
 import { shortSellingEngine } from './core/shortSellingEngine.ts';
 import { stakingEngine } from './core/stakingEngine.ts';
 import { arbitrageEngine } from './core/arbitrageEngine.ts';
-import { incrementalIndicators } from './core/incrementalIndicators.ts';
+// M1: incrementalIndicators import removed — module deleted as dead code
+// (was imported + re-exported but never called anywhere; 10-50x faster
+// indicator promise was never realized). Re-add via the V2 signal
+// generators if you ever want to wire it.
 import { healthMonitor } from './core/healthMonitor.ts';
 import { dbBatcher } from './core/dbBatcher.ts';
 import { logger } from './core/structuredLogger.ts';
@@ -6544,7 +6547,7 @@ const ctx = {
     shortSellingEngine,
     stakingEngine,
     arbitrageEngine,
-    incrementalIndicators,
+    // M1: incrementalIndicators removed (was dead code)
     telegramV2,
     healthMonitor,
     dbBatcher,

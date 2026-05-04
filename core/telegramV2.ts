@@ -89,9 +89,11 @@ class TelegramV2Service {
   private async onEntry(event: EntryEvent): Promise<void> {
     const icon = event.exchange === 'crypto.com' ? '🟣' : '🔵';
     const exchangeName = event.exchange === 'crypto.com' ? 'CRYPTO.COM' : 'KRAKEN';
+    // M6: render LONG / SHORT label based on direction (defaults to long).
+    const sideLabel = event.direction === 'short' ? 'SHORT' : 'BUY';
 
     const msg = [
-      `${icon} <b>${exchangeName} BUY</b>`,
+      `${icon} <b>${exchangeName} ${sideLabel}</b>`,
       `━━━━━━━━━━━━━━━━━━`,
       `📊 <b>${event.ticker}</b> @ $${this.fmtPrice(event.price)}`,
       `💰 Amount: $${event.usdAmount.toFixed(2)} (${event.quantity.toFixed(6)} units)`,

@@ -131,7 +131,11 @@ class HealthMonitor {
       this.alertCooldown = Date.now() + 300000; // 5min cooldown
       tradingBus.emit('risk:alert', {
         type: 'heat_warning',
-        severity: 'medium',
+        // M5: was 'medium' which isn't in the RiskEvent.severity union
+        // ('info' | 'warning' | 'critical'). Telegram icon lookup fell
+        // through to a default; downstream code that branched on the
+        // string would silently miss this case.
+        severity: 'warning',
         reason: `System health: ${warnings.join('; ')}`,
         data: { warnings, memory: snapshot.memoryUsage },
         timestamp: Date.now(),
