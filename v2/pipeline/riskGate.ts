@@ -5,7 +5,7 @@
 
 import type { SignalResult, RiskResult, V2PortfolioState } from './types.ts';
 import { REGIME } from './types.ts';
-import { V2_CONFIG } from '../engine/config.ts';
+import { V2_CONFIG, getExchangeFees } from '../engine/config.ts';
 
 // --- Fear & Greed (lazy-loaded from existing service) ---
 
@@ -71,9 +71,11 @@ export function evaluateRisk(
   signalResults: SignalResult[],
   portfolio: V2PortfolioState,
   circuitBreaker: CircuitBreakerState,
+  exchangeName: string = 'kraken',
 ): RiskResult[] {
   const results: RiskResult[] = [];
   const now = Date.now();
+  const fees = getExchangeFees(exchangeName);
 
   // Gate 0 (global): Fear & Greed extreme greed block
   const fgBlock = getFearGreedBlock();
@@ -123,10 +125,15 @@ export function evaluateRisk(
     }
     const tpPercent = atrPercent * V2_CONFIG.TAKE_PROFIT_ATR_MULT / 100;
     const slPercent = atrPercent * V2_CONFIG.STOP_LOSS_ATR_MULT / 100;
-    // Use maker fees when USE_MAKER_ORDERS is on, taker otherwise
+    // H6/H7: use exchange-aware ROUND_TRIP_REAL (maker entry + taker exit).
+    // Old code assumed pure-maker round-trip when USE_MAKER_ORDERS=true (0.32%
+    // on Kraken), but the actual exit path uses placeMarketSell (taker), so
+    // real round-trip is 0.42% (maker entry 0.16% + taker exit 0.26%). The
+    // 0.10% under-estimate let marginal-edge trades through that the gate
+    // was supposed to reject.
     const feeRoundTrip = V2_CONFIG.USE_MAKER_ORDERS
-      ? V2_CONFIG.FEE_ROUND_TRIP_MAKER
-      : V2_CONFIG.FEE_ROUND_TRIP_TAKER;
+      ? fees.ROUND_TRIP_REAL
+      : fees.ROUND_TRIP_TAKER;
 
     // Gate 5: Expected return must exceed minimum
     // TP% is the raw target move — confidence already scales position size, not ER

@@ -15,7 +15,7 @@ import {
   DECISION,
   PIPELINE_STAGE,
 } from './types.ts';
-import { V2_CONFIG } from '../engine/config.ts';
+import { V2_CONFIG, getExchangeFees } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // --- Helpers ---
@@ -98,7 +98,8 @@ export async function executeTrade(
     const quantity = risk.positionSizeUsd / price;
     const stopLoss = price - atr * V2_CONFIG.STOP_LOSS_ATR_MULT;
     const takeProfit = price + atr * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
-    const fee = price * quantity * V2_CONFIG.FEE_MAKER_PERCENT;
+    // H7: exchange-aware maker fee for paper-mode entry estimate
+    const fee = price * quantity * getExchangeFees(exchange.getName()).MAKER_PERCENT;
 
     const decision = makeExecuteDecision(
       tradeId,
@@ -168,9 +169,10 @@ export async function executeTrade(
     const finalStatus = await exchange.getOrderStatus(orderResult.orderId);
     const fillPrice = finalStatus.price > 0 ? finalStatus.price : bestBid;
     const fillQty = finalStatus.quantity > 0 ? finalStatus.quantity : quantity;
+    // H7: exchange-aware maker fee fallback when the exchange doesn't report fee
     const entryFee = finalStatus.fee > 0
       ? finalStatus.fee
-      : fillPrice * fillQty * V2_CONFIG.FEE_MAKER_PERCENT;
+      : fillPrice * fillQty * getExchangeFees(exchange.getName()).MAKER_PERCENT;
 
     // Recalculate SL/TP from actual fill price
     const actualStop = fillPrice - atr * V2_CONFIG.STOP_LOSS_ATR_MULT;
