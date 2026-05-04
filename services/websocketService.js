@@ -43,6 +43,17 @@ let latencyMs = 0;
 const latencyHistory = [];  // Rolling window of last 100 latency measurements
 const MAX_LATENCY_HISTORY = 100;
 
+// H14: Track time of last incoming message for stale-connection detection.
+// Without this, a TCP zombie keeps `connected=true` and latency frozen at the
+// last value while no candles flow → bot decides on stale prices. Mirrors
+// KrakenWS's checkHeartbeat pattern (services/krakenWebsocketService.js:152).
+let lastMessageTime = 0;
+let _staleWarned = false;
+const STALE_TIMEOUT_MS = 30000;  // 30s with no message = stale
+const STALE_GRACE_MS = 10000;    // 10s grace before forcing reconnect
+const STALE_CHECK_MS = 5000;     // Check every 5s
+let staleCheckTimer = null;
+
 // ============================================
 // CONNECTION MANAGEMENT
 // ============================================
@@ -65,11 +76,17 @@ function connect() {
     ws.on('open', () => {
       connected = true;
       reconnectAttempts = 0;
+      lastMessageTime = Date.now();  // H14: seed for stale detector
+      _staleWarned = false;
       console.log('[WebSocket] Connected to Crypto.com market stream');
 
       // Start heartbeat
       clearInterval(heartbeatTimer);
       heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+
+      // H14: Start stale-connection detector
+      clearInterval(staleCheckTimer);
+      staleCheckTimer = setInterval(checkStaleConnection, STALE_CHECK_MS);
 
       // Re-subscribe to all channels
       if (subscriptions.size > 0) {
@@ -81,6 +98,7 @@ function connect() {
     });
 
     ws.on('message', (data) => {
+      lastMessageTime = Date.now();  // H14: any inbound message resets stale timer
       try {
         const msg = JSON.parse(data.toString());
         handleMessage(msg);
@@ -93,6 +111,7 @@ function connect() {
       connected = false;
       console.log(`[WebSocket] Disconnected (code: ${code}). Reconnecting...`);
       clearInterval(heartbeatTimer);
+      clearInterval(staleCheckTimer);  // H14
       scheduleReconnect();
     });
 
@@ -131,6 +150,31 @@ function sendHeartbeat() {
       id: lastHeartbeatSentAt,
       method: 'public/heartbeat',
     }));
+  }
+}
+
+// H14: Detect stale TCP connections that keep readyState=OPEN but stop
+// delivering messages. Without this, bot trades on prices last updated
+// minutes ago while latency tracking shows the same old value forever.
+function checkStaleConnection() {
+  if (!connected) return;
+  const elapsed = Date.now() - lastMessageTime;
+  if (elapsed > STALE_TIMEOUT_MS + STALE_GRACE_MS) {
+    console.warn(`[WebSocket] Stale connection (${(elapsed / 1000).toFixed(0)}s without messages) — forcing reconnect`);
+    _staleWarned = false;
+    if (ws) {
+      try { ws.close(); } catch {}
+      ws = null;
+    }
+    connected = false;
+    clearInterval(heartbeatTimer);
+    clearInterval(staleCheckTimer);
+    scheduleReconnect();
+  } else if (elapsed > STALE_TIMEOUT_MS && !_staleWarned) {
+    console.warn(`[WebSocket] No messages for ${(elapsed / 1000).toFixed(0)}s — will force reconnect if it continues`);
+    _staleWarned = true;
+  } else if (elapsed < STALE_TIMEOUT_MS) {
+    _staleWarned = false;
   }
 }
 
