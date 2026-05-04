@@ -37,6 +37,45 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-03 23:55 UTC — Wave-2 audit-driven sweep: 8 fixes (CRITICAL+HIGH) — local-claude
+
+**Commits:** `29f2e26`, `3669c68`, `ecc355c`, `8c58d3d`, `66d8953`, `45475b4`
+**Files changed:** `services/exchangeAdapters/cryptocomAdapter.js`, `server.js`, `v2/engine/tradeEngine.ts`, `v2/pipeline/exitManager.ts`, `v2/engine/config.ts`, `v2/engine/dualExchangeEngine.ts`, `v2/pipeline/executor.ts`, `v2/pipeline/riskGate.ts`, `services/featureEngineering.js`, `services/websocketService.js`
+**Stats baseline reset:** no (bug fixes restoring intended behavior — keep continuous stats so the impact is measurable)
+
+**What changed:**
+Wave 2 of the audit-driven fix series. 6 logical commits covering 8 audit items:
+
+1. **`29f2e26` C1 — Crypto.com cancelOrder signature unified.** `cryptocomAdapter.cancelOrder` previously required `(orderId, ticker, sessionId)` but executionEngine and most server.js call sites use Kraken's `(orderId, sessionId)` form. Crypto.com received `sessionId` as `ticker`, called `formatTicker(sessionId)`, sent garbage `instrument_name`, and the cancel silently failed inside the executor's try/catch. In limit-then-market, the unfilled limit then stayed live while the fallback market order also fired → **double fill**. Fix: detect signature via `arguments.length`; when ticker is missing, look up `instrument_name` via `private/get-order-detail`. Backward-compat preserved for 3-arg callers.
+2. **`3669c68` C3 — Dead Man's Switch wired up.** `krakenAdapter.cancelAllOrdersAfter` was implemented but never called anywhere. Memory described a 60s/90s heartbeat as active — it wasn't. If the bot crashed with native SLs open, those SLs stayed live indefinitely. Now: on startup (Kraken active + REAL mode + creds reachable), arm the switch immediately and keep warm via 60s heartbeat with 90s server-side timeout. Re-attempt timer fires every minute so late authentication still arms the protection (no-op when running). Failed heartbeats rate-limited to 5%.
+3. **`ecc355c` H4+H5 — V2 engine robustness.** (a) `insertTrade` is now wrapped in try/catch; on failure in live mode, attempt market-sell rollback (with CRITICAL log if rollback also fails) — previously a DB write failure left a position on the exchange with no in-process record (BE-stop, trailing, TP, time_kill all skipped). (b) Each trade iteration in `exitManager.checkExits` is wrapped in try/catch — previously one bad price fetch unwound the for-loop and skipped exit checks for every remaining trade for up to BOT_LOOP_INTERVAL_MS (60s).
+4. **`8c58d3d` H6+H7 — V2 fee accounting overhaul.** Added `EXCHANGE_FEES.*.ROUND_TRIP_REAL` (maker entry + taker exit) and `getExchangeFees(name)` helper to `v2/engine/config.ts`. Threaded through:
+   - `tradeEngine.ts` exit fee → exchange-aware TAKER (Kraken 0.26%, Crypto.com 0.075%); old code over-stated fees by ~3.5× when running on Crypto.com.
+   - `executor.ts` paper + live entry fee → exchange-aware MAKER.
+   - `riskGate.ts` expected-return gate → uses ROUND_TRIP_REAL (0.42% on Kraken) instead of pure-maker assumption (0.32%); the 0.10% under-estimate was letting marginal-edge trades through the filter.
+   - `dualExchangeEngine.ts` exit fee → always TAKER regardless of exit reason (mirrors `fa3e878` which fixed this in main tradeEngine.ts but missed dual). Also: stopped deducting `entryFee` from `engine.budget` at entry — it was already counted in pnlNet on close, so equity was double-deducting entry fees.
+5. **`66d8953` H13 — NaN/Inf sanitize in feature vector.** Division-by-zero in upstream indicators (RSI when avgLoss=0, ATR with 0 range) produced NaN/Inf that passed through `imputeMissingFeatures` (which only branches on `=== 0`). Without this, `mlEngine.scaler.transformRow` clamped NaN → 0 silently, but `tfEngine.predictLSTM` passed NaN into `tf.tensor3d` → NaN throughout the network → confidence NaN → fell through gatekeeper's NaN-failopen invisibly. Final-pass `Number.isFinite` check now zeroes any non-finite value.
+6. **`45475b4` H14 — Crypto.com WS stale-connection detector.** sendHeartbeat fired every 10s but nothing checked for response timeout; TCP zombies kept `connected=true` while no candles flowed. Mirrors `KrakenWS.checkHeartbeat` (services/krakenWebsocketService.js:152): track `lastMessageTime`, every 5s check elapsed; >30s warns, >40s force close + reconnect.
+
+**Why:**
+Wave 2 of the audit-driven sweep. These were the 8 larger CRITICAL/HIGH items that didn't need design decisions. Patterns from prior fix rounds (`fa3e878` exit fee, `6c9127e` SL rollback, schema-drift class) were used as templates and several more sites were found and fixed.
+
+**What to monitor / watch for:**
+- **Crypto.com double-fill rate**: previously hidden in try/catch on cancel. Watch `[ExecutionEngine] Limit ... failed` warnings — should drop. If a position size on Crypto.com is suddenly larger than expected after a fill, the underlying cancel pattern needs another look.
+- **Kraken Dead Man's Switch logs**: should see `[Server] Dead Man's Switch armed: 60s heartbeat / 90s timeout` once on startup (and possibly again later if creds came in via UI). If the bot crashes, Kraken should auto-cancel all open orders within 90s.
+- **V2 P&L numbers on Crypto.com**: previously over-stated fees by ~3.5×. Recorded `pnl_net` on Crypto.com trades after this deploy will be slightly higher than pre-deploy comparable trades. The change is correctness, not performance — trade selection should be unaffected.
+- **riskGate rejections**: now slightly stricter (0.42% required vs 0.32%). A few marginal trades that previously passed may now show `[V2] RISK REJECT ... Expected return ...% < min ...%`. Combined with VPS Claude's MIN_CONFIDENCE gate (`79eed18`), trade frequency may drop further. If freq drops to near-zero for >48h, the MIN_EXPECTED_RETURN gate (currently 0.8%) is the lever to relax, not the fee math.
+- **Dual-engine equity**: pre-deploy dual-engine equity was over-deducting entry fees. After deploy, equity values for any in-flight dual-engine trades will jump up by the cumulative entry-fee amount on first close. Mostly harmless (dual engine is paper).
+- **`[V2 ExitMgr] skipped X` warnings**: should be rare. If one ticker shows up repeatedly, investigate that pair's WS/REST availability.
+- **Crypto.com WS**: should see `[WebSocket] Stale connection ... — forcing reconnect` only when there's actual connectivity loss. If it fires constantly, threshold may be too tight — relax `STALE_TIMEOUT_MS`.
+- **Telegram alerts** (new failure modes): `[V2] CRITICAL: insertTrade + rollback BOTH failed` requires immediate manual intervention — naked position on Kraken with native SL but no managed exits.
+
+**What's next:**
+- **Wave 3** (still BLOCKED on user decisions): C4 auth scheme; C2 V2 native SL bookkeeping (needs schema migration); H1 ML feature count (88 vs 109); H2 ml_features.regime; H3 dual-engine paper trades; H9 core/TradingEngine.ts; H10 arbitrageEngine.
+- **Wave 4**: 27 MEDIUM + LOW items.
+
+---
+
 ## 2026-05-03 22:00 UTC — Wave-1 audit-driven sweep: 7 fixes (CRITICAL+HIGH) — local-claude
 
 **Commits:** `d661cb2`, `5714526`, `97b7d99`, `5ef0ff5`, `914f3fe`
