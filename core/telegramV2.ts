@@ -279,8 +279,16 @@ class TelegramV2Service {
 
         await this.handleCommand(text.toLowerCase().trim());
       }
-    } catch {
-      // Silent fail on poll errors
+    } catch (err) {
+      // M8: poll errors used to fail silently — if the bot token rotates
+      // or Telegram rate-limits the poll, the operator never knows the
+      // /status /pause commands stopped responding. Rate-limit to avoid
+      // log spam during sustained outages.
+      const now = Date.now();
+      if (now - (this as { _lastPollErrLog?: number })._lastPollErrLog > 60_000) {
+        console.warn(`[TelegramV2] Poll failed: ${(err as Error).message}`);
+        (this as { _lastPollErrLog?: number })._lastPollErrLog = now;
+      }
     }
   }
 
@@ -478,6 +486,12 @@ class TelegramV2Service {
 
   // ─── Helpers ─────────────────────────────────────────────
 
+  // M7: rate-limited counter so failures (network blips, 429s) surface
+  // without spamming logs every loop. User's Telegram is the primary
+  // monitoring channel; silent loss is unacceptable.
+  private _sendFailCount = 0;
+  private _lastSendFailLog = 0;
+
   private async send(html: string, forceSend = false): Promise<void> {
     if (!this.config.enabled) return;
     // Mute skips non-critical messages
@@ -485,7 +499,7 @@ class TelegramV2Service {
 
     try {
       const url = `https://api.telegram.org/bot${this.config.botToken}/sendMessage`;
-      await fetch(url, {
+      const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -495,8 +509,30 @@ class TelegramV2Service {
           disable_web_page_preview: true,
         }),
       });
+      // M7: detect non-2xx (notably 429 rate-limit). Parse Telegram's
+      // retry_after if present so the operator can see what's happening.
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        let retryAfter: number | null = null;
+        try {
+          const parsed = JSON.parse(body);
+          retryAfter = parsed?.parameters?.retry_after ?? null;
+        } catch {}
+        this._sendFailCount++;
+        const now = Date.now();
+        if (now - this._lastSendFailLog > 60_000) {
+          console.warn(`[TelegramV2] Send returned ${resp.status} (${this._sendFailCount} fails since last log)${retryAfter ? `, retry_after=${retryAfter}s` : ''}: ${body.slice(0, 200)}`);
+          this._lastSendFailLog = now;
+        }
+      }
     } catch (err) {
-      console.error('[TelegramV2] Send failed:', err);
+      // Network-level failure (DNS, ECONNRESET, etc.). Same rate-limited log.
+      this._sendFailCount++;
+      const now = Date.now();
+      if (now - this._lastSendFailLog > 60_000) {
+        console.warn(`[TelegramV2] Send threw (${this._sendFailCount} fails since last log): ${(err as Error).message}`);
+        this._lastSendFailLog = now;
+      }
     }
   }
 

@@ -55,7 +55,26 @@ class DBBatcher {
    * Uses a single transaction for all queued operations.
    */
   flush(): void {
-    if (this.buffer.length === 0 || !this.dbExecute) return;
+    if (this.buffer.length === 0) return;
+    // M2: visibility for failed init. If init() never succeeded (dbExecute
+    // is null), queue() keeps appending forever and flush silently returns.
+    // The buffer grows unbounded → memory leak. Log a rate-limited warning
+    // and hard-cap the buffer so a misconfigured deploy doesn't OOM the
+    // process. Caller can fix init and the next flush picks up.
+    if (!this.dbExecute) {
+      if (this.flushCount % 50 === 0) {
+        console.warn(`[DBBatcher] No executor wired — ${this.buffer.length} writes buffered. Did init() fail?`);
+      }
+      // Hard-cap at 4x the normal max to bound memory; drop oldest.
+      const hardCap = this.maxBufferSize * 4;
+      if (this.buffer.length > hardCap) {
+        const drop = this.buffer.length - hardCap;
+        this.buffer.splice(0, drop);
+        console.warn(`[DBBatcher] Dropped ${drop} oldest writes (hard cap ${hardCap})`);
+      }
+      this.flushCount++;
+      return;
+    }
 
     const batch = this.buffer.splice(0);
     this.flushCount++;
