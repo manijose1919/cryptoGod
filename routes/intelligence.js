@@ -61,18 +61,12 @@ export default function createIntelligenceRouter(ctx) {
         res.status(200).json(ctx.brainThoughts || []);
     });
 
-    // GET /feeds/live
-    router.get('/feeds/live', async (req, res) => {
-        if (!ctx.dataIngestion) {
-            return res.status(200).json({ feeds: [], message: 'Data ingestion service not available' });
-        }
-        try {
-            const feeds = await ctx.dataIngestion.fetchAllFeeds();
-            res.status(200).json(feeds);
-        } catch (e) {
-            log.error('feeds/live failed', { error: e.message });
-            res.status(500).json({ message: 'Failed to fetch feeds' });
-        }
+    // GET /feeds/live (Wave 4 LOW): kept as a stub returning [] — the
+    // dataIngestion service was removed (per memory) so ctx.dataIngestion
+    // is always undefined. Always-falls-through path served no purpose.
+    // Returning empty preserves any frontend that polls this endpoint.
+    router.get('/feeds/live', (req, res) => {
+        res.status(200).json({ feeds: [], message: 'Data ingestion not configured' });
     });
 
     // GET /ml/status

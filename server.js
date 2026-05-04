@@ -961,7 +961,12 @@ app.use(cors({
         // Allow same-server access (browser accessing the server directly by IP/hostname)
         const serverPort = CONFIG.PORT || 3033;
         if (origin === `http://localhost:${serverPort}`) return callback(null, true);
-        if (/^https?:\/\/\d+\.\d+\.\d+\.\d+(:\d+)?$/.test(origin)) return callback(null, true);
+        // M24: restrict numeric-IP origins to RFC1918 private ranges only.
+        // Old regex `/^https?:\/\/\d+\.\d+\.\d+\.\d+/` matched any IPv4
+        // including public WAN addresses (e.g., 1.1.1.1) — combined with
+        // credentials:true that meant any attacker-controlled numeric-IP
+        // origin could ride a credentialed cross-origin request.
+        if (/^https?:\/\/(127\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)\d+\.\d+(:\d+)?$/.test(origin)) return callback(null, true);
         // Allow VPS direct access
         const vpsIp = process.env.VPS_IP;
         if (vpsIp && origin.includes(vpsIp)) return callback(null, true);
@@ -978,7 +983,10 @@ app.use(rateLimit);
 // Serve built frontend (production)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-app.use(express.static(path.join(__dirname, 'dist')));
+// `dotfiles: 'deny'` returns 403 for any URL whose path component starts
+// with a dot (.env, .gitignore, etc.). The build pipeline shouldn't copy
+// dotfiles to dist/, but this is a cheap defense against future mistakes.
+app.use(express.static(path.join(__dirname, 'dist'), { dotfiles: 'deny' }));
 
 // Mount persistence routes (SQLite database)
 app.use('/api/db', persistenceRoutes);
@@ -1021,20 +1029,28 @@ app.get('/api/system-config', (req, res) => {
     }
 });
 
-app.post('/api/system-config', express.json(), (req, res) => {
-    try {
-        const updates = req.body;
-        if (updates.killAll) {
-            killAllSystems();
-            return res.json({ success: true, message: 'All systems disabled', flags: getAllFlags() });
-        }
-        if (updates.flags) {
-            setFlags(updates.flags);
-        }
-        res.json({ success: true, flags: getAllFlags() });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
+// LOW (Wave 4): admin-gate system-config writes. Endpoint can disable all
+// systems via {killAll:true} or toggle arbitrary flags — high-blast-radius.
+// Localhost still works without a key (dashboard); remote needs ADMIN_API_KEY.
+app.post('/api/system-config', express.json(), (req, res, next) => {
+    // Inline middleware call so we don't have to refactor the route signature.
+    import('./middleware/adminAuth.js').then(({ requireAdminAuth }) => {
+        requireAdminAuth(req, res, () => {
+            try {
+                const updates = req.body;
+                if (updates.killAll) {
+                    killAllSystems();
+                    return res.json({ success: true, message: 'All systems disabled', flags: getAllFlags() });
+                }
+                if (updates.flags) {
+                    setFlags(updates.flags);
+                }
+                res.json({ success: true, flags: getAllFlags() });
+            } catch (e) {
+                res.status(500).json({ error: e.message });
+            }
+        });
+    }).catch(next);
 });
 
 // --- Continuous Backtest API (Batch 4C) ---
@@ -7102,8 +7118,20 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
+// Generic error handler. We log the full error server-side (with stack) so
+// the operator has details, but only return a generic message to the client.
+// Previous version leaked raw err.message to the response, including SQL
+// table/column names and internal type info. Localhost still gets details
+// to help debugging from the same machine.
 app.use((err, req, res, next) => {
-    res.status(500).json({ message: err.message });
+    const ip = req.ip || req.connection?.remoteAddress;
+    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    console.error(`[Server] Unhandled error on ${req.method} ${req.path}:`, err);
+    if (isLocal) {
+        res.status(500).json({ message: err.message, stack: err.stack?.split('\n').slice(0, 3) });
+    } else {
+        res.status(500).json({ message: 'Internal server error' });
+    }
 });
 
 const startServer = async () => {
@@ -8063,15 +8091,27 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 // ============================================
 // Bot Loop Watchdog (hang recovery)
 // ============================================
+// M25: this watchdog only resets the lock — it does NOT abort the stuck
+// async work. The original Promise (likely awaiting a slow API) keeps
+// running in the background. After several stuck iterations you can have
+// N concurrent loop bodies live, each holding state. We track the count
+// so it's visible if it ever spirals; a real fix needs AbortController
+// per outbound call, which is a separate refactor. Also unlock the mutex
+// (_unlockBot) so the next iteration's prev-lock-await doesn't block.
 const BOT_LOOP_MAX_DURATION_MS = 60000; // 60s max per loop iteration
+let _watchdogResetCount = 0;
 setInterval(() => {
     if (botLoopRunning && botLoopStartTime > 0) {
         const elapsed = Date.now() - botLoopStartTime;
         if (elapsed > BOT_LOOP_MAX_DURATION_MS) {
-            console.error(`[WATCHDOG] Bot loop stuck for ${(elapsed / 1000).toFixed(0)}s — force-resetting botLoopRunning`);
-            try { addLog(`[WATCHDOG] Bot loop hung for ${(elapsed / 1000).toFixed(0)}s, force-reset to unblock`, 'ERROR'); } catch (e) {}
+            _watchdogResetCount++;
+            console.error(`[WATCHDOG] Bot loop stuck for ${(elapsed / 1000).toFixed(0)}s — force-reset #${_watchdogResetCount} (note: the stuck async work is NOT aborted; concurrent bodies may exist)`);
+            try { addLog(`[WATCHDOG] Bot loop hung for ${(elapsed / 1000).toFixed(0)}s, force-reset #${_watchdogResetCount} to unblock`, 'ERROR'); } catch (e) {}
             botLoopRunning = false;
             botLoopStartTime = 0;
+            // Release the mutex so the next iteration can start without
+            // awaiting a never-resolving _botLoopLock.
+            try { if (typeof _unlockBot === 'function') _unlockBot(); } catch (e) {}
         }
     }
 }, 10000);
