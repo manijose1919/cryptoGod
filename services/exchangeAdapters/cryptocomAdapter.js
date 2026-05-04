@@ -179,9 +179,18 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
     }
 
     async placeBuyOrder(ticker, notional, sessionId) {
-        // Crypto.com Exchange minimum notional is $1 for most pairs
-        if (notional < 1.0) {
-            throw new Error(`[Crypto.com] Order $${notional.toFixed(2)} below $1 minimum for ${ticker}`);
+        // M18: per-pair minimum notional. Crypto.com's live minimums vary —
+        // BTC pairs are ~$10, mid-caps ~$5, most alts ~$1. Hardcoded $1
+        // check let BTC orders at $5-$10 pass locally and then fail at the
+        // exchange with a less helpful error. Best-effort table; falls
+        // back to $1 for unknown pairs (matches old behavior). The right
+        // long-term fix is to consult getInstruments() like Kraken does.
+        const upper = (ticker || '').toUpperCase();
+        const minNotional = upper.includes('BTC') ? 10
+            : upper.includes('ETH') ? 5
+            : 1;
+        if (notional < minNotional) {
+            throw new Error(`[Crypto.com] Order $${notional.toFixed(2)} below $${minNotional} minimum for ${ticker}`);
         }
 
         const result = await makeSignedRequest('private/create-order', {
