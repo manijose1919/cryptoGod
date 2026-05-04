@@ -68,6 +68,11 @@ export async function checkExits(
   const results: ExitResult[] = [];
 
   for (const trade of openTrades) {
+    // H5: per-trade try/catch. Without this, one bad price fetch (Kraken WS
+    // hiccup, REST 429, transient delisting) on ticker N would unwind the
+    // for-loop and skip exit checks for every remaining trade — they'd wait
+    // up to BOT_LOOP_INTERVAL_MS for the next pass. Now: log and continue.
+    try {
     const currentPrice = await exchange.getLatestPrice(trade.ticker);
     const pnlPercent = (currentPrice - trade.entryPrice) / trade.entryPrice;
     const holdMs = Date.now() - trade.entryTime;
@@ -246,6 +251,10 @@ export async function checkExits(
         holdMs,
       }),
     });
+    } catch (e) {
+      // H5: never let one trade's failure abort the whole exit-check pass.
+      console.warn(`[V2 ExitMgr] skipped ${trade.ticker}: ${(e as Error).message}`);
+    }
   }
 
   return results;

@@ -4,7 +4,7 @@
 // ============================================
 
 import type { Candle, V2Trade } from '../pipeline/types.ts';
-import { V2_CONFIG } from './config.ts';
+import { V2_CONFIG, getExchangeFees } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // Pipeline imports
@@ -386,7 +386,7 @@ async function runLoop(): Promise<void> {
     // ==============================
     const portfolio = loadPortfolio(budget, 'TREND');
     const cbState = getCircuitBreakerState(portfolio, 'TREND');
-    const riskResults = evaluateRisk(passedSignals, portfolio, cbState);
+    const riskResults = evaluateRisk(passedSignals, portfolio, cbState, exchange?.getName() ?? 'kraken');
     const approved = getApproved(riskResults);
     const riskRejections = riskResults.length - approved.length;
     stats.rejectedByRisk += riskRejections;
@@ -452,9 +452,32 @@ async function runLoop(): Promise<void> {
         );
 
         if (trade) {
-          insertTrade(trade);
-          console.log(`[V2] Trade opened: ${trade.ticker} @ $${trade.entryPrice.toFixed(2)} qty=${trade.quantity.toFixed(6)}`);
-          await sendEntryAlert(trade);
+          // H4: insertTrade can throw (DB locked, schema drift, disk full).
+          // In live mode, by this point the maker buy has filled on-exchange
+          // AND a native SL is registered. If the DB write fails, the position
+          // exists on the exchange but has no in-process record — the bot loop's
+          // exit manager won't see it on the next tick (BE-stop, trailing,
+          // TP, time_kill all skipped). The native SL still protects against a
+          // crash, but managed exits are gone. Worst case we end up with a
+          // "stop-loss only" zombie position. Try to roll back via market sell;
+          // if rollback also fails, log a CRITICAL alert for manual intervention.
+          try {
+            insertTrade(trade);
+            console.log(`[V2] Trade opened: ${trade.ticker} @ $${trade.entryPrice.toFixed(2)} qty=${trade.quantity.toFixed(6)}`);
+            await sendEntryAlert(trade);
+          } catch (insertErr) {
+            const ie = insertErr as Error;
+            console.error(`[V2] insertTrade failed for ${trade.ticker}: ${ie.message}`);
+            if (V2_CONFIG.MODE === 'live') {
+              try {
+                await exchange!.placeMarketSell(trade.ticker, trade.quantity);
+                console.error(`[V2] Position rolled back via market sell after insertTrade failure`);
+              } catch (rollbackErr) {
+                const re = rollbackErr as Error;
+                console.error(`[V2] CRITICAL: insertTrade + rollback BOTH failed for ${trade.ticker}: ${re.message}. Position is naked on exchange (native SL still in place but no managed exits). Manual intervention required.`);
+              }
+            }
+          }
         } else {
           console.log(`[V2] Trade execution failed: ${decision.reason}`);
         }
@@ -511,7 +534,11 @@ async function checkOpenExits(): Promise<void> {
       // trailing exits — that under-counted by ~0.10% (taker - maker), inflating
       // recorded P&L vs the actual exchange charge. Match accounting to reality.
       const entryFee = trade.feesPaid; // already paid at entry
-      const exitFee = result.exitPrice * trade.quantity * V2_CONFIG.FEE_TAKER_PERCENT;
+      // H7: use the active exchange's taker rate (Kraken 0.26%, Crypto.com 0.075%).
+      // Hardcoded V2_CONFIG.FEE_TAKER_PERCENT was Kraken-only and over-stated
+      // exit fees by ~3.5x when the bot ran on Crypto.com.
+      const fees = getExchangeFees(exchange.getName());
+      const exitFee = result.exitPrice * trade.quantity * fees.TAKER_PERCENT;
       const totalFees = entryFee + exitFee;
 
       // In live mode, actually sell
