@@ -7519,6 +7519,45 @@ const startServer = async () => {
         console.warn('[Server] Staking engine init failed:', e.message);
     }
 
+    // Dead Man's Switch — auto-cancel all Kraken orders if the bot goes silent (C3).
+    // Heartbeat: 60s interval, 90s timeout. If the bot crashes or hangs, Kraken
+    // server-side auto-cancels every open order after the timeout — protecting
+    // against stale native stop-losses firing on positions the bot no longer
+    // tracks. Only meaningful for REAL mode on Kraken (other paths get a no-op).
+    let _dmsInterval = null;
+    function _maybeStartDeadMansSwitch() {
+        try {
+            if (_dmsInterval) return; // Already running
+            if (getActiveExchangeId() !== 'kraken') return;
+            if (botState.tradingMode === 'SIMULATION') return;
+            const adapter = getExchangeAdapter();
+            if (typeof adapter?.cancelAllOrdersAfter !== 'function') return;
+            // Check we have credentials reachable (env or session) before scheduling.
+            if (!process.env.KRAKEN_API_KEY && !botState.sessionId) {
+                console.log('[Server] Dead Man\'s Switch deferred: no Kraken credentials yet');
+                return;
+            }
+            _dmsInterval = setInterval(async () => {
+                try {
+                    await adapter.cancelAllOrdersAfter(90, botState.sessionId);
+                } catch (e) {
+                    // Don't spam logs; rely on Kraken's own behavior — failed
+                    // heartbeats simply mean the timer expires and orders cancel.
+                    if (Math.random() < 0.05) console.warn('[DMS] heartbeat failed:', e.message);
+                }
+            }, 60 * 1000);
+            // Fire one immediately so the protection is active from t=0.
+            adapter.cancelAllOrdersAfter(90, botState.sessionId)
+                .then(() => console.log('[Server] Dead Man\'s Switch armed: 60s heartbeat / 90s timeout'))
+                .catch(e => console.warn('[DMS] initial heartbeat failed:', e.message));
+        } catch (e) {
+            console.warn('[Server] Dead Man\'s Switch init failed:', e.message);
+        }
+    }
+    _maybeStartDeadMansSwitch();
+    // Re-attempt if user authenticates later — runs cheaply once a minute, no-ops once running.
+    setInterval(_maybeStartDeadMansSwitch, 60 * 1000);
+
     // Start health monitor (checks every 30 seconds)
     try {
         healthMonitor.start(30000);
