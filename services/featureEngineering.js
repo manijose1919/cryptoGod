@@ -73,6 +73,17 @@ function imputeMissingFeatures(features) {
       }
     }
   }
+
+  // H13: defensive NaN/Inf sweep. Division-by-zero in upstream indicators
+  // (RSI when avgLoss=0, ATR with 0 range, etc.) can produce NaN/Inf that
+  // pass through the imputation above (which only branches on === 0).
+  // Without this, mlEngine.scaler.transformRow clamps NaN → 0 (silent), but
+  // tfEngine.predictLSTM sees NaN in tf.tensor3d → NaN throughout the network
+  // → confidence NaN → falls through gatekeeper's NaN-failopen invisibly.
+  // Replace any non-finite value with 0 so downstream code sees a clean vector.
+  for (let i = 0; i < features.length; i++) {
+    if (!Number.isFinite(features[i])) features[i] = 0;
+  }
   return features;
 }
 
