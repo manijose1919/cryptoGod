@@ -490,8 +490,10 @@ async function executeLimitThenMarketSell(adapter, ticker, quantity, sessionId, 
   let totalRevenue = 0;
   let orderType = 'MARKET';
 
+  // Hoisted for use in the dust-check fallback below (M17).
+  const midPrice = computeMidPrice(orderBook);
+
   if (adapterSupportsLimitOrders(adapter)) {
-    const midPrice = computeMidPrice(orderBook);
     if (midPrice > 0) {
       try {
         const limitResult = await adapter.placeLimitSellOrder(ticker, midPrice, quantity, sessionId);
@@ -522,8 +524,13 @@ async function executeLimitThenMarketSell(adapter, ticker, quantity, sessionId, 
   }
 
   // Fill remainder with market (skip dust amounts under $1)
+  // M17: previously used `fills[0]?.price || 1` as the value-estimate fallback
+  // when the limit got 0 fills. For BTC with remainingQty=0.0001, the check
+  // `0.0001 * 1 > 1` = false → market sell never fires → entire position
+  // un-exited. Use the midPrice we already computed instead of $1.
   const remainingQty = quantity - filledQty;
-  if (remainingQty > 0 && remainingQty * (fills[0]?.price || 1) > 1) {
+  const valueEstimate = remainingQty * (fills[0]?.price || (midPrice > 0 ? midPrice : 0));
+  if (remainingQty > 0 && valueEstimate > 1) {
     const marketResult = await adapter.placeSellOrder(ticker, remainingQty, sessionId);
     const mPrice = parseFloat(marketResult.avgPrice || marketResult.avg_price || 0);
     const mQty = parseFloat(marketResult.filledQuantity || marketResult.filled_quantity || remainingQty);
