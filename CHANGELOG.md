@@ -37,6 +37,72 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-04 03:30 UTC — Wave-4 sweep: 8 batches covering MEDIUM + LOW items — local-claude
+
+**Commits:** `40102e6`, `69f7d40`, `795d3e6`, `6074a10`, `ca12e5e`, `28b9d30`, `e2ee559`, `b7e9903`
+**Files changed:** 18 files across core/, services/, v2/, routes/, server.js — see individual commits
+**Stats baseline reset:** no (hardening / cleanups, no trade-config changes)
+
+**What changed:**
+8 batches of polish/hardening work. Skipped purely cosmetic items (stale "62-element" docstrings, worker-timeout doc/code drift) per the rule: doesn't change behavior + doesn't reduce surprise + doesn't catch a future bug ⇒ skip. M13 + M19 were already done in earlier waves.
+
+**Batch A (`40102e6`) — core/ cleanup (M1, M3, M4, M5, M6):**
+- M1: deleted `core/incrementalIndicators.ts` (dead code; "10-50× faster" never wired). Removed import + ctx re-export.
+- M3: stakingEngine.accrueRewards now tracks `lastAccrueAt` per position and bills the actual elapsed delta (capped at 24h). Old code under-counted reward whenever an interval was missed or restart occurred.
+- M4: stakingEngine docstring updated — used to claim auto-unstake but no caller invokes unstake() from the buy path. Now documents stakes-are-one-way.
+- M5: healthMonitor risk:alert was emitting `severity: 'medium'` (not in the union); now `'warning'`.
+- M6: shortSellingEngine entry events now tagged `direction: 'short'` (added optional field on EntryEvent). Telegram renders "SHORT" vs "BUY" label.
+
+**Batch B (`69f7d40`) — silent-failure cleanup (M2, M7, M8):**
+- M2: dbBatcher.flush — rate-limited warn when no executor is wired + buffered writes present, hard-cap buffer at 4× maxBufferSize with oldest-dropped to prevent OOM if init fails.
+- M7: Telegram send() detects non-2xx responses, parses retry_after, rate-limited warn (1/60s) so 429s and network failures aren't invisible. Same for poll-error path.
+- M8: Telegram pollCommands errors now surface via the same rate-limited warn.
+
+**Batch C (`795d3e6`) — database hygiene (M9, M10, M11):**
+- M9: schema_version table documented in-place as non-authoritative (kept for any analyst tools, but commented).
+- M10: cleanupOldData extended to ml_gatekeeper_log, shap_history, agent_performance, drift_events, system_logs (all grow ~17K rows/day). Refactored into a `sweep()` helper so a missing table doesn't block the others.
+- M11: composite index on `v2_trades(status, entry_time)` — every CHANGELOG monitoring query and the stats-baseline filter use this predicate; was full-table scan.
+
+**Batch D (`6074a10`) — ML hardening (M14, M15, M16):**
+- M14: syntheticDataEngine TimeGAN supervisor training disposes the inline `tf.zeros(...)` tensor that was leaked per epoch.
+- M15: OnlineLearner.serialize returns a plain object (not a JSON string), preempting the same double-encoding bug class that 7e80042 fixed in mlPredictionService.
+- M16: mlEngine.scaler.transformRow hard-guards against an empty scaler (the lingering hazard from pre-7e80042 saves) — returns the raw row + rate-limited warn instead of silently returning [].
+
+**Batch E (`ca12e5e`) — execution + adapters (M17, M18; M20 deferred):**
+- M17: executeLimitThenMarketSell dust-check fallback uses midPrice instead of $1 (BTC at qty=0.0001 used to fail the check and never market-sell, leaving position un-exited).
+- M18: cryptocomAdapter per-pair minimum notional (BTC=$10, ETH=$5, default $1). Was hardcoded $1, BTC orders ≥$5 fell through to a less helpful exchange error.
+- M20: WS reconnect candle backfill — deferred (substantive feature, risk bounded by H14 stale-detector + rare disconnects).
+
+**Batch F (`28b9d30`) — v2 bearishServices + executor (M21, M22, M23):**
+- M21: DCA cooldown seeds from v2_dca_buys on first call (was in-memory only — PM2 restart bypassed cooldown).
+- M22: bearishServices persist functions log via shared rate-limited warn helper instead of swallowing.
+- M23: executor sets `strategy: 'TREND'` explicitly on V2Trade instead of relying on attributionStore's `?? 'TREND'` default.
+
+**Batch G (`e2ee559`) — server hardening (M24, M25, partial M27, LOW notes):**
+- M24: CORS regex now restricts numeric-IP origins to RFC1918 private ranges only.
+- M25: bot-loop watchdog also unlocks the mutex when it fires + counter for visibility (real abort still needs AbortController per call — separate refactor).
+- LOW: `express.static` uses `dotfiles:'deny'`.
+- LOW: generic 500 error handler no longer leaks raw err.message + stack to remote clients (localhost still gets full details).
+- LOW: `/api/system-config POST` now admin-gated (was missed in C4 — high blast radius via {killAll:true}).
+- LOW: `/feeds/live` reduced to a clean stub (dataIngestion service was removed).
+- M27: deferred to a separate refactor pass — the highest-value silent catches were already addressed in Wave 1 H17, Wave 2 H4/H5, batch B, batch F. Remaining ~25 empty catches are mostly benign per-loop optional-resource cleanup.
+
+**Batch H (`b7e9903`) — routes (M12):**
+- M12: routes/persistence.js GET /candles validates start/end as finite numbers via Number()+isFinite, rejects malformed timestamps with 400. parseInt('2024-01-01') used to silently return 2024 (= 1970ms) → empty result.
+
+**What to monitor / watch for:**
+- **Boot logs**: should see one extra index-creation message for `idx_v2_trades_status_entry_time` (idempotent — silent on subsequent boots). No errors during the safeAlter for stop_order_id from C2.
+- **Telegram alert health**: any Telegram failures previously invisible. New rate-limited warn pattern: `[TelegramV2] Send returned 429 (N fails since last log)…`. If you start seeing these, you may need to lengthen the dedup window or look at whether the bot is sending too frequently.
+- **Watchdog reset counter**: `[WATCHDOG] Bot loop stuck for Xs — force-reset #N` — `#N` should stay at 0 or grow very slowly. If it climbs, the underlying slow-async-call needs a timeout wrapper.
+- **DB size after next cleanup run** (1×/day per memory): `ml_gatekeeper_log`, `shap_history`, `agent_performance`, `drift_events`, `system_logs` should now show drops in the cleanup result log line.
+- **Crypto.com BTC orders <$10**: now rejected client-side with a clearer error; previously fell through to the exchange's less helpful response.
+- **Short trades in Telegram**: now display "🔵 KRAKEN SHORT" instead of "🔵 KRAKEN BUY". Existing short positions opened before this deploy still show as BUY in their original alert (the alert isn't replayed).
+- **/api/system-config**: any external monitoring that pokes this endpoint will get 503 until ADMIN_API_KEY is set (same as the other C4-gated routes). Localhost works.
+
+**Total fix count across all 4 waves: 49 fixes** — 6 CRITICAL + 16 HIGH (Waves 1-3) + 27 MEDIUM/LOW addressed or deferred-with-rationale (Wave 4). All deployed.
+
+---
+
 ## 2026-05-04 02:00 UTC — Wave-3 audit-driven sweep: 7 fixes (1 CRITICAL + 6 HIGH) — local-claude
 
 **Commits:** `01b1652`, `ffc7b3c`, `3ca7010`, `86d2a66`, `d96f829`, `f54dc3a`, `26ba84b`
