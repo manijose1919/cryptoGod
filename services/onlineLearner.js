@@ -151,9 +151,13 @@ class ThompsonSampler {
 
   /**
    * Serialize for persistence
+   * M15: returns a plain object (NOT a JSON string). Callers that wrap this
+   * in JSON.stringify avoid the double-encoding bug class that 7e80042
+   * fixed in mlPredictionService. deserialize() still accepts both string
+   * and object inputs for back-compat with any old persisted blobs.
    */
   serialize() {
-    return JSON.stringify(this.models);
+    return { ...this.models };
   }
 
   deserialize(json) {

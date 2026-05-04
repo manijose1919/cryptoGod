@@ -125,14 +125,18 @@ class TimeGAN {
       // Supervisor learns to predict next-step embeddings
       const target = embedded.slice([0, 1, 0], [-1, -1, -1]);
       const input = embedded.slice([0, 0, 0], [-1, this.seqLen - 1, -1]);
-      // Pad target to match sequence length
-      const padded = tf.concat([target, tf.zeros([n, 1, this.latentDim])], 1);
+      // M14: tf.zeros(...) was created inline as a concat operand and never
+      // disposed → leaked one tensor per epoch (up to 30 per training run,
+      // shape [n, 1, latentDim]). Bind it to a name so we can dispose.
+      const zeros = tf.zeros([n, 1, this.latentDim]);
+      const padded = tf.concat([target, zeros], 1);
       await this.supervisor.fit(embedded, padded, {
         epochs: 1, batchSize: this.batchSize, verbose: 0
       });
       embedded.dispose();
       target.dispose();
       input.dispose();
+      zeros.dispose();
       padded.dispose();
     }
 
