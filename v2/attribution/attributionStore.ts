@@ -88,6 +88,14 @@ export function initV2Tables(): void {
   try {
     db.exec(`ALTER TABLE v2_trades ADD COLUMN peak_histogram REAL`);
   } catch { /* column already exists */ }
+
+  // Migration (2026-05-04, C2): persist native exchange stop-loss order id.
+  // Without this, when the in-process exit manager closes a trade we have no
+  // way to cancel the native SL — it sits live and can fire on the next price
+  // dip after re-entry, unintentionally selling the fresh position.
+  try {
+    db.exec(`ALTER TABLE v2_trades ADD COLUMN stop_order_id TEXT`);
+  } catch { /* column already exists */ }
 }
 
 // --- Prepared Statements (lazily initialized) ---
@@ -112,14 +120,14 @@ function getInsertStmt() {
         pnl_gross, pnl_net, fees_paid, hold_duration_ms,
         initial_stop, current_stop, take_profit_target, trailing_activated,
         entry_signals, entry_regime, entry_confidence, decision_log, strategy,
-        atr_percent, peak_price, peak_histogram, created_at
+        atr_percent, peak_price, peak_histogram, stop_order_id, created_at
       ) VALUES (
         @id, @ticker, @side, @status, @entryPrice, @entryTime, @entryOrderType,
         @quantity, @positionSizeUsd, @exitPrice, @exitTime, @exitReason,
         @pnlGross, @pnlNet, @feesPaid, @holdDurationMs,
         @initialStop, @currentStop, @takeProfitTarget, @trailingActivated,
         @entrySignals, @entryRegime, @entryConfidence, @decisionLog, @strategy,
-        @atrPercent, @peakPrice, @peakHistogram, @createdAt
+        @atrPercent, @peakPrice, @peakHistogram, @stopOrderId, @createdAt
       )
     `);
   }
@@ -158,8 +166,15 @@ export function insertTrade(trade: V2Trade): void {
     atrPercent: trade.atrPercent ?? null,
     peakPrice: trade.peakPrice ?? null,
     peakHistogram: trade.peakHistogram ?? null,
+    stopOrderId: trade.stopOrderId ?? null,
     createdAt: trade.createdAt,
   });
+}
+
+/** C2: update the native exchange stop-loss order id (e.g., when a stop is moved). */
+export function updateTradeStopOrderId(tradeId: string, stopOrderId: string | null): void {
+  getDb().prepare(`UPDATE v2_trades SET stop_order_id = @stopOrderId WHERE id = @tradeId`)
+    .run({ tradeId, stopOrderId });
 }
 
 export function closeTrade(
@@ -407,6 +422,7 @@ function rowToTrade(row: Record<string, unknown>): V2Trade {
     atrPercent: (row.atr_percent as number) ?? undefined,
     peakPrice: (row.peak_price as number) ?? undefined,
     peakHistogram: (row.peak_histogram as number) ?? undefined,
+    stopOrderId: (row.stop_order_id as string) ?? null,
     createdAt: row.created_at as number,
   };
 }
