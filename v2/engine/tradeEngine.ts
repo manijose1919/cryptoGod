@@ -541,8 +541,20 @@ async function checkOpenExits(): Promise<void> {
       const exitFee = result.exitPrice * trade.quantity * fees.TAKER_PERCENT;
       const totalFees = entryFee + exitFee;
 
-      // In live mode, actually sell
+      // In live mode, actually sell. C2: cancel the native SL FIRST so it
+      // doesn't fire later on the next re-entry's price dip and accidentally
+      // close the fresh position. Cancel is best-effort — if it fails (already
+      // filled, or just rejected), proceed with the market-sell anyway and
+      // let the exchange reject one of the two if it ever races. Logging
+      // captures both cases for diagnosis.
       if (V2_CONFIG.MODE === 'live') {
+        if (trade.stopOrderId) {
+          try {
+            await exchange.cancelOrder(trade.stopOrderId);
+          } catch (e) {
+            console.warn(`[V2] cancelOrder(SL ${trade.stopOrderId}) for ${trade.ticker} failed: ${(e as Error).message} — proceeding with market sell`);
+          }
+        }
         try {
           await exchange.placeMarketSell(trade.ticker, trade.quantity);
         } catch (e) {

@@ -134,6 +134,7 @@ export async function executeTrade(
       entryConfidence: signal.confidence,
       atrPercent: signal.signals.atr_percent,
       peakPrice: price,
+      stopOrderId: null, // C2: paper mode never places a native SL
       decisionLog: [...previousDecisions, decision],
       createdAt: Date.now(),
     };
@@ -183,11 +184,16 @@ export async function executeTrade(
     // if the bot crashes (in-process exitManager wouldn't run). We try 3 times
     // with 1s/2s/4s backoff; if still failing, market-sell the position to close
     // it cleanly rather than holding it naked.
+    // C2: capture the returned orderId so the exit path can cancel the SL
+    // before placing its market-sell (otherwise the SL fires later on the next
+    // re-entry's price dip, accidentally closing the fresh position).
     let slPlaced = false;
     let slError: Error | null = null;
+    let stopOrderId: string | null = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await exchange.placeStopLoss(signal.ticker, fillQty, actualStop);
+        const slResult = await exchange.placeStopLoss(signal.ticker, fillQty, actualStop);
+        stopOrderId = slResult?.orderId ?? null;
         slPlaced = true;
         break;
       } catch (e) {
@@ -244,6 +250,7 @@ export async function executeTrade(
       entryConfidence: signal.confidence,
       atrPercent: signal.signals.atr_percent,
       peakPrice: fillPrice,
+      stopOrderId, // C2: persist for cancellation on managed exit
       decisionLog: [...previousDecisions, decision],
       createdAt: Date.now(),
     };
