@@ -1069,12 +1069,18 @@ export function getNewsItems({ ticker = null, hours = 24, limit = 50 } = {}) {
 }
 
 // --- ML Features ---
+// H2: include `regime` column in insert. The column was added by safeAlter
+// at startup but never written by this insert path, leaving it NULL on every
+// live-loop sample. Regime is also encoded in features_json (index 9 one-hot)
+// so this is for ad-hoc SQL filtering convenience, e.g.
+//   SELECT regime, COUNT(*) FROM ml_features WHERE label='WIN' GROUP BY regime
+// Callers that don't have regime context can omit it (defaults to null).
 export function insertMLFeatures(features) {
   const stmt = getDb().prepare(`
-    INSERT INTO ml_features (ticker, timestamp, features_json, label, label_value, labeled_at)
-    VALUES (@ticker, @timestamp, @featuresJson, @label, @labelValue, @labeledAt)
+    INSERT INTO ml_features (ticker, timestamp, features_json, label, label_value, labeled_at, regime)
+    VALUES (@ticker, @timestamp, @featuresJson, @label, @labelValue, @labeledAt, @regime)
   `);
-  return stmt.run(features);
+  return stmt.run({ regime: null, ...features });
 }
 
 export function getUnlabeledFeatures(limit = 1000) {
@@ -2146,12 +2152,13 @@ export function getLatestLabelingJob() {
 
 export function insertMLFeaturesBatch(samples) {
   const d = getDb();
+  // H2: include regime column (see insertMLFeatures comment above).
   const insert = d.prepare(`
-    INSERT INTO ml_features (ticker, timestamp, features_json, label, label_value, labeled_at)
-    VALUES (@ticker, @timestamp, @featuresJson, @label, @labelValue, @labeledAt)
+    INSERT INTO ml_features (ticker, timestamp, features_json, label, label_value, labeled_at, regime)
+    VALUES (@ticker, @timestamp, @featuresJson, @label, @labelValue, @labeledAt, @regime)
   `);
   const batchInsert = d.transaction((rows) => {
-    for (const row of rows) insert.run(row);
+    for (const row of rows) insert.run({ regime: null, ...row });
   });
   batchInsert(samples);
 }
