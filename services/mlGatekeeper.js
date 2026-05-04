@@ -102,13 +102,15 @@ export function evaluateEntry(ticker, candles, ruleStrategy, ruleStrength, optio
       marketIntelligence: options.marketIntelligence || null,
     });
 
-    // Use only the base feature vector (103 features) for ML prediction.
-    // Do NOT append genetic signals — model was trained on 103 features only.
-    // Appending extra features corrupts the scaler and produces NaN in tree predictions.
+    // Use the base feature vector. Training is aligned to RELIABLE_FEATURE_COUNT
+    // (88) per H1, so predict-time truncation matches train-time vector length.
+    // Do NOT append genetic signals — they'd extend past the model's input dim
+    // and the scaler would clip to 88, producing wrong values.
     const features = featureResult.features;
 
-    // B2: Truncate to reliable features (0-81) to prevent median-imputed
-    // external-API features (82-102) from corrupting tree predictions.
+    // B2 + H1: Truncate to reliable features (0-87) — both training and
+    // prediction now operate on this reliable-only slice. Avoids median-imputed
+    // external-API features at 88+ from corrupting tree predictions.
     const reliableFeatures = truncateToReliableFeatures(features);
 
     // Get ML prediction — use reliable features to avoid NaN from imputed values
