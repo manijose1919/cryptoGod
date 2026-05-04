@@ -337,13 +337,49 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
 
     /**
      * Cancel an open order.
+     *
+     * Accepts both signatures for backward compatibility (C1):
+     *   - cancelOrder(orderId, sessionId)             — uniform with Kraken
+     *   - cancelOrder(orderId, ticker, sessionId)     — original 3-arg form
+     *
+     * When the ticker is missing or empty (the 2-arg form, or 3-arg with
+     * ''/null), look the instrument up via private/get-order-detail. This
+     * matters because executionEngine and most server.js call sites use the
+     * 2-arg form — the old code took `sessionId` as `ticker`, formatTicker'd
+     * it, sent garbage `instrument_name`, and the cancel silently failed
+     * inside the executor's try/catch. The limit order then stayed live
+     * while the fallback market order also fired → double fill.
      */
-    async cancelOrder(orderId, ticker, sessionId) {
-        const instrument = this.formatTicker(ticker);
+    async cancelOrder(orderId, tickerOrSessionId, sessionId) {
+        let ticker, actualSessionId;
+        if (arguments.length <= 2) {
+            // New signature: (orderId, sessionId)
+            ticker = null;
+            actualSessionId = tickerOrSessionId;
+        } else {
+            // Old signature: (orderId, ticker, sessionId)
+            ticker = tickerOrSessionId;
+            actualSessionId = sessionId;
+        }
+
+        let instrument;
+        if (ticker) {
+            instrument = this.formatTicker(ticker);
+        } else {
+            // Look up the instrument from the order itself.
+            const detail = await makeSignedRequest('private/get-order-detail', {
+                order_id: orderId,
+            }, actualSessionId);
+            instrument = detail?.order_info?.instrument_name || detail?.instrument_name;
+            if (!instrument) {
+                throw new Error(`cancelOrder: could not resolve instrument for order ${orderId}`);
+            }
+        }
+
         const result = await makeSignedRequest('private/cancel-order', {
             instrument_name: instrument,
             order_id: orderId,
-        }, sessionId);
+        }, actualSessionId);
 
         return { success: true, orderId, raw: result };
     }
