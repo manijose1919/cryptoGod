@@ -15,7 +15,7 @@ import type { ExchangeAdapter } from '../exchange/types.ts';
 import { scanMarket, getPassedTickers } from '../pipeline/marketScanner.ts';
 import { generateSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
 import { evaluateRisk, getApproved } from '../pipeline/riskGate.ts';
-import { checkExits } from '../pipeline/exitManager.ts';
+import { checkExits, type ExitMutators } from '../pipeline/exitManager.ts';
 
 // Attribution (shared DB, but trades tagged by exchange)
 import { initV2Tables } from '../attribution/attributionStore.ts';
@@ -415,8 +415,18 @@ async function checkEngineExits(engine: EngineInstance): Promise<void> {
 
   const openTrades = Array.from(engine.openTrades.values());
 
+  // H3: paper trades live in engine.openTrades only (never inserted into
+  // v2_trades), so the default DB-backed mutators throw "Trade not found"
+  // and abort the whole exit-check loop. Use in-memory mutators that update
+  // the trade object directly. The trade is already a reference into the
+  // openTrades map, so mutating it persists for the next pass.
+  const inMemoryMutators: ExitMutators = {
+    setStop: (_id, newStop, trade) => { trade.currentStop = newStop; },
+    setTrailingActivated: (_id, trade) => { trade.trailingActivated = true; },
+  };
+
   try {
-    const exitResults = await checkExits(openTrades, engine.adapter);
+    const exitResults = await checkExits(openTrades, engine.adapter, inMemoryMutators);
 
     for (const result of exitResults) {
       if (!result.shouldExit || !result.exitReason) continue;
