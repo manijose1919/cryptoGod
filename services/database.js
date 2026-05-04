@@ -389,7 +389,13 @@ export function initializeDatabase() {
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)`); } catch(e) {}
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`); } catch(e) {}
 
-  // Schema version tracking for future migrations
+  // M9: schema_version table previously created + seeded but never read
+  // or updated by any subsequent migration (the four post-init safeAlter
+  // calls all rely on idempotent try/catch). Future contributors saw it
+  // and assumed it was authoritative — it isn't. Kept as an empty stub
+  // for now (with a comment) instead of dropping, so any analyst tools
+  // querying it don't break. To actually use it, replace safeAlter with
+  // version-gated migrations.
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
       version INTEGER PRIMARY KEY,
@@ -397,10 +403,8 @@ export function initializeDatabase() {
       description TEXT
     );
   `);
-
-  // Insert initial version if not exists
   try {
-    db.exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'Initial schema')`);
+    db.exec(`INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'Initial schema (note: subsequent migrations use safeAlter, this row is not authoritative)')`);
   } catch(e) {}
 
   // Additional indexes for performance
@@ -1167,15 +1171,29 @@ export function getMLAccuracyStats() {
 export function cleanupOldData(daysToKeep = 90) { // Batch 5A: extended from 30→90 days (200GB NVMe)
   const cutoff = Date.now() - (daysToKeep * 24 * 60 * 60 * 1000);
   const results = {};
-  results.exchangeSnapshots = getDb().prepare('DELETE FROM exchange_snapshots WHERE timestamp < ?').run(cutoff).changes;
-  results.derivativesData = getDb().prepare('DELETE FROM derivatives_data WHERE timestamp < ?').run(cutoff).changes;
-  results.defiSnapshots = getDb().prepare('DELETE FROM defi_snapshots WHERE timestamp < ?').run(cutoff).changes;
-  results.newsItems = getDb().prepare('DELETE FROM news_items WHERE created_at < ?').run(cutoff).changes;
-  results.mlFeatures = getDb().prepare('DELETE FROM ml_features WHERE created_at < ?').run(cutoff).changes;
-  results.mlPredictions = getDb().prepare('DELETE FROM ml_predictions WHERE timestamp < ?').run(cutoff).changes;
-  results.equitySnapshots = getDb().prepare('DELETE FROM equity_snapshots WHERE time < ?').run(cutoff).changes;
-  results.sessionTrades = getDb().prepare('DELETE FROM session_trades WHERE time < ?').run(cutoff).changes;
-  results.mlThoughts = getDb().prepare('DELETE FROM ml_thoughts WHERE time < ?').run(cutoff).changes;
+  // Best-effort per table — `IF EXISTS` not available in SQLite DELETE,
+  // so wrap each in try/catch. A missing table won't block the others.
+  const sweep = (key, sql) => {
+    try { results[key] = getDb().prepare(sql).run(cutoff).changes; }
+    catch (e) { results[key] = `skip:${e.message}`; }
+  };
+  sweep('exchangeSnapshots', 'DELETE FROM exchange_snapshots WHERE timestamp < ?');
+  sweep('derivativesData', 'DELETE FROM derivatives_data WHERE timestamp < ?');
+  sweep('defiSnapshots', 'DELETE FROM defi_snapshots WHERE timestamp < ?');
+  sweep('newsItems', 'DELETE FROM news_items WHERE created_at < ?');
+  sweep('mlFeatures', 'DELETE FROM ml_features WHERE created_at < ?');
+  sweep('mlPredictions', 'DELETE FROM ml_predictions WHERE timestamp < ?');
+  sweep('equitySnapshots', 'DELETE FROM equity_snapshots WHERE time < ?');
+  sweep('sessionTrades', 'DELETE FROM session_trades WHERE time < ?');
+  sweep('mlThoughts', 'DELETE FROM ml_thoughts WHERE time < ?');
+  // M10: also retire ML monitoring tables that grow ~17K rows/day at 5s
+  // loop interval (per memory). Without these, db bloat over time + slow
+  // backups + slow queries.
+  sweep('mlGatekeeperLog', 'DELETE FROM ml_gatekeeper_log WHERE created_at < ?');
+  sweep('shapHistory', 'DELETE FROM shap_history WHERE created_at < ?');
+  sweep('agentPerformance', 'DELETE FROM agent_performance WHERE created_at < ?');
+  sweep('driftEvents', 'DELETE FROM drift_events WHERE created_at < ?');
+  sweep('systemLogs', 'DELETE FROM system_logs WHERE created_at < ?');
   console.log(`[Database] Cleanup: removed old data older than ${daysToKeep} days`, results);
   return results;
 }
