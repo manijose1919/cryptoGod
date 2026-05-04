@@ -18,6 +18,21 @@ import { V2_CONFIG } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 import { updateTradeStop, markTrailingActivated } from '../attribution/attributionStore.ts';
 
+// H3: ExitMutators allow callers to swap the persistence backend. The default
+// (DB-backed) writes through attributionStore. Dual-engine paper trades live
+// in an in-memory Map and aren't in v2_trades, so they pass in-memory mutators
+// that update the trade object directly — without this, updateTradeStop's
+// `Trade not found` throw used to abort the entire exit-check loop.
+export interface ExitMutators {
+  setStop(tradeId: string, newStop: number, trade: V2Trade): void;
+  setTrailingActivated(tradeId: string, trade: V2Trade): void;
+}
+
+const DEFAULT_DB_MUTATORS: ExitMutators = {
+  setStop: (tradeId, newStop) => updateTradeStop(tradeId, newStop),
+  setTrailingActivated: (tradeId) => markTrailingActivated(tradeId),
+};
+
 // --- Result Interface ---
 
 export interface ExitResult {
@@ -64,6 +79,7 @@ function makeDecision(
 export async function checkExits(
   openTrades: V2Trade[],
   exchange: ExchangeAdapter,
+  mutators: ExitMutators = DEFAULT_DB_MUTATORS,
 ): Promise<ExitResult[]> {
   const results: ExitResult[] = [];
 
@@ -136,7 +152,7 @@ export async function checkExits(
       const breakEvenStop = trade.entryPrice * 1.001; // Slightly above entry to cover slippage
       if (breakEvenStop > trade.currentStop) {
         newStop = breakEvenStop;
-        updateTradeStop(trade.id, newStop);
+        mutators.setStop(trade.id, newStop, trade);
       }
     }
 
@@ -155,7 +171,7 @@ export async function checkExits(
       const tighterStop = trade.entryPrice - (trade.entryPrice * trade.atrPercent / 100) * V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
       if (tighterStop > trade.currentStop) {
         newStop = tighterStop;
-        updateTradeStop(trade.id, newStop);
+        mutators.setStop(trade.id, newStop, trade);
       }
     }
 
@@ -165,7 +181,7 @@ export async function checkExits(
     if (pnlPercent >= V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
       // Activate trailing if not yet active
       if (!trade.trailingActivated) {
-        markTrailingActivated(trade.id);
+        mutators.setTrailingActivated(trade.id, trade);
         trailingJustActivated = true;
       }
 
@@ -192,7 +208,7 @@ export async function checkExits(
       // Stops can only tighten (go up for longs) — use the higher of computed vs existing
       if (trailingStop > trade.currentStop) {
         newStop = trailingStop;
-        updateTradeStop(trade.id, newStop);
+        mutators.setStop(trade.id, newStop, trade);
       } else {
         // DB stop may be higher than what we just computed (market whipped down)
         newStop = Math.max(newStop, trade.currentStop);
