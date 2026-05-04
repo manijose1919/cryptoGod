@@ -3,7 +3,13 @@
  *
  * Monitors both Kraken and Crypto.com for staking opportunities.
  * Auto-stakes assets not needed for trading in the next 24h.
- * Auto-unstakes when trading signals require the capital.
+ *
+ * **NOT auto-unstake** (M4): the docstring used to claim auto-unstake
+ * but no caller exists in the trading path. setActiveTradingAssets
+ * prevents *new* stakes on assets the bot is trading, but if an asset
+ * gets staked and then a buy signal fires, the order will fail with
+ * insufficient balance until the unstake period elapses (e.g., DOT
+ * has a 28-day unstake window). Treat staking as one-way for now.
  *
  * Kraken staking: ETH ~3.5%, DOT ~12%, SOL ~7%, ADA ~3%
  * Crypto.com earn: BTC ~1.5%, ETH ~3%, CRO ~6%, stablecoins ~4-8%
@@ -29,6 +35,7 @@ export interface StakedPosition {
   asset: string;
   quantity: number;
   stakedAt: number;
+  lastAccrueAt: number;   // M3: last time accrueRewards updated this position
   apy: number;
   lockUntil: number;      // 0 if flexible
   earnedReward: number;
@@ -160,6 +167,7 @@ class StakingEngine {
             asset,
             quantity: stakeAmount,
             stakedAt: Date.now(),
+            lastAccrueAt: Date.now(),  // M3
             apy: product.apy,
             lockUntil: product.lockPeriod > 0 ? Date.now() + product.lockPeriod * 86400000 : 0,
             earnedReward: 0,
@@ -205,11 +213,16 @@ class StakingEngine {
     const now = Date.now();
     for (const pos of this.stakedPositions) {
       if (pos.status !== 'staking') continue;
-      // Calculate reward since last check (hourly interval)
-      const hoursElapsed = Math.min(1.0, (now - pos.stakedAt) / (1000 * 60 * 60));
+      // M3: accrue based on time since LAST accrual, not stakedAt. Old code
+      // used `min(1.0, (now - stakedAt) / 1h)` which assumed perfect hourly
+      // ticks; any drift, missed interval, or restart skipped reward
+      // permanently. Now: track lastAccrueAt and bill the actual delta
+      // (capped at a sane upper bound to prevent backfill explosions).
+      const since = pos.lastAccrueAt || pos.stakedAt;
+      const hoursElapsed = Math.max(0, Math.min(24, (now - since) / 3600000));
       const hourlyRate = pos.apy / 100 / 8760; // APY to hourly
-      const reward = pos.quantity * hourlyRate * hoursElapsed;
-      pos.earnedReward += reward;
+      pos.earnedReward += pos.quantity * hourlyRate * hoursElapsed;
+      pos.lastAccrueAt = now;
     }
   }
 

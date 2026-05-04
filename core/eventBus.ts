@@ -26,6 +26,13 @@ export interface EntryEvent extends TradeEvent {
   maxHoldHours: number;
   reason: string;
   mlConfidence?: number;
+  /**
+   * M6: distinguishes long vs short entries when both share `type: 'BUY'`.
+   * Optional for back-compat (defaults to 'long' in consumers). Short
+   * trades from shortSellingEngine set this to 'short' so Telegram and
+   * other subscribers can render the correct label.
+   */
+  direction?: 'long' | 'short';
 }
 
 export interface ExitEvent extends TradeEvent {

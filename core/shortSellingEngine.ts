@@ -219,9 +219,10 @@ class ShortSellingEngine {
       `TP: $${position.takeProfitPrice.toFixed(2)}`
     );
 
-    // Emit entry event (tagged as short)
+    // Emit entry event (tagged as short via direction='short' — M6)
     tradingBus.emit('trade:entry', {
       type: 'BUY',
+      direction: 'short',
       exchange,
       ticker,
       price: entryPrice,
