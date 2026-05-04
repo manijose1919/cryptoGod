@@ -1,9 +1,23 @@
 /**
  * ArbitrageEngine — Cross-exchange arbitrage detection and execution.
  *
- * Monitors price differences between Kraken and Crypto.com.
- * When spread exceeds combined fees (>0.40%), executes simultaneous trades.
- * Buy on cheaper exchange, sell on expensive exchange.
+ * **DISABLED (2026-05-04, H10).** This engine is shipped as a no-op.
+ * Three high-severity issues identified in audit:
+ *   1. Phantom signals: getPrice synthesizes bid/ask as price ± 0.025% instead
+ *      of fetching real top-of-book; can fire on a 0.4% spread that's actually
+ *      zero or negative when measured from real bid/ask.
+ *   2. No leg-failure rollback: scan/execute uses Promise.all on the two legs
+ *      — if buy fills and sell rejects, you're left with an unhedged position
+ *      and no closing trade.
+ *   3. setCommonTickers is never called, so the engine was scanning [] and
+ *      effectively idle in production already.
+ *
+ * Re-enabling requires:
+ *   - Real-orderbook bid/ask via adapter.getOrderBook(ticker, 1).
+ *   - Promise.allSettled with partial-fill detection + immediate market-close
+ *     of the lone successful leg + a critical risk:alert.
+ *   - A wired setCommonTickers caller.
+ * Until then, start() is a no-op and the engine emits no opportunities.
  */
 
 import tradingBus from './eventBus.ts';
@@ -96,9 +110,11 @@ class ArbitrageEngine {
   }
 
   start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.scan(), this.scanIntervalMs);
-    console.log('[ArbitrageEngine] Started — scanning every', this.scanIntervalMs, 'ms');
+    // H10: engine disabled. See file-header comment for the issues + the
+    // re-enable checklist. start() is a no-op so callers don't need to be
+    // touched, and the existing scan/execute code remains in the file as
+    // a reference implementation for the eventual rewrite.
+    console.log('[ArbitrageEngine] DISABLED — see file header for re-enable checklist');
   }
 
   stop(): void {
