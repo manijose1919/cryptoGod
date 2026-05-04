@@ -85,8 +85,23 @@ class FeatureScaler {
   }
 
   transformRow(row) {
-    // Truncate row to scaler's trained dimensions if longer (e.g., 109 features → 103 scaler)
+    // M16: hard guard against missing scaler. If scaler.means is empty
+    // (e.g., a model deserialized with the pre-7e80042 double-encode bug),
+    // the old code returned [] and tree.predict then read undefined for
+    // every feature index → silently biased predictions. Now: detect the
+    // empty-scaler state and return the raw row with a rate-limited warn
+    // so the operator knows the next retrain will fix it. Returning the
+    // raw row is no worse than returning all zeros (which is what an
+    // unfit scaler would do anyway, since means/stds are 0).
     const scalerLen = this.means.length;
+    if (scalerLen === 0) {
+      if (!this._scalerWarnedAt || Date.now() - this._scalerWarnedAt > 300_000) {
+        console.warn('[MLEngine] transformRow: scaler is empty (model deserialized without scaler data?). Returning raw row — predictions will be biased until next retrain.');
+        this._scalerWarnedAt = Date.now();
+      }
+      return row.slice();
+    }
+    // Truncate row to scaler's trained dimensions if longer (e.g., 109 features → 88 scaler)
     const slice = row.length > scalerLen ? row.slice(0, scalerLen) : row;
     return slice.map((val, i) => {
       const cleaned = isNaN(val) || !isFinite(val) ? 0 : val;
