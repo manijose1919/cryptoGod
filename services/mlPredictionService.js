@@ -12,7 +12,7 @@
  */
 
 // Imports with resilient error handling
-let buildFeatureVector, FEATURE_COUNT, getFeatureNames;
+let buildFeatureVector, FEATURE_COUNT, RELIABLE_FEATURE_COUNT, truncateToReliableFeatures, getFeatureNames;
 let MLEngine;
 let MarketAnomalyDetector;
 let db;
@@ -26,6 +26,8 @@ try {
   const featureModule = await import('./featureEngineering.js');
   buildFeatureVector = featureModule.buildFeatureVector;
   FEATURE_COUNT = featureModule.FEATURE_COUNT;
+  RELIABLE_FEATURE_COUNT = featureModule.RELIABLE_FEATURE_COUNT;
+  truncateToReliableFeatures = featureModule.truncateToReliableFeatures;
   getFeatureNames = featureModule.getFeatureNames;
 } catch (err) {
   console.error('[ML Prediction] Failed to import featureEngineering.js:', err.message);
@@ -457,6 +459,7 @@ export async function shouldTradeML(ticker, candles, strategy, options = {}) {
           label: null,
           labelValue: null,
           labeledAt: null,
+          regime: marketRegime || null,  // H2: now actually populated
         });
       }
     } catch (err) {
@@ -1082,18 +1085,27 @@ export async function trainModel() {
     const labels = [];
     const sampleWeights = [];
 
+    // H1: align training feature dimension to RELIABLE_FEATURE_COUNT (88) so
+    // it matches what the gatekeeper feeds at predict time. Previously training
+    // padded/truncated to FEATURE_COUNT (109) but gatekeeper truncated to 88
+    // before predicting -- any tree split node with featureIndex >= 88 read
+    // undefined and silently skewed predictions. Honors the original B2 design:
+    // reliable features only (0-87), avoid imputed external-API features that
+    // can be NaN/median-filled.
+    const TRAIN_FEATURE_COUNT = RELIABLE_FEATURE_COUNT || 88;
+
     for (const sample of labeledSamples) {
       try {
         const features = JSON.parse(sample.features_json);
         // Accept any array with at least 15 features (handles 103, 109, or 146-length vectors)
-        // Pad short vectors with zeros, truncate long vectors to FEATURE_COUNT
+        // Pad short vectors with zeros, truncate long vectors to TRAIN_FEATURE_COUNT
         if (Array.isArray(features) && features.length >= 15) {
           let normalizedFeatures;
-          if (features.length >= FEATURE_COUNT) {
-            normalizedFeatures = features.slice(0, FEATURE_COUNT);
+          if (features.length >= TRAIN_FEATURE_COUNT) {
+            normalizedFeatures = features.slice(0, TRAIN_FEATURE_COUNT);
           } else {
-            // Pad with zeros to reach FEATURE_COUNT
-            normalizedFeatures = [...features, ...new Array(FEATURE_COUNT - features.length).fill(0)];
+            // Pad with zeros to reach TRAIN_FEATURE_COUNT
+            normalizedFeatures = [...features, ...new Array(TRAIN_FEATURE_COUNT - features.length).fill(0)];
           }
           features2D.push(normalizedFeatures);
           labels.push(sample.label === 'UP' || sample.label === 'WIN' ? 1 : 0);
