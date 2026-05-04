@@ -52,6 +52,11 @@ export function initV2Tables(): void {
     CREATE INDEX IF NOT EXISTS idx_v2_trades_status ON v2_trades(status);
     CREATE INDEX IF NOT EXISTS idx_v2_trades_ticker ON v2_trades(ticker);
     CREATE INDEX IF NOT EXISTS idx_v2_trades_created_at ON v2_trades(created_at);
+    -- M11: composite index on (status, entry_time) — every CHANGELOG
+    -- monitoring query and the standing-rule baseline filter use
+    -- WHERE status = ? AND entry_time > ?. Without this, full table scan.
+    -- entry_time is millisecond timestamps; created_at is unixepoch seconds.
+    CREATE INDEX IF NOT EXISTS idx_v2_trades_status_entry_time ON v2_trades(status, entry_time);
 
     CREATE TABLE IF NOT EXISTS v2_signal_scores (
       signal_name TEXT PRIMARY KEY,
