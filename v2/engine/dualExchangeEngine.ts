@@ -180,7 +180,11 @@ function simulateEntry(
   };
 
   engine.openTrades.set(trade.id, trade);
-  engine.budget -= entryFee; // Deduct entry fee
+  // H6: do NOT deduct entryFee from budget here. The entry fee is accounted
+  // for in pnlNet on close (totalFees = entryFee + exitFee). The previous
+  // code subtracted it here AND included it in totalFees on close, so equity
+  // (= budget + totalPnl) double-counted entry fees. Now: budget is unchanged
+  // at entry; close-time pnlNet captures both legs of the fee.
   engine.stats.totalTrades++;
 
   return trade;
@@ -378,7 +382,7 @@ async function runEngineLoop(engine: EngineInstance): Promise<void> {
     // ── Risk Gate (with engine-specific portfolio) ──
     const portfolio = buildPortfolioForEngine(engine);
     const cbState = { dailyPnlPercent: 0, lastLossTime: 0 };
-    const riskResults = evaluateRisk(passedSignals, portfolio, cbState);
+    const riskResults = evaluateRisk(passedSignals, portfolio, cbState, engine.adapter?.getName() ?? 'kraken');
     const approved = getApproved(riskResults);
     engine.stats.rejectedByRisk += riskResults.length - approved.length;
 
@@ -419,13 +423,13 @@ async function checkEngineExits(engine: EngineInstance): Promise<void> {
 
       const trade = result.trade;
 
-      // Calculate fees
+      // Calculate fees. H6: exits ALWAYS go via placeMarketSell (taker), so
+      // use TAKER_PERCENT regardless of exit reason. Old code applied maker
+      // for take_profit/trailing, under-counting fees by ~0.10% per planned
+      // exit and inflating recorded P&L vs the real exchange charge. Mirrors
+      // commit fa3e878 which fixed the same bug in main tradeEngine.ts.
       const entryFee = trade.feesPaid;
-      const exitFee = result.exitPrice * trade.quantity * (
-        result.exitReason === 'take_profit' || result.exitReason === 'trailing'
-          ? engine.fees.MAKER_PERCENT
-          : engine.fees.TAKER_PERCENT
-      );
+      const exitFee = result.exitPrice * trade.quantity * engine.fees.TAKER_PERCENT;
       const totalFees = entryFee + exitFee;
 
       const pnlGross = (result.exitPrice - trade.entryPrice) * trade.quantity;

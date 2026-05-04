@@ -148,20 +148,37 @@ export const MR_CONFIG = {
 
 // --- Exchange-specific fee configs ---
 
+// ROUND_TRIP_REAL: maker entry + taker exit. This is the true cost when
+// USE_MAKER_ORDERS=true: entries fill as maker, but every exit goes through
+// placeMarketSell (taker) per tradeEngine.ts:541-548. Use this for any
+// gating logic that's deciding whether expected-return covers actual fees.
 export const EXCHANGE_FEES = {
   kraken: {
     TAKER_PERCENT: 0.0026,
     MAKER_PERCENT: 0.0016,
     ROUND_TRIP_TAKER: 0.0052,
     ROUND_TRIP_MAKER: 0.0032,
+    ROUND_TRIP_REAL: 0.0042, // 0.16% maker entry + 0.26% taker exit
   },
   'crypto.com': {
     TAKER_PERCENT: 0.00075,
     MAKER_PERCENT: 0.00050,
     ROUND_TRIP_TAKER: 0.0015,
     ROUND_TRIP_MAKER: 0.0010,
+    ROUND_TRIP_REAL: 0.00125, // 0.05% maker entry + 0.075% taker exit
   },
 } as const;
+
+/**
+ * Look up the fee table for an exchange by name. Defaults to Kraken if the
+ * name is unknown — callers should pass exchange.getName() so this never
+ * silently picks the wrong table when running on Crypto.com.
+ */
+export function getExchangeFees(exchangeName: string) {
+  const key = exchangeName.toLowerCase();
+  if (key === 'crypto.com' || key === 'cryptocom') return EXCHANGE_FEES['crypto.com'];
+  return EXCHANGE_FEES.kraken;
+}
 
 // --- Dual Exchange Competition Config ---
 
