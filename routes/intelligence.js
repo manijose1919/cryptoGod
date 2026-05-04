@@ -1,13 +1,16 @@
 import { Router } from 'express';
 import { createLogger } from '../services/logger.js';
+import { requireAdminAuth } from '../middleware/adminAuth.js';
 
 const log = createLogger('Intelligence');
 
 export default function createIntelligenceRouter(ctx) {
     const router = Router();
 
-    // POST /ai/analyze
-    router.post('/ai/analyze', async (req, res, next) => {
+    // POST /ai/analyze (C4: admin-gated — endpoint forwards arbitrary prompts
+    // to the Anthropic API using the server's ANTHROPIC_API_KEY. Anyone with
+    // network reach could otherwise drain billing in a loop.)
+    router.post('/ai/analyze', requireAdminAuth, async (req, res, next) => {
         try {
             const { prompt, context, ticker, signals, sentiment, marketData } = req.body;
 

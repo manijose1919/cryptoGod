@@ -988,8 +988,11 @@ let trainingRoutes = null;
 try {
     const mod = await import('./routes/training.js');
     trainingRoutes = mod.default;
-    app.use('/api/training', trainingRoutes);
-    console.log('[Server] Training routes loaded');
+    // C4: training endpoints are heavy compute + can starve the ML worker if
+    // hammered. Gate behind shared API key (localhost exempt for dashboard).
+    const { requireAdminAuth: _adm } = await import('./middleware/adminAuth.js');
+    app.use('/api/training', _adm, trainingRoutes);
+    console.log('[Server] Training routes loaded (admin-auth required from non-localhost)');
 } catch (e) {
     console.warn('[Server] Training routes not available:', e.message);
 }

@@ -14,6 +14,7 @@ import {
   insertSentimentSnapshot, getSentimentHistory,
   setSetting, getSetting, getAllSettings,
 } from '../services/database.js';
+import { requireAdminAuth } from '../middleware/adminAuth.js';
 
 const router = express.Router();
 
@@ -308,7 +309,11 @@ router.get('/settings/:key', (req, res, next) => {
   }
 });
 
-router.put('/settings/:key', (req, res, next) => {
+// PUT /settings/:key — C4: admin-gated. The audit found this endpoint allowed
+// arbitrary settings writes including stats_baseline_time (which affects all
+// reports/monitoring filtering). No auth meant any reachable client could
+// nuke the baseline. Now: localhost exempt, otherwise X-API-Key required.
+router.put('/settings/:key', requireAdminAuth, (req, res, next) => {
   try {
     const { value } = req.body;
     if (value === undefined || value === null) {

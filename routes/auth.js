@@ -2,6 +2,7 @@ import { Router } from 'express';
 import crypto from 'node:crypto';
 import { createLogger } from '../services/logger.js';
 import { validateBody } from '../middleware/validate.js';
+import { requireAdminAuth } from '../middleware/adminAuth.js';
 
 const log = createLogger('Auth');
 
@@ -90,8 +91,8 @@ export default function createAuthRouter(ctx) {
         }
     });
 
-    // GET /debug-balance — temporary debug endpoint
-    router.get('/debug-balance', async (req, res) => {
+    // GET /debug-balance — temporary debug endpoint (C4: admin-gated)
+    router.get('/debug-balance', requireAdminAuth, async (req, res) => {
         try {
             const sessionId = ctx.botState.sessionId;
             if (!sessionId) return res.status(400).json({ error: 'No active session. Login first.' });
@@ -103,8 +104,11 @@ export default function createAuthRouter(ctx) {
         }
     });
 
-    // GET /ws-auth
-    router.get('/ws-auth', (req, res) => {
+    // GET /ws-auth (C4: admin-gated — endpoint returns a signed Crypto.com WS
+    // auth payload using the server's session keys. An attacker with this
+    // payload can authenticate as the user against Crypto.com WS within the
+    // signature replay window.)
+    router.get('/ws-auth', requireAdminAuth, (req, res) => {
         try {
             const apiKey = process.env.SESSION_API_KEY;
             const secretKey = process.env.SESSION_SECRET_KEY;

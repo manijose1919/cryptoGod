@@ -5,6 +5,7 @@
  */
 
 import { Router } from 'express';
+import { requireAdminAuth } from '../middleware/adminAuth.js';
 
 export default function createEngineRouter(ctx) {
   const router = Router();
@@ -64,7 +65,7 @@ export default function createEngineRouter(ctx) {
    * Start a trading engine.
    * Body: { mode: 'SIMULATION' | 'REAL', budget: number, tickers?: string[] }
    */
-  router.post('/engines/:exchange/start', async (req, res) => {
+  router.post('/engines/:exchange/start', requireAdminAuth, async (req, res) => {
     const engine = getEngine(ctx, req.params.exchange);
     if (!engine) return res.status(404).json({ error: 'Engine not found' });
 
@@ -82,7 +83,7 @@ export default function createEngineRouter(ctx) {
   /**
    * POST /api/engines/:exchange/pause
    */
-  router.post('/engines/:exchange/pause', async (req, res) => {
+  router.post('/engines/:exchange/pause', requireAdminAuth, async (req, res) => {
     try {
       const engine = getEngine(ctx, req.params.exchange);
       if (!engine) return res.status(404).json({ error: 'Engine not found' });
@@ -94,7 +95,7 @@ export default function createEngineRouter(ctx) {
   /**
    * POST /api/engines/:exchange/resume
    */
-  router.post('/engines/:exchange/resume', async (req, res) => {
+  router.post('/engines/:exchange/resume', requireAdminAuth, async (req, res) => {
     try {
       const engine = getEngine(ctx, req.params.exchange);
       if (!engine) return res.status(404).json({ error: 'Engine not found' });
@@ -106,7 +107,7 @@ export default function createEngineRouter(ctx) {
   /**
    * POST /api/engines/:exchange/stop
    */
-  router.post('/engines/:exchange/stop', async (req, res) => {
+  router.post('/engines/:exchange/stop', requireAdminAuth, async (req, res) => {
     try {
       const engine = getEngine(ctx, req.params.exchange);
       if (!engine) return res.status(404).json({ error: 'Engine not found' });
@@ -120,7 +121,7 @@ export default function createEngineRouter(ctx) {
    * Switch between SIMULATION and REAL.
    * Body: { mode: 'SIMULATION' | 'REAL' }
    */
-  router.post('/engines/:exchange/mode', (req, res) => {
+  router.post('/engines/:exchange/mode', requireAdminAuth, (req, res) => {
     const engine = getEngine(ctx, req.params.exchange);
     if (!engine) return res.status(404).json({ error: 'Engine not found' });
 
