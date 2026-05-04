@@ -230,11 +230,28 @@ router.get('/candles', (req, res, next) => {
       return res.status(400).json({ message: 'Missing required params: ticker, timeframe' });
     }
     const limit = Math.min(parseInt(req.query.limit) || 1000, 10000);
+    // M12: validate timestamps as finite numbers. parseInt('2024-01-01')
+    // silently returns 2024 (interpreted as ms = 1970), and 'abc' returns
+    // NaN making `time >= NaN` always false → empty result with no error.
+    // Reject malformed input instead of silently returning nothing.
+    const parseTs = (v) => {
+      if (v === undefined || v === null || v === '') return null;
+      const n = Number(v);
+      if (!Number.isFinite(n)) throw Object.assign(new Error(`Invalid timestamp: ${v} (must be a millisecond integer)`), { status: 400 });
+      return n;
+    };
+    let parsedStart, parsedEnd;
+    try {
+      parsedStart = parseTs(start);
+      parsedEnd = parseTs(end);
+    } catch (e) {
+      return res.status(e.status || 400).json({ message: e.message });
+    }
     const candles = getCandles({
       ticker,
       timeframe,
-      start: start ? parseInt(start) : null,
-      end: end ? parseInt(end) : null,
+      start: parsedStart,
+      end: parsedEnd,
       limit,
     });
     const total = getCandleCount(ticker, timeframe);
