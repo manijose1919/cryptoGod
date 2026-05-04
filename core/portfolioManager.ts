@@ -7,7 +7,23 @@
 
 import tradingBus from './eventBus.ts';
 import type { EntryEvent, ExitEvent } from './eventBus.ts';
-import type { TradingEngine } from './TradingEngine.ts';
+
+// Minimal duck-typed interface for whatever object server.js registers as an
+// engine. The original TradingEngine class was deleted (H9: dead code, never
+// instantiated outside of docs); the actual call site passes a plain
+// `engineBridge` object built in server.js around L7268-7279.
+interface TradingEngine {
+  getStatus(): {
+    initialBudget?: number;
+    currentEquity?: number;
+    [k: string]: unknown;
+  };
+  getPortfolio(): {
+    cash: number;
+    initialBudget: number;
+    positions: Record<string, { quantity?: number; [k: string]: unknown }>;
+  };
+}
 
 // ─── Types ───────────────────────────────────────────────────
 
