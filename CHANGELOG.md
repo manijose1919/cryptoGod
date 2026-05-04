@@ -37,6 +37,46 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-04 02:00 UTC — Wave-3 audit-driven sweep: 7 fixes (1 CRITICAL + 6 HIGH) — local-claude
+
+**Commits:** `01b1652`, `ffc7b3c`, `3ca7010`, `86d2a66`, `d96f829`, `f54dc3a`, `26ba84b`
+**Files changed:** `services/database.js`, `services/mlPredictionService.js`, `services/mlGatekeeper.js`, `core/TradingEngine.ts` (deleted), `core/portfolioManager.ts`, `core/arbitrageEngine.ts`, `v2/pipeline/types.ts`, `v2/attribution/attributionStore.ts`, `v2/engine/tradeEngine.ts`, `v2/pipeline/executor.ts`, `v2/pipeline/exitManager.ts`, `v2/engine/dualExchangeEngine.ts`, `middleware/adminAuth.js` (new), `server.js`, `routes/engines.js`, `routes/auth.js`, `routes/intelligence.js`, `routes/persistence.js`
+**Stats baseline reset:** no (bug fixes / hardening — keep continuous stats)
+
+**What changed:**
+The 7 audit items that were blocked on user decisions in Waves 1-2. User authorized "best judgment" on each; decisions documented in commit messages.
+
+1. **`01b1652` H2 — `regime` wired into ml_features inserts.** Schema column was added but never written by insertMLFeatures/insertMLFeaturesBatch (NULL on every live-loop sample). Investigation: regime is also encoded in features_json index 9, but transfer-samples.mjs writes to the column, and ad-hoc SQL filtering by regime is genuinely useful. Fix: extend both insert helpers to accept regime (default null for back-compat); mlPredictionService now passes marketRegime through.
+2. **`ffc7b3c` H9 cleanup** — replace TradingEngine type-only import in portfolioManager with inline EngineLike interface (companion to the deletion that landed in 01b1652).
+3. **`3ca7010` H10 — arbitrageEngine disabled.** start() is a no-op. Three high-sev issues (synthetic bid/ask, no leg-failure rollback, setCommonTickers never called → idle anyway). Re-enable checklist documented at file head. Code preserved as reference for eventual rewrite.
+4. **`86d2a66` H1 — ML feature count aligned at 88.** Training previously padded to 109; gatekeeper truncated to 88 before predicting → tree split nodes with featureIndex >= 88 read undefined → silent prediction skew. Now both train and predict use RELIABLE_FEATURE_COUNT (88) — honors original B2 design (avoid imputed external-API features). Existing 109-trained models in DB remain mismatched until next retrain (~30 min); after one retrain cycle, alignment is permanent.
+5. **`d96f829` C2 — V2 native SL bookkeeping.** Added stop_order_id column + idempotent migration. V2Trade gains optional stopOrderId. Executor captures from placeStopLoss return; tradeEngine cancels the SL order before placeMarketSell on managed exits — prevents stale SL from firing on next re-entry's price dip and accidentally closing the fresh position.
+6. **`f54dc3a` H3 — dual-engine paper exits actually run BE/trailing/quick-kill.** checkExits previously called updateTradeStop/markTrailingActivated which threw "Trade not found" for in-memory paper trades, aborting the entire exit-check loop. Refactor: checkExits accepts an optional ExitMutators interface (default = DB-backed, zero behavior change for production); dual engine passes in-memory mutators that mutate the trade object directly.
+7. **`26ba84b` C4 — shared-API-key auth on sensitive endpoints.** New middleware/adminAuth.js: localhost exempt, otherwise X-API-Key header must match `ADMIN_API_KEY` env (default-deny if env unset → 503). Applied to: POST /api/engines/:exchange/{start,stop,pause,resume,mode}, POST /api/training/*, GET /api/auth/{ws-auth,debug-balance}, POST /api/ai/analyze, PUT /api/db/settings/:key.
+
+**Why:**
+Closes the audit's "gray-area" items where a design decision was needed before fixing. User explicitly delegated each call ("whatever you think is best", "yes", "fix it", etc). For C4, chose targeted endpoint gating (vs whole-server localhost-only) so the dashboard still works remotely once the user sets `ADMIN_API_KEY`.
+
+**Operational note (C4):**
+Until you set `ADMIN_API_KEY` in the VPS environment, all the gated endpoints will return `503 {error: "Admin endpoint disabled..."}` from non-localhost clients. To enable:
+  1. SSH to VPS, edit /opt/trading-bot/.env, add `ADMIN_API_KEY=<your-secret>`.
+  2. `pm2 restart canuck-node --update-env`.
+  3. From any remote dashboard / curl client, send `X-API-Key: <your-secret>` header on the gated routes.
+Localhost callers (same-machine UI, server-side internal calls) keep working with no header — no behavior change.
+
+**What to monitor / watch for:**
+- **`stop_order_id` column** populates after the next live trade entry. Verify: `SELECT id, ticker, stop_order_id FROM v2_trades WHERE entry_time > <baseline> AND status='open'` — should be non-null for live-mode trades, null for SIM/paper.
+- **Stale-stop incidents**: previously, after a managed exit + re-entry on the same ticker within seconds, the old native SL could fire on the fresh position. Should stop happening. Search PM2 logs for `cancelOrder(SL ` to confirm cancels are firing during exits.
+- **Dual-engine BE/trailing/quick-kill rates**: previously zero (silently aborted). Should now show non-zero counts in dual-engine close stats. Compare `engine.stats.exitsByReason` if exposed; or query closed dual trades' exitReason distribution.
+- **ML model retrain**: within 30 min of deploy, the next retrain will produce an 88-feature model. Verify scaler.means.length=88 in the next saved model. Until then, the existing 109-trained models in DB still mismatch the gatekeeper's 88-feature input — but that's the same state we had before the fix.
+- **Crypto.com auth log noise**: arbitrageEngine.start() being a no-op means no more "[ArbitrageEngine] Started — scanning every 2000ms" log on boot. Boot log will show "[ArbitrageEngine] DISABLED" instead.
+- **Auth 401/503 spikes** in logs after deploy: if any client (frontend, internal script, monitoring) was calling the gated endpoints from a non-localhost address without a key, it'll start getting 503. Set ADMIN_API_KEY and pass it as `X-API-Key` to fix.
+
+**What's next:**
+- **Wave 4**: 27 MEDIUM + LOW items, queued. Many are silent-failure/cleanup patterns from the audit. Lower urgency than Waves 1-3.
+
+---
+
 ## 2026-05-03 23:55 UTC — Wave-2 audit-driven sweep: 8 fixes (CRITICAL+HIGH) — local-claude
 
 **Commits:** `29f2e26`, `3669c68`, `ecc355c`, `8c58d3d`, `66d8953`, `45475b4`
