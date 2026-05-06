@@ -45,12 +45,39 @@ const MAX_HOURLY_VOLUMES = 168;  // 7 days of hourly data
 const MAX_LISTING_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 // ============================================
-// STATE
+// STATE — namespaced by exchange (2026-05-06)
 // ============================================
+// Each exchange gets its own cache + listing map. Default 'kraken' preserves
+// back-compat with V1 server.js callers that don't pass an exchange.
+//
+// DB persistence (known_tickers table) only covers Kraken — to add Crypto.com
+// we'd need a schema migration to add an exchange column (SQLite doesn't
+// support DROP CONSTRAINT, would require table rebuild). For now Crypto.com
+// uses memory-only state and is warmup-acknowledged on every restart.
 
-let knownTickersCache = new Set();
-let newListings = new Map();
+const DEFAULT_EXCHANGE = 'kraken';
+
+// exchange => Set<ticker>
+const knownByExchange = new Map();
+knownByExchange.set(DEFAULT_EXCHANGE, new Set());
+
+// exchange => Map<ticker, ListingState>
+const listingsByExchange = new Map();
+listingsByExchange.set(DEFAULT_EXCHANGE, new Map());
+
 let initialized = false;
+
+function getKnownCache(exchange) {
+  const ex = exchange || DEFAULT_EXCHANGE;
+  if (!knownByExchange.has(ex)) knownByExchange.set(ex, new Set());
+  return knownByExchange.get(ex);
+}
+
+function getListings(exchange) {
+  const ex = exchange || DEFAULT_EXCHANGE;
+  if (!listingsByExchange.has(ex)) listingsByExchange.set(ex, new Map());
+  return listingsByExchange.get(ex);
+}
 
 // ============================================
 // HELPER: Send Telegram message safely
@@ -85,21 +112,25 @@ function sendTelegramMessage(text) {
  * being mis-flagged as "new" when initialize() can't load the DB cache for
  * any reason (race condition, fresh DB, etc.).
  */
-export function acknowledgeKnownTickers(tickers) {
+export function acknowledgeKnownTickers(tickers, exchange = DEFAULT_EXCHANGE) {
   if (!Array.isArray(tickers) || tickers.length === 0) return 0;
+  const cache = getKnownCache(exchange);
   let added = 0;
   for (const t of tickers) {
     if (!t || typeof t !== 'string') continue;
-    if (!knownTickersCache.has(t)) {
-      knownTickersCache.add(t);
+    if (!cache.has(t)) {
+      cache.add(t);
       added++;
-      // Persist so subsequent restarts find it via initialize().
-      try {
-        if (database && typeof database.upsertKnownTicker === 'function') {
-          database.upsertKnownTicker(t, { acknowledged: true, source: 'sniper-warmup' });
+      // Persist only Kraken to DB (back-compat). Crypto.com is memory-only;
+      // gets warmup-acknowledged on every restart.
+      if (exchange === DEFAULT_EXCHANGE) {
+        try {
+          if (database && typeof database.upsertKnownTicker === 'function') {
+            database.upsertKnownTicker(t, { acknowledged: true, source: 'sniper-warmup' });
+          }
+        } catch (e) {
+          // Non-fatal — cache is the authoritative source for this run.
         }
-      } catch (e) {
-        // Non-fatal — cache is the authoritative source for this run.
       }
     }
   }
@@ -117,7 +148,9 @@ export function getNewCoinRules() {
 }
 
 /**
- * Initialize the detector by loading known tickers from DB into the cache.
+ * Initialize the detector by loading known tickers from DB into the kraken cache.
+ * Other exchanges (e.g., crypto.com) start empty and rely on warmup-ack from
+ * the engine that uses them.
  */
 export function initialize() {
   try {
@@ -128,13 +161,14 @@ export function initialize() {
     }
 
     const rows = database.getKnownTickers();
-    knownTickersCache.clear();
+    const cache = getKnownCache(DEFAULT_EXCHANGE);
+    cache.clear();
     for (const row of rows) {
-      knownTickersCache.add(row.ticker);
+      cache.add(row.ticker);
     }
 
     initialized = true;
-    console.log(`[NewCoinDetector] Initialized with ${knownTickersCache.size} known tickers`);
+    console.log(`[NewCoinDetector] Initialized with ${cache.size} known kraken tickers`);
   } catch (e) {
     console.error('[NewCoinDetector] Initialize failed:', e.message);
     initialized = true; // still mark as initialized to avoid blocking
@@ -146,22 +180,24 @@ export function initialize() {
  * Records new ones in DB and newListings map, sends Telegram alert for each.
  * Returns array of newly detected ticker strings.
  */
-export function detectNewListings(currentTickers) {
+export function detectNewListings(currentTickers, exchange = DEFAULT_EXCHANGE) {
   if (!Array.isArray(currentTickers) || currentTickers.length === 0) return [];
 
+  const cache = getKnownCache(exchange);
+  const listings = getListings(exchange);
   const newlyDetected = [];
   const now = Date.now();
 
   for (const ticker of currentTickers) {
     if (!ticker || typeof ticker !== 'string') continue;
 
-    if (!knownTickersCache.has(ticker)) {
+    if (!cache.has(ticker)) {
       // New ticker found
-      knownTickersCache.add(ticker);
+      cache.add(ticker);
       newlyDetected.push(ticker);
 
       // Initialize tracking entry
-      newListings.set(ticker, {
+      listings.set(ticker, {
         firstSeen: now,
         peakPrice: 0,
         peakVolume: 0,
@@ -174,18 +210,19 @@ export function detectNewListings(currentTickers) {
         cooldownUntil: null,
       });
 
-      // Persist to DB
-      try {
-        if (database && typeof database.upsertKnownTicker === 'function') {
-          database.upsertKnownTicker(ticker, { detectedAt: now, source: 'newCoinDetector' });
+      // Persist to DB only for Kraken (back-compat with V1 server.js loop).
+      if (exchange === DEFAULT_EXCHANGE) {
+        try {
+          if (database && typeof database.upsertKnownTicker === 'function') {
+            database.upsertKnownTicker(ticker, { detectedAt: now, source: 'newCoinDetector' });
+          }
+        } catch (e) {
+          console.error(`[NewCoinDetector] Failed to persist ticker ${ticker}:`, e.message);
         }
-      } catch (e) {
-        console.error(`[NewCoinDetector] Failed to persist ticker ${ticker}:`, e.message);
       }
 
-      // Send Telegram alert
-      sendTelegramMessage(`New listing detected: ${ticker}`);
-      console.log(`[NewCoinDetector] New listing detected: ${ticker}`);
+      sendTelegramMessage(`New listing detected (${exchange}): ${ticker}`);
+      console.log(`[NewCoinDetector] New listing detected (${exchange}): ${ticker}`);
     }
   }
 
@@ -196,17 +233,21 @@ export function detectNewListings(currentTickers) {
  * Update price/volume tracking for a new listing and calculate rug-pull signals.
  * Returns signal data object with shouldExitRugPull flag.
  */
-export function updateNewCoinSignals(ticker, price, volume, spread) {
-  // Periodic cleanup: prune listings older than 30 days every 100 calls
-  if (!updateNewCoinSignals._callCount) updateNewCoinSignals._callCount = 0;
-  if (++updateNewCoinSignals._callCount % 100 === 0) {
+export function updateNewCoinSignals(ticker, price, volume, spread, exchange = DEFAULT_EXCHANGE) {
+  const listings = getListings(exchange);
+
+  // Periodic cleanup: prune listings older than 30 days every 100 calls (per exchange)
+  if (!updateNewCoinSignals._callCount) updateNewCoinSignals._callCount = new Map();
+  const counts = updateNewCoinSignals._callCount;
+  counts.set(exchange, (counts.get(exchange) || 0) + 1);
+  if (counts.get(exchange) % 100 === 0) {
     const now = Date.now();
-    for (const [t, l] of newListings.entries()) {
-      if (now - l.firstSeen > MAX_LISTING_AGE_MS) newListings.delete(t);
+    for (const [t, l] of listings.entries()) {
+      if (now - l.firstSeen > MAX_LISTING_AGE_MS) listings.delete(t);
     }
   }
 
-  const listing = newListings.get(ticker);
+  const listing = listings.get(ticker);
   if (!listing) {
     return { isNewListing: false, rugPullScore: 0, signals: [], shouldExitRugPull: false };
   }
@@ -325,8 +366,9 @@ export function updateNewCoinSignals(ticker, price, volume, spread) {
  * Mark a ticker as having triggered a rug-pull exit.
  * Sets cooldown and sends Telegram alert.
  */
-export function markRugPullExit(ticker) {
-  const listing = newListings.get(ticker);
+export function markRugPullExit(ticker, exchange = DEFAULT_EXCHANGE) {
+  const listings = getListings(exchange);
+  const listing = listings.get(ticker);
   if (!listing) return;
 
   listing.exitedRugPull = true;
@@ -343,29 +385,30 @@ export function markRugPullExit(ticker) {
 }
 
 /**
- * Check if a ticker is tracked as a new listing.
+ * Check if a ticker is tracked as a new listing on the given exchange.
  */
-export function isNewListing(ticker) {
-  return newListings.has(ticker);
+export function isNewListing(ticker, exchange = DEFAULT_EXCHANGE) {
+  return getListings(exchange).has(ticker);
 }
 
 /**
- * Returns array of all tracked new listings with their signal data.
- * Cleans up listings older than 30 days.
+ * Returns array of all tracked new listings with their signal data for the
+ * given exchange. Cleans up listings older than 30 days.
  */
-export function getActiveNewListings() {
+export function getActiveNewListings(exchange = DEFAULT_EXCHANGE) {
   const now = Date.now();
+  const listings = getListings(exchange);
   const active = [];
 
-  for (const [ticker, listing] of newListings.entries()) {
-    // Clean up listings older than 30 days
+  for (const [ticker, listing] of listings.entries()) {
     if (now - listing.firstSeen > MAX_LISTING_AGE_MS) {
-      newListings.delete(ticker);
+      listings.delete(ticker);
       continue;
     }
 
     active.push({
       ticker,
+      exchange,
       firstSeen: listing.firstSeen,
       ageDays: ((now - listing.firstSeen) / (24 * 60 * 60 * 1000)).toFixed(1),
       peakPrice: listing.peakPrice,
@@ -385,13 +428,19 @@ export function getActiveNewListings() {
 }
 
 /**
- * Returns summary stats for the detector.
+ * Returns summary stats for the detector across all tracked exchanges.
  */
 export function getStats() {
+  const perExchange = {};
+  for (const [ex, cache] of knownByExchange.entries()) {
+    perExchange[ex] = {
+      knownTickers: cache.size,
+      activeNewListings: (listingsByExchange.get(ex) ?? new Map()).size,
+    };
+  }
   return {
-    knownTickersCount: knownTickersCache.size,
-    activeNewListings: newListings.size,
     initialized,
+    perExchange,
   };
 }
 

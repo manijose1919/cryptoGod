@@ -1,18 +1,14 @@
 // ============================================
 // SNIPER Engine v2 (new-coin sniper, 2026-05-06)
 // ============================================
-// Side-project engine: snipes new Kraken USD listings during their early
-// volatility window. Independent budget ($500), independent loop, trades
-// tagged strategy='SNIPER' so reports never mix with TREND/MOMENTUM stats.
+// Side-project engine: snipes new exchange listings during their early
+// volatility window. Factory pattern — each call to createSniperEngine()
+// returns a closure-scoped instance, so we can run KRAKEN + CRYPTOCOM
+// in parallel from the same code with fully isolated state.
 //
-// Lifecycle:
-//   * Engine ENABLED gate lives in SNIPER_CONFIG.ENABLED — v2/index.ts boots
-//     only when enabled.
-//   * Loop:
-//       1. Refresh Kraken pair list every 30 min via newCoinDetector.detectNewListings
-//       2. For each active new listing: refresh its candles, update rug-pull signals
-//       3. Check exits on open SNIPER trades
-//       4. Evaluate entry signals on candidate listings
+// Trades are tagged strategy='SNIPER_<EXCHANGE>' (e.g. SNIPER_KRAKEN,
+// SNIPER_CRYPTOCOM) so reports never mix with TREND/MOMENTUM stats AND
+// can compare per-exchange sniper performance.
 // ============================================
 
 import type { Candle, V2Trade } from '../pipeline/types.ts';
@@ -29,325 +25,405 @@ import { loadPortfolio } from './positionManager.ts';
 import { SNIPER_CONFIG, getExchangeFees } from './config.ts';
 import { randomUUID } from 'node:crypto';
 
-const STRATEGY = SNIPER_CONFIG.STRATEGY_TAG;
-let loopTimer: ReturnType<typeof setInterval> | null = null;
-let pairRefreshTimer: ReturnType<typeof setInterval> | null = null;
-let isRunning = false;
-let loopInProgress = false;
-let exchange: ExchangeAdapter | null = null;
-let detector: NewCoinDetector | null = null;
-let detectorModule: Record<string, unknown> | null = null;
-let lastPairRefresh = 0;
-
-const stats = {
-  loopCount: 0,
-  pairRefreshCount: 0,
-  newListingsDetected: 0,
-  tradesOpened: 0,
-  tradesClosed: 0,
-  totalPnl: 0,
-};
-
-const candleCache = new Map<string, Candle[]>();
-
-async function fetchCandles(ticker: string): Promise<Candle[] | null> {
-  try {
-    const mod = await import('../../services/exchangeAdapters/krakenAdapter.js');
-    // 15m candles, 80 bars = ~20h of history (enough for the 20-bar minimum
-    // plus headroom for indicators). Newcoin listings often have <24h of data.
-    const raw = await mod.krakenAdapter.getCandles(ticker, SNIPER_CONFIG.CANDLE_INTERVAL, 80);
-    if (!raw || raw.length === 0) return null;
-    const candles: Candle[] = raw.map((c: Record<string, number>) => ({
-      open: c.o ?? c.open,
-      high: c.h ?? c.high,
-      low: c.l ?? c.low,
-      close: c.c ?? c.close,
-      volume: c.v ?? c.volume ?? 0,
-      time: c.t ?? c.time ?? 0,
-    }));
-    candleCache.set(ticker, candles);
-    return candles;
-  } catch {
-    return null;
-  }
-}
-
-// Threshold: more than this many "new" listings in one pass is implausible —
-// it means the cache was empty and we're catching up. Treat as warmup.
 const WARMUP_THRESHOLD = 20;
 
-async function refreshKrakenPairList(): Promise<void> {
-  if (!detectorModule) return;
-  try {
-    const mod = await import('../../services/exchangeAdapters/krakenAdapter.js');
-    const result = await mod.krakenAdapter.getInstruments();
-    const tickers = (result?.data ?? []).map((i: { instrument_name: string }) => i.instrument_name);
+export interface SniperEngineHandle {
+  init: () => Promise<void>;
+  start: () => void;
+  stop: () => void;
+  getStatus: () => Record<string, unknown>;
+}
 
-    // First refresh: do a warmup acknowledge before letting detectNewListings
-    // run. Otherwise an empty in-memory cache would mis-flag every existing
-    // pair as "new" and the sniper would try to enter on BTCUSD, ETHUSD, etc.
-    if (lastPairRefresh === 0) {
-      const ackFn = detectorModule.acknowledgeKnownTickers as ((t: string[]) => number) | undefined;
-      if (ackFn) {
-        const ackedCount = ackFn(tickers);
-        console.log(`[SNIPER] Warmup: acknowledged ${ackedCount}/${tickers.length} pair(s) — sniper now tracks only genuinely new listings`);
-      }
+/**
+ * Build a sniper engine bound to a specific exchange. The returned handle has
+ * its own loop, candle cache, detector reference, stats, and budget. Multiple
+ * handles can run side-by-side without sharing state.
+ *
+ * @param exchange      Lowercase identifier ('kraken' / 'cryptocom') — matches the
+ *                      detector's namespace key and the krakenAdapter / cryptoComAdapter import path.
+ * @param adapter       The V2 ExchangeAdapter for this exchange (krakenV2 or cryptoComV2).
+ * @param adapterPath   Path to the JS adapter module (for getInstruments + getCandles).
+ * @param strategyTag   The strategy value to tag trades with ('SNIPER_KRAKEN' / 'SNIPER_CRYPTOCOM').
+ * @param budget        Independent USD budget for this engine.
+ * @param logTag        Log prefix ('SNIPER-KRAKEN' / 'SNIPER-CRYPTOCOM').
+ */
+export function createSniperEngine(
+  exchange: string,
+  adapter: ExchangeAdapter,
+  adapterPath: string,
+  strategyTag: string,
+  budget: number,
+  logTag: string,
+): SniperEngineHandle {
+  let loopTimer: ReturnType<typeof setInterval> | null = null;
+  let pairRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  let isRunning = false;
+  let loopInProgress = false;
+  let detector: NewCoinDetector | null = null;
+  let detectorModule: Record<string, unknown> | null = null;
+  let lastPairRefresh = 0;
+
+  const stats = {
+    loopCount: 0,
+    pairRefreshCount: 0,
+    newListingsDetected: 0,
+    tradesOpened: 0,
+    tradesClosed: 0,
+    totalPnl: 0,
+  };
+
+  const candleCache = new Map<string, Candle[]>();
+
+  async function fetchCandles(ticker: string): Promise<Candle[] | null> {
+    try {
+      const mod = await import(adapterPath);
+      // adapterPath exports the adapter as default named export — fall back to
+      // a few common names so we don't have to hard-code per-exchange.
+      const adapterObj = (mod.krakenAdapter ?? mod.cryptoComAdapter ?? mod.default) as
+        | { getCandles: (t: string, tf: string, n: number) => Promise<Record<string, number>[]> }
+        | undefined;
+      if (!adapterObj?.getCandles) return null;
+      const raw = await adapterObj.getCandles(ticker, SNIPER_CONFIG.CANDLE_INTERVAL, 80);
+      if (!raw || raw.length === 0) return null;
+      const candles: Candle[] = raw.map((c) => ({
+        open: c.o ?? c.open,
+        high: c.h ?? c.high,
+        low: c.l ?? c.low,
+        close: c.c ?? c.close,
+        volume: c.v ?? c.volume ?? 0,
+        time: c.t ?? c.time ?? 0,
+      }));
+      candleCache.set(ticker, candles);
+      return candles;
+    } catch {
+      return null;
     }
+  }
 
-    const detectFn = detectorModule.detectNewListings as (t: string[]) => string[];
-    const newlyDetected = detectFn ? detectFn(tickers) : [];
+  async function refreshPairList(): Promise<void> {
+    if (!detectorModule) return;
+    try {
+      const mod = await import(adapterPath);
+      const adapterObj = (mod.krakenAdapter ?? mod.cryptoComAdapter ?? mod.default) as
+        | { getInstruments: () => Promise<{ data?: Array<{ instrument_name: string }> }> }
+        | undefined;
+      if (!adapterObj?.getInstruments) {
+        console.warn(`[${logTag}] adapter.getInstruments unavailable — pair refresh skipped`);
+        return;
+      }
+      const result = await adapterObj.getInstruments();
+      const tickers = (result?.data ?? []).map((i) => i.instrument_name);
 
-    // Defense-in-depth: if a refresh ever returns >WARMUP_THRESHOLD "new"
-    // tickers, that's a cache-empty signature, not a real listing event.
-    // Acknowledge them silently rather than letting them become tradeable.
-    if (newlyDetected.length > WARMUP_THRESHOLD) {
-      console.warn(`[SNIPER] Implausible new-listing burst (${newlyDetected.length}) — likely cache-empty event, treating as warmup`);
-      const ackFn = detectorModule.acknowledgeKnownTickers as ((t: string[]) => number) | undefined;
-      if (ackFn) ackFn(newlyDetected);
-      // Still increment pairRefreshCount so we don't get stuck in a warmup loop.
+      // First refresh: warmup acknowledge to prevent flagging the entire
+      // exchange's pair universe as "new listings".
+      if (lastPairRefresh === 0) {
+        const ackFn = detectorModule.acknowledgeKnownTickers as
+          | ((t: string[], ex?: string) => number) | undefined;
+        if (ackFn) {
+          const acked = ackFn(tickers, exchange);
+          console.log(`[${logTag}] Warmup: acknowledged ${acked}/${tickers.length} pair(s) on ${exchange}`);
+        }
+      }
+
+      const detectFn = detectorModule.detectNewListings as
+        | ((t: string[], ex?: string) => string[]) | undefined;
+      const newlyDetected = detectFn ? detectFn(tickers, exchange) : [];
+
+      // Defense: implausible burst → silent ack instead of trading.
+      if (newlyDetected.length > WARMUP_THRESHOLD) {
+        console.warn(`[${logTag}] Implausible new-listing burst (${newlyDetected.length}) — treating as warmup`);
+        const ackFn = detectorModule.acknowledgeKnownTickers as
+          | ((t: string[], ex?: string) => number) | undefined;
+        if (ackFn) ackFn(newlyDetected, exchange);
+        stats.pairRefreshCount++;
+        lastPairRefresh = Date.now();
+        return;
+      }
+
       stats.pairRefreshCount++;
+      stats.newListingsDetected += newlyDetected.length;
       lastPairRefresh = Date.now();
-      return;
-    }
-
-    stats.pairRefreshCount++;
-    stats.newListingsDetected += newlyDetected.length;
-    lastPairRefresh = Date.now();
-    if (newlyDetected.length > 0) {
-      console.log(`[SNIPER] Pair refresh: ${newlyDetected.length} new listing(s) detected — ${newlyDetected.join(', ')}`);
-    }
-  } catch (err: unknown) {
-    console.warn(`[SNIPER] Pair refresh failed: ${(err as Error).message}`);
-  }
-}
-
-async function updateListingSignals(): Promise<void> {
-  if (!detectorModule || !detector) return;
-  const updateFn = detectorModule.updateNewCoinSignals as
-    | ((t: string, p: number, v: number, s: number) => unknown)
-    | undefined;
-  if (!updateFn) return;
-
-  for (const listing of detector.getActiveNewListings()) {
-    const candles = candleCache.get(listing.ticker);
-    if (!candles || candles.length === 0) continue;
-    const last = candles[candles.length - 1];
-    // Spread is unknown without ticker depth; pass 0 (won't trigger SPREAD_WIDENING flag).
-    updateFn(listing.ticker, last.close, last.volume * last.close, 0);
-  }
-}
-
-async function runLoop(): Promise<void> {
-  if (loopInProgress) return;
-  loopInProgress = true;
-  stats.loopCount++;
-
-  try {
-    if (!detector) {
-      // Detector failed to load — sit idle but keep loop alive.
-      return;
-    }
-
-    // ----- candle refresh for all currently-tracked listings -----
-    const activeListings = detector.getActiveNewListings();
-    for (const listing of activeListings) {
-      await fetchCandles(listing.ticker);
-    }
-
-    // ----- update rug-pull signals using fresh candle data -----
-    await updateListingSignals();
-
-    // ----- exits first -----
-    const openSniper = getOpenTradesByStrategy(STRATEGY);
-    if (openSniper.length > 0 && exchange) {
-      const exitResults = await checkSniperExits(openSniper, exchange, detector);
-      const fees = getExchangeFees(exchange.getName());
-      for (const r of exitResults) {
-        if (!r.shouldExit) continue;
-        const t = r.trade;
-        const pnlGross = (r.exitPrice - t.entryPrice) * t.quantity;
-        const totalFees = t.positionSizeUsd * fees.ROUND_TRIP_REAL;
-        const pnlNet = pnlGross - totalFees;
-        closeTrade(t.id, r.exitPrice, r.exitReason as never ?? 'unknown', totalFees);
-        stats.tradesClosed++;
-        stats.totalPnl += pnlNet;
-        console.log(`[SNIPER] Trade closed: ${t.ticker} @ $${r.exitPrice.toFixed(6)} reason=${r.exitReason} PnL=$${pnlNet.toFixed(4)}`);
+      if (newlyDetected.length > 0) {
+        console.log(`[${logTag}] Pair refresh (${exchange}): ${newlyDetected.length} new — ${newlyDetected.join(', ')}`);
       }
+    } catch (err: unknown) {
+      console.warn(`[${logTag}] Pair refresh failed: ${(err as Error).message}`);
     }
+  }
 
-    // ----- entry search -----
-    const currentSniper = getOpenTradesByStrategy(STRATEGY);
-    if (currentSniper.length >= SNIPER_CONFIG.MAX_OPEN_POSITIONS) {
+  async function updateListingSignals(): Promise<void> {
+    if (!detectorModule || !detector) return;
+    const updateFn = detectorModule.updateNewCoinSignals as
+      | ((t: string, p: number, v: number, s: number, ex?: string) => unknown)
+      | undefined;
+    if (!updateFn) return;
+
+    for (const listing of detector.getActiveNewListings()) {
+      const candles = candleCache.get(listing.ticker);
+      if (!candles || candles.length === 0) continue;
+      const last = candles[candles.length - 1];
+      updateFn(listing.ticker, last.close, last.volume * last.close, 0, exchange);
+    }
+  }
+
+  async function runLoop(): Promise<void> {
+    if (loopInProgress) return;
+    loopInProgress = true;
+    stats.loopCount++;
+
+    try {
+      if (!detector) return;
+
+      const activeListings = detector.getActiveNewListings();
+      for (const listing of activeListings) {
+        await fetchCandles(listing.ticker);
+      }
+
+      await updateListingSignals();
+
+      // Exits first
+      const openSniper = getOpenTradesByStrategy(strategyTag);
+      if (openSniper.length > 0) {
+        const exitResults = await checkSniperExits(openSniper, adapter, detector);
+        const fees = getExchangeFees(adapter.getName());
+        for (const r of exitResults) {
+          if (!r.shouldExit) continue;
+          const t = r.trade;
+          const pnlGross = (r.exitPrice - t.entryPrice) * t.quantity;
+          const totalFees = t.positionSizeUsd * fees.ROUND_TRIP_REAL;
+          const pnlNet = pnlGross - totalFees;
+          closeTrade(t.id, r.exitPrice, r.exitReason as never ?? 'unknown', totalFees);
+          stats.tradesClosed++;
+          stats.totalPnl += pnlNet;
+          console.log(`[${logTag}] Trade closed: ${t.ticker} @ $${r.exitPrice.toFixed(6)} reason=${r.exitReason} PnL=$${pnlNet.toFixed(4)}`);
+        }
+      }
+
+      // Entries
+      const currentSniper = getOpenTradesByStrategy(strategyTag);
+      if (currentSniper.length >= SNIPER_CONFIG.MAX_OPEN_POSITIONS) {
+        if (stats.loopCount % 10 === 0) {
+          console.log(`[${logTag}] Loop #${stats.loopCount}: max positions (${currentSniper.length}/${SNIPER_CONFIG.MAX_OPEN_POSITIONS})`);
+        }
+        return;
+      }
+
+      // Portfolio is filtered by strategyTag — guarantees budget isolation
+      // from TREND/MOMENTUM and from the OTHER sniper engine.
+      const portfolio = loadPortfolio(budget, strategyTag);
+
+      for (const listing of activeListings) {
+        const ticker = listing.ticker;
+        if (currentSniper.some(t => t.ticker === ticker)) continue;
+
+        const candles = candleCache.get(ticker);
+        if (!candles || candles.length < SNIPER_CONFIG.MIN_CANDLES) continue;
+
+        const signal = detectSniperEntry(candles, ticker, detector);
+        if (!signal) continue;
+
+        const equity = portfolio.totalEquity;
+        let posSize = equity * SNIPER_CONFIG.POSITION_SIZE_PERCENT * signal.confidence;
+        if (posSize > equity * SNIPER_CONFIG.MAX_POSITION_PERCENT) {
+          posSize = equity * SNIPER_CONFIG.MAX_POSITION_PERCENT;
+        }
+        if (posSize > portfolio.availableCapital) posSize = portfolio.availableCapital;
+        if (posSize < 5) continue;
+
+        const price = signal.signals.close_price as number;
+        const sl = price * (1 - SNIPER_CONFIG.STOP_LOSS_PERCENT);
+        const tp = price * 2;
+
+        const qty = posSize / price;
+        const fees = getExchangeFees(adapter.getName());
+        const entryFeeEstimate = posSize * fees.MAKER_PERCENT;
+
+        const trade: V2Trade = {
+          id: randomUUID(),
+          ticker,
+          side: 'long',
+          status: 'open' as never,
+          entryPrice: price,
+          entryTime: Date.now(),
+          entryOrderType: 'maker',
+          quantity: qty,
+          positionSizeUsd: posSize,
+          exitPrice: null,
+          exitTime: null,
+          exitReason: null,
+          pnlGross: null,
+          pnlNet: null,
+          feesPaid: entryFeeEstimate,
+          holdDurationMs: null,
+          initialStop: sl,
+          currentStop: sl,
+          takeProfitTarget: tp,
+          trailingActivated: false,
+          entrySignals: signal.signals,
+          entryRegime: signal.regime as never,
+          entryConfidence: signal.confidence,
+          atrPercent: signal.signals.atr_percent as number,
+          peakPrice: price,
+          peakHistogram: 0,
+          strategy: strategyTag,
+          decisionLog: [],
+          createdAt: Date.now(),
+        };
+
+        insertTrade(trade);
+        stats.tradesOpened++;
+        console.log(
+          `[${logTag}] Trade opened: ${ticker} @ $${price.toFixed(6)} `
+          + `SL=$${sl.toFixed(6)} size=$${posSize.toFixed(2)} `
+          + `age=${(signal.signals.sniper_age_hours as number).toFixed(1)}h `
+          + `rug=${signal.signals.sniper_rug_score} `
+          + `conf=${signal.confidence.toFixed(2)}`,
+        );
+        break;
+      }
+
       if (stats.loopCount % 10 === 0) {
-        console.log(`[SNIPER] Loop #${stats.loopCount}: max positions (${currentSniper.length}/${SNIPER_CONFIG.MAX_OPEN_POSITIONS})`);
+        console.log(
+          `[${logTag}] Loop #${stats.loopCount}: ${activeListings.length} listings, `
+          + `${currentSniper.length} open, opened=${stats.tradesOpened}, closed=${stats.tradesClosed}, PnL=$${stats.totalPnl.toFixed(2)}`,
+        );
       }
-      return;
+    } catch (err: unknown) {
+      console.error(`[${logTag}] Loop error: ${(err as Error).message}`);
+    } finally {
+      loopInProgress = false;
     }
+  }
 
-    const portfolio = loadPortfolio(SNIPER_CONFIG.BUDGET_USD, STRATEGY);
-
-    for (const listing of activeListings) {
-      const ticker = listing.ticker;
-
-      // Skip if already holding
-      if (currentSniper.some(t => t.ticker === ticker)) continue;
-
-      const candles = candleCache.get(ticker);
-      if (!candles || candles.length < SNIPER_CONFIG.MIN_CANDLES) continue;
-
-      const signal = detectSniperEntry(candles, ticker, detector);
-      if (!signal) continue;
-
-      const equity = portfolio.totalEquity;
-      let posSize = equity * SNIPER_CONFIG.POSITION_SIZE_PERCENT * signal.confidence;
-      if (posSize > equity * SNIPER_CONFIG.MAX_POSITION_PERCENT) {
-        posSize = equity * SNIPER_CONFIG.MAX_POSITION_PERCENT;
+  return {
+    async init(): Promise<void> {
+      try {
+        detectorModule = (await import('../../services/newCoinDetector.js')) as unknown as Record<string, unknown>;
+        const initFn = detectorModule.initialize as (() => void) | undefined;
+        if (initFn && exchange === 'kraken') {
+          // Only Kraken's namespace is initialized from DB; cryptocom relies on warmup-ack.
+          initFn();
+        }
+        detector = {
+          isNewListing: (t: string) =>
+            (detectorModule!.isNewListing as (t: string, ex?: string) => boolean)(t, exchange),
+          getActiveNewListings: () =>
+            (detectorModule!.getActiveNewListings as (ex?: string) => Array<{
+              ticker: string;
+              firstSeen: number;
+              rugPullScore: number;
+              isOnCooldown: boolean;
+            }>)(exchange),
+        };
+      } catch (err: unknown) {
+        console.warn(`[${logTag}] Detector load failed — engine will idle: ${(err as Error).message}`);
+        detector = null;
       }
-      if (posSize > portfolio.availableCapital) posSize = portfolio.availableCapital;
-      if (posSize < 5) continue;  // dust filter
 
-      const price = signal.signals.close_price as number;
-      const sl = price * (1 - SNIPER_CONFIG.STOP_LOSS_PERCENT);
-      // No fixed TP — trail does the work. Set TP far above for the schema's NOT NULL.
-      const tp = price * 2;
+      console.log(
+        `[${logTag}] Sniper engine initialized: exchange=${exchange}, budget=$${budget}, `
+        + `strategy=${strategyTag}, interval=${SNIPER_CONFIG.CANDLE_INTERVAL}, `
+        + `max-positions=${SNIPER_CONFIG.MAX_OPEN_POSITIONS}, detector=${detector ? 'loaded' : 'unavailable'}`,
+      );
+    },
 
-      const qty = posSize / price;
-      const fees = getExchangeFees(exchange?.getName() ?? 'kraken');
-      const entryFeeEstimate = posSize * fees.MAKER_PERCENT;
+    start(): void {
+      if (isRunning) return;
+      isRunning = true;
+      setTimeout(async () => {
+        await refreshPairList();
+        await runLoop();
+        loopTimer = setInterval(runLoop, SNIPER_CONFIG.LOOP_INTERVAL_MS);
+        pairRefreshTimer = setInterval(refreshPairList, SNIPER_CONFIG.PAIR_REFRESH_INTERVAL_MS);
+      }, SNIPER_CONFIG.LOOP_OFFSET_MS);
+      console.log(`[${logTag}] Sniper engine started (offset=${SNIPER_CONFIG.LOOP_OFFSET_MS}ms, loop=${SNIPER_CONFIG.LOOP_INTERVAL_MS}ms, pair-refresh=${SNIPER_CONFIG.PAIR_REFRESH_INTERVAL_MS}ms)`);
+    },
 
-      const trade: V2Trade = {
-        id: randomUUID(),
-        ticker,
-        side: 'long',
-        status: 'open' as never,
-        entryPrice: price,
-        entryTime: Date.now(),
-        entryOrderType: 'maker',
-        quantity: qty,
-        positionSizeUsd: posSize,
-        exitPrice: null,
-        exitTime: null,
-        exitReason: null,
-        pnlGross: null,
-        pnlNet: null,
-        feesPaid: entryFeeEstimate,
-        holdDurationMs: null,
-        initialStop: sl,
-        currentStop: sl,
-        takeProfitTarget: tp,
-        trailingActivated: false,
-        entrySignals: signal.signals,
-        entryRegime: signal.regime as never,
-        entryConfidence: signal.confidence,
-        atrPercent: signal.signals.atr_percent as number,
-        peakPrice: price,
-        peakHistogram: 0,
-        strategy: STRATEGY,
-        decisionLog: [],
-        createdAt: Date.now(),
+    stop(): void {
+      if (loopTimer) clearInterval(loopTimer);
+      if (pairRefreshTimer) clearInterval(pairRefreshTimer);
+      loopTimer = null;
+      pairRefreshTimer = null;
+      isRunning = false;
+      console.log(`[${logTag}] Sniper engine stopped`);
+    },
+
+    getStatus(): Record<string, unknown> {
+      const listings = detector?.getActiveNewListings() ?? [];
+      return {
+        exchange,
+        strategyTag,
+        running: isRunning,
+        enabled: SNIPER_CONFIG.ENABLED,
+        detectorLoaded: detector != null,
+        lastPairRefresh,
+        activeListings: listings.length,
+        listingsSample: listings.slice(0, 5).map((l) => ({
+          ticker: l.ticker,
+          ageHours: ((Date.now() - l.firstSeen) / 3600000).toFixed(1),
+          rugScore: l.rugPullScore,
+          onCooldown: l.isOnCooldown,
+        })),
+        ...stats,
+        openPositions: getOpenTradesByStrategy(strategyTag).length,
+        budget,
       };
-
-      insertTrade(trade);
-      stats.tradesOpened++;
-      console.log(
-        `[SNIPER] Trade opened: ${ticker} @ $${price.toFixed(6)} `
-        + `SL=$${sl.toFixed(6)} size=$${posSize.toFixed(2)} `
-        + `age=${(signal.signals.sniper_age_hours as number).toFixed(1)}h `
-        + `rug=${signal.signals.sniper_rug_score} `
-        + `conf=${signal.confidence.toFixed(2)}`,
-      );
-      break;  // one new entry per loop
-    }
-
-    if (stats.loopCount % 10 === 0) {
-      console.log(
-        `[SNIPER] Loop #${stats.loopCount}: ${activeListings.length} listings tracked, `
-        + `${currentSniper.length} open, opened=${stats.tradesOpened}, `
-        + `closed=${stats.tradesClosed}, PnL=$${stats.totalPnl.toFixed(2)}`,
-      );
-    }
-  } catch (err: unknown) {
-    console.error(`[SNIPER] Loop error: ${(err as Error).message}`);
-  } finally {
-    loopInProgress = false;
-  }
+    },
+  };
 }
 
-export async function initSniperEngine(adapter: ExchangeAdapter): Promise<void> {
-  exchange = adapter;
-  // Load the detector module dynamically. JS module → cast.
-  try {
-    detectorModule = (await import('../../services/newCoinDetector.js')) as unknown as Record<string, unknown>;
-    const init = detectorModule.initialize as (() => void) | undefined;
-    if (init) init();
-    detector = {
-      isNewListing: detectorModule.isNewListing as (t: string) => boolean,
-      getActiveNewListings: detectorModule.getActiveNewListings as () => Array<{
-        ticker: string;
-        firstSeen: number;
-        rugPullScore: number;
-        isOnCooldown: boolean;
-      }>,
-    };
-  } catch (err: unknown) {
-    console.warn(`[SNIPER] Detector load failed — engine will idle: ${(err as Error).message}`);
-    detector = null;
-  }
+// ============================================
+// Singleton handles for boot wiring
+// ============================================
+// v2/index.ts boots both. Other code that needs to query status uses these.
 
-  console.log(
-    `[SNIPER] Sniper engine initialized: budget=$${SNIPER_CONFIG.BUDGET_USD}, `
-    + `interval=${SNIPER_CONFIG.CANDLE_INTERVAL}, `
-    + `age-window=${SNIPER_CONFIG.MIN_LISTING_AGE_MS / 60000}m-${SNIPER_CONFIG.MAX_LISTING_AGE_MS / 86400000}d, `
-    + `max-positions=${SNIPER_CONFIG.MAX_OPEN_POSITIONS}, `
-    + `detector=${detector ? 'loaded' : 'unavailable'}`,
+let krakenSniper: SniperEngineHandle | null = null;
+let cryptocomSniper: SniperEngineHandle | null = null;
+
+export function buildKrakenSniper(adapter: ExchangeAdapter, budget: number): SniperEngineHandle {
+  krakenSniper = createSniperEngine(
+    'kraken',
+    adapter,
+    '../../services/exchangeAdapters/krakenAdapter.js',
+    'SNIPER_KRAKEN',
+    budget,
+    'SNIPER-KRAKEN',
   );
+  return krakenSniper;
 }
 
-export function startSniperEngine(): void {
-  if (isRunning) return;
-  isRunning = true;
-
-  // Kick off an initial pair refresh + loop after the offset, then schedule both intervals.
-  setTimeout(async () => {
-    await refreshKrakenPairList();
-    await runLoop();
-    loopTimer = setInterval(runLoop, SNIPER_CONFIG.LOOP_INTERVAL_MS);
-    pairRefreshTimer = setInterval(refreshKrakenPairList, SNIPER_CONFIG.PAIR_REFRESH_INTERVAL_MS);
-  }, SNIPER_CONFIG.LOOP_OFFSET_MS);
-
-  console.log(
-    `[SNIPER] Sniper engine started `
-    + `(${SNIPER_CONFIG.LOOP_OFFSET_MS}ms offset, `
-    + `${SNIPER_CONFIG.LOOP_INTERVAL_MS}ms loop, `
-    + `${SNIPER_CONFIG.PAIR_REFRESH_INTERVAL_MS}ms pair-refresh)`,
+export function buildCryptocomSniper(adapter: ExchangeAdapter, budget: number): SniperEngineHandle {
+  cryptocomSniper = createSniperEngine(
+    'cryptocom',
+    adapter,
+    '../../services/exchangeAdapters/cryptoComAdapter.js',
+    'SNIPER_CRYPTOCOM',
+    budget,
+    'SNIPER-CRYPTOCOM',
   );
+  return cryptocomSniper;
+}
+
+export function getKrakenSniperStatus(): Record<string, unknown> | null {
+  return krakenSniper?.getStatus() ?? null;
+}
+
+export function getCryptocomSniperStatus(): Record<string, unknown> | null {
+  return cryptocomSniper?.getStatus() ?? null;
+}
+
+/**
+ * Combined sniper status — both engines, isolated stats.
+ * Reports must NEVER aggregate these into a single PF/PnL with TREND/MOMENTUM.
+ */
+export function getSniperStatus(): Record<string, unknown> {
+  return {
+    kraken: getKrakenSniperStatus(),
+    cryptocom: getCryptocomSniperStatus(),
+  };
 }
 
 export function stopSniperEngine(): void {
-  if (loopTimer) clearInterval(loopTimer);
-  if (pairRefreshTimer) clearInterval(pairRefreshTimer);
-  loopTimer = null;
-  pairRefreshTimer = null;
-  isRunning = false;
-  console.log('[SNIPER] Sniper engine stopped');
-}
-
-export function getSniperStatus() {
-  const listings = detector?.getActiveNewListings() ?? [];
-  return {
-    running: isRunning,
-    enabled: SNIPER_CONFIG.ENABLED,
-    detectorLoaded: detector != null,
-    lastPairRefresh,
-    activeListings: listings.length,
-    listingsSample: listings.slice(0, 5).map(l => ({
-      ticker: l.ticker,
-      ageHours: ((Date.now() - l.firstSeen) / 3600000).toFixed(1),
-      rugScore: l.rugPullScore,
-      onCooldown: l.isOnCooldown,
-    })),
-    ...stats,
-    openPositions: getOpenTradesByStrategy(STRATEGY).length,
-    budget: SNIPER_CONFIG.BUDGET_USD,
-  };
+  if (krakenSniper) krakenSniper.stop();
+  if (cryptocomSniper) cryptocomSniper.stop();
 }

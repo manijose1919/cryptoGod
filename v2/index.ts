@@ -11,7 +11,7 @@ import { initBearishServices, startBearishServices, stopBearishServices, getBear
 import { initMREngine, startMREngine, stopMREngine, getMRStatus } from './engine/meanReversionEngine.ts';
 import { initBreakoutEngine, startBreakoutEngine, stopBreakoutEngine, getBreakoutStatus } from './engine/breakoutEngine.ts';
 import { initMomentumEngine, startMomentumEngine, stopMomentumEngine, getMomentumStatus } from './engine/momentumEngine.ts';
-import { initSniperEngine, startSniperEngine, stopSniperEngine, getSniperStatus } from './engine/sniperEngine.ts';
+import { buildKrakenSniper, buildCryptocomSniper, stopSniperEngine, getSniperStatus } from './engine/sniperEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
 import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG } from './engine/config.ts';
 
@@ -71,20 +71,44 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       console.log('[V2] Momentum engine v2 disabled (MOMENTUM_CONFIG.ENABLED=false). Set true to ship live.');
     }
 
-    // Sniper engine (new-coin sniper, 2026-05-06)
-    // SIDE PROJECT — fully isolated stats. Trades tagged strategy='SNIPER'.
-    // Reports must NEVER aggregate sniper P&L with TREND/MOMENTUM (see CHANGELOG).
-    // Cannot be backtested (by definition new data) — paper-only at first.
+    // Dual-exchange sniper (kraken + cryptocom, 2026-05-06)
+    // ISOLATED side-project. Trades tagged strategy='SNIPER_KRAKEN' or
+    // 'SNIPER_CRYPTOCOM'. Day-trading uses krakenV2 for TREND/MOM and never
+    // touches cryptocom or sniper budget pools. Each engine has its own loop,
+    // candle cache, detector namespace, and budget — they cannot interfere
+    // with each other or with day-trading.
     if (SNIPER_CONFIG.ENABLED) {
-      try {
-        await initSniperEngine(krakenV2);
-        startSniperEngine();
-        console.log(`[V2] Sniper engine running (15m, $${SNIPER_CONFIG.BUDGET_USD} isolated budget, paper mode)`);
-      } catch (err: unknown) {
-        console.warn(`[V2] Sniper engine failed to start: ${(err as Error).message}`);
+      // --- Kraken sniper ---
+      if (SNIPER_CONFIG.KRAKEN_ENABLED) {
+        try {
+          const k = buildKrakenSniper(krakenV2, SNIPER_CONFIG.KRAKEN_BUDGET_USD);
+          await k.init();
+          k.start();
+          console.log(`[V2] Sniper KRAKEN running (15m, $${SNIPER_CONFIG.KRAKEN_BUDGET_USD} isolated budget, strategy=SNIPER_KRAKEN)`);
+        } catch (err: unknown) {
+          console.warn(`[V2] Sniper KRAKEN failed to start: ${(err as Error).message}`);
+        }
+      } else {
+        console.log('[V2] Sniper KRAKEN disabled (SNIPER_CONFIG.KRAKEN_ENABLED=false).');
+      }
+
+      // --- Crypto.com sniper ---
+      if (SNIPER_CONFIG.CRYPTOCOM_ENABLED) {
+        try {
+          // Init the V2 cryptocom adapter only if not already loaded by dual-engine path.
+          await initCryptoComAdapter();
+          const c = buildCryptocomSniper(cryptoComV2, SNIPER_CONFIG.CRYPTOCOM_BUDGET_USD);
+          await c.init();
+          c.start();
+          console.log(`[V2] Sniper CRYPTOCOM running (15m, $${SNIPER_CONFIG.CRYPTOCOM_BUDGET_USD} isolated budget, strategy=SNIPER_CRYPTOCOM)`);
+        } catch (err: unknown) {
+          console.warn(`[V2] Sniper CRYPTOCOM failed to start: ${(err as Error).message}`);
+        }
+      } else {
+        console.log('[V2] Sniper CRYPTOCOM disabled (SNIPER_CONFIG.CRYPTOCOM_ENABLED=false).');
       }
     } else {
-      console.log('[V2] Sniper engine disabled (SNIPER_CONFIG.ENABLED=false).');
+      console.log('[V2] Sniper master switch off (SNIPER_CONFIG.ENABLED=false).');
     }
   } catch (err: any) {
     console.error(`[V2] Boot failed: ${err.message}`);

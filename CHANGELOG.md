@@ -37,6 +37,74 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-06 ~later6 UTC — Dual-exchange SNIPER (Kraken + Crypto.com isolated) — local-claude
+
+**Files changed:**
+- `services/newCoinDetector.js` (state namespaced by exchange; functions take optional `exchange` param)
+- `v2/engine/sniperEngine.ts` (rewritten as factory pattern; `createSniperEngine()` + `buildKrakenSniper()` + `buildCryptocomSniper()`)
+- `v2/engine/config.ts` (`SNIPER_CONFIG`: added `KRAKEN_ENABLED`, `CRYPTOCOM_ENABLED`, `KRAKEN_BUDGET_USD`, `CRYPTOCOM_BUDGET_USD`)
+- `v2/index.ts` (boot wiring for both engines)
+- `v2/dashboard/attributionAPI.ts` (per-exchange status + scorecard endpoints)
+
+**Stats baseline reset:** NO (sniper is isolated; day-trading untouched)
+
+### What this is
+The sniper engine now runs **two independent engines side-by-side** — one on Kraken, one on Crypto.com. Each has its own loop, candle cache, detector namespace, budget, and trade-strategy tag. Crypto.com's lower fees (0.15% round-trip vs Kraken's 0.52%) and broader memecoin listing roster give us a second venue to test.
+
+### Reporting Contract Update — TWO sniper sections (or three counting day-trading)
+
+**When asked for a progress report, output up to THREE separate sections:**
+
+```
+═══ DAY-TRADING (TREND + MOMENTUM, KRAKEN) ═══
+[stats from v2_trades WHERE strategy IN ('TREND','MOMENTUM')
+ AND entry_time >= stats_baseline_time]
+
+═══ SNIPER — KRAKEN ═══
+[stats from v2_trades WHERE strategy = 'SNIPER_KRAKEN']
+
+═══ SNIPER — CRYPTO.COM ═══
+[stats from v2_trades WHERE strategy = 'SNIPER_CRYPTOCOM']
+```
+
+**Never aggregate across these three sections.** They're three different strategies on potentially two different exchanges with different fees, liquidity, and listing rosters.
+
+### Strict isolation guarantees
+
+1. **Adapters:** day-trading uses `krakenV2` ONLY. Sniper-Kraken uses `krakenV2`. Sniper-Crypto.com uses `cryptoComV2` ONLY. No adapter is shared across day-trading and crypto.com.
+2. **Budgets:** each engine calls `loadPortfolio(budget, strategyTag)` which filters v2_trades by tag. Day-trading's budget pool is calculated from `strategy IN ('TREND','MOMENTUM')` only; sniper-kraken from `SNIPER_KRAKEN`; sniper-cryptocom from `SNIPER_CRYPTOCOM`. Cannot cross-contaminate.
+3. **Detector state:** `newCoinDetector.js` now keeps two parallel state Maps — `knownByExchange` and `listingsByExchange`. A new pair on Crypto.com cannot be flagged as new on Kraken.
+4. **Tickers:** day-trading's `SCAN_TICKERS` (AKT/ZEC/COMP, plus 7-ticker MOMENTUM list) are static and never modified by sniper. Sniper picks dynamically from `getActiveNewListings(exchange)`.
+5. **DB persistence:** `known_tickers` table stays Kraken-only (back-compat with V1 server.js callers). Crypto.com namespace is memory-only and warmup-acknowledged on every restart.
+
+### Engine specs
+- **Per-exchange budget:** $500 each (paper). Total sniper exposure: $1000.
+- **Strategy tags:** `SNIPER_KRAKEN`, `SNIPER_CRYPTOCOM`. Old `SNIPER` tag still queryable via `/sniper/trades` (`tags includes 'SNIPER'`) for any pre-dual legacy trades.
+- **Same entry rules** for both: listing age 30m-7d, RSI≤70, vol≥1.5×, 3-of-5 higher closes, rug-pull score < 2.
+- **Fees:** Kraken sniper uses 0.42% round-trip (maker entry + taker exit); Crypto.com sniper uses 0.125% round-trip — same structure but ~3.5× cheaper.
+
+### API endpoints
+- `GET /api/v2/sniper/status` — both engines, isolated stats per exchange
+- `GET /api/v2/sniper/kraken/status` — Kraken-only state
+- `GET /api/v2/sniper/cryptocom/status` — Crypto.com-only state
+- `GET /api/v2/sniper/scorecard` — three sections (kraken, cryptocom, legacy)
+- `GET /api/v2/sniper/kraken/scorecard` — Kraken-only scorecard
+- `GET /api/v2/sniper/cryptocom/scorecard` — Crypto.com-only scorecard
+- `GET /api/v2/sniper/trades?exchange=kraken|cryptocom` — filter by exchange
+
+### What to monitor
+- **Both engines should boot:** look for `[SNIPER-KRAKEN] Sniper engine started` and `[SNIPER-CRYPTOCOM] Sniper engine started` on PM2 logs at startup.
+- **Warmup-ack on first refresh:** each engine logs `Warmup: acknowledged N/total pair(s) on <exchange>`.
+- **Detection rate:** Kraken adds ~1-3 USD pairs/week; Crypto.com varies. Watch for `[SNIPER-X] Pair refresh (exchange): N new` lines.
+- **Per-exchange P&L:** the scorecard endpoint produces three sections so you can compare Kraken vs Crypto.com directly.
+
+### Rollback
+- Disable one exchange: set `SNIPER_CONFIG.KRAKEN_ENABLED = false` or `SNIPER_CONFIG.CRYPTOCOM_ENABLED = false`.
+- Disable both: `SNIPER_CONFIG.ENABLED = false`.
+- Existing open sniper positions are not auto-closed.
+
+---
+
 ## 2026-05-06 ~later5 UTC — Hard-prune negative-edge signals (0.5× → 0×) — local-claude
 
 **Files changed:** `v2/pipeline/signalGenerator.ts` (one-line `adaptWeight` change)
