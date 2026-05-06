@@ -112,21 +112,27 @@ export function createSniperEngine(
         return;
       }
       const result = await adapterObj.getInstruments();
-      const rawNames = (result?.data ?? []).map((i) => i.instrument_name);
+      const rawData = (result?.data ?? []) as Array<Record<string, unknown>>;
 
       // Per-exchange ticker filtering:
-      //   * Kraken: krakenAdapter already returns only USD spot pairs in BASEUSD format
-      //   * Crypto.com: returns 800+ mixed instruments — must filter to spot USD only
-      //     (skip -PERP perpetuals, skip _USDT/_USDC; Canadian compliance is USD-only)
-      const tickers = exchange === 'cryptocom'
-        ? rawNames.filter((n) =>
-            typeof n === 'string'
-            && n.endsWith('_USD')
-            && !n.includes('-PERP')
-            && !n.includes('_USDT')
-            && !n.includes('_USDC'),
+      //   * Kraken: krakenAdapter wraps each instrument as {instrument_name: 'BTCUSD', ...}
+      //   * Crypto.com: native API returns {symbol: 'BTC_USD', inst_type: 'CCY_PAIR', quote_ccy: 'USD', ...}
+      //     for spot, plus perpetuals (inst_type: 'PERPETUAL_SWAP', symbol: 'BTCUSD-PERP'),
+      //     USDT pairs, etc. Must filter to USD spot only (Canadian compliance).
+      let tickers: string[];
+      if (exchange === 'cryptocom') {
+        tickers = rawData
+          .filter((i) =>
+            i.inst_type === 'CCY_PAIR'
+            && i.quote_ccy === 'USD'
+            && typeof i.symbol === 'string',
           )
-        : rawNames;
+          .map((i) => i.symbol as string);
+      } else {
+        tickers = rawData
+          .map((i) => i.instrument_name as string)
+          .filter((n) => typeof n === 'string');
+      }
 
       // First refresh: warmup acknowledge to prevent flagging the entire
       // exchange's pair universe as "new listings".
