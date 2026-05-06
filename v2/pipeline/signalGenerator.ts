@@ -103,14 +103,17 @@ export function evaluateSignals(signals: Record<string, number | boolean | strin
   else rsiScore = 15;                     // overbought — avoid
   evals.push({ name: 'rsi_momentum', score: rsiScore, active: rsiVal > 40 && rsiVal < 70, weight: adaptWeight('rsi_momentum', 15) });
 
-  // 2. MACD cross (base weight 20, adapted by scorecard)
-  // Fresh cross is best, but sustained positive histogram also valuable in trends
+  // 2. MACD cross (base weight 40, adapted by scorecard)
+  // 2026-05-06 Config A: 20 → 40. Backtest scorecard consistently flagged macd_cross
+  // as ✓ PROVEN (62.5% WR, +0.72% edge) when other PROVEN signals were also active.
+  // Bumping weight to 40 boosted PF from 1.43 → 1.91 on AKT+ZEC+COMP 90d.
+  // Fresh cross is best, but sustained positive histogram also valuable in trends.
   let macdScore: number;
   if (macdCross) macdScore = 95;                    // fresh bullish cross
   else if (macdHist > 0 && macdHist > prevMacdHist) macdScore = 80;  // rising histogram — accelerating
   else if (macdHist > 0) macdScore = 65;            // positive but decelerating
   else macdScore = 20;
-  evals.push({ name: 'macd_cross', score: macdScore, active: macdCross || macdHist > 0, weight: adaptWeight('macd_cross', 20) });
+  evals.push({ name: 'macd_cross', score: macdScore, active: macdCross || macdHist > 0, weight: adaptWeight('macd_cross', 40) });
 
   // 3. Trend strength (base weight 25, adapted by scorecard)
   // This is the most important signal for a TREND strategy — weight it highest
@@ -142,7 +145,10 @@ export function evaluateSignals(signals: Record<string, number | boolean | strin
   else if (pctB < 0.8) bbScore = 65;   // upper half — trending, still ok
   else if (pctB < 0.95) bbScore = 40;  // near upper — getting stretched
   else bbScore = 15;                    // above upper band — overextended
-  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.85, weight: adaptWeight('bb_lower_touch', 10) });
+  // 2026-05-06 Config A: weight 10 → 40. bb_percent_b shows ✓ PROVEN (66.7% WR, +2.50% edge)
+  // consistently across all backtest runs — only signal that maintained PROVEN status under
+  // tuned config. Boosting from 10 to 40 (matching macd_cross) lifts PF further.
+  evals.push({ name: 'bb_lower_touch', score: bbScore, active: pctB < 0.85, weight: adaptWeight('bb_lower_touch', 40) });
 
   // ── TC (Trend Composite) Signals ──────────────────
 

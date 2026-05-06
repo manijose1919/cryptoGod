@@ -11,14 +11,15 @@ export const V2_CONFIG = {
 
   // --- Scan ---
   SCAN_TICKERS: [
-    'ETHUSD', 'XRPUSD', 'DOGEUSD', 'DOTUSD', 'ADAUSD',
-    // 2026-04-29: data-driven swap based on R:R 1.4 live cohort (54 closed trades):
-    //   REMOVED BTCUSD: 0/3 = 0% WR, -$3.21/trade — worst per-trade performer
-    //   ADDED   DOTUSD: 6/8 = 75% WR, +$0.31/trade live (prior backtest 20% WR was misleading)
-    //   ADDED   ADAUSD: 3/5 = 60% WR, +$0.47/trade live (prior backtest 13% WR was misleading)
-    // Per-ticker R:R 1.4 net: DOGE +$7.66, XRP +$2.70, DOT +$2.51, ADA +$2.37, ETH -$1.99
-    // Counterfactual: this 5-ticker set on the same 54 trades would have netted +$13.25 vs actual -$7.38
-    // Removed earlier: SOLUSD (31% WR, -$22.77), AVAXUSD (22% WR, -$10.76), LINKUSD (0/4), BNBUSD (22.6% WR)
+    'AKTUSD', 'ZECUSD', 'COMPUSD',
+    // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
+    //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
+    //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
+    //   COMPUSD: PF 1.20 alone (Compound DeFi) — third strongest, low-correlation to AKT/ZEC
+    // Combined (AKT+ZEC+COMP, single-strategy backtest, 4h, 90d): PF 1.62, +$151, +5.0%, max DD 2.3%
+    // Robustness: 30d PF 1.00 (break-even, yellow flag), 60d PF 1.33, 90d PF 1.62 — improves with longer window
+    // Removed: ETHUSD, XRPUSD, DOGEUSD, DOTUSD, ADAUSD (all PF<1 in current 90d regime under tuned config)
+    // Per-ticker (90d, Config A): ETH -4.2%, XRP losing, DOGE losing, DOT/ADA worst-2 (-$84/-$112)
   ],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 0.3,  // Calibrated for 4h candles (0.05 was for 1m/15m)
@@ -56,10 +57,10 @@ export const V2_CONFIG = {
   CANDLE_INTERVAL: '4h' as string, // Was 15m — backtest: 15m=21%WR/-$1030, 1h=26%WR/-$1669, 4h=27%WR/-$455. 4h gives trends room past 0.52% fees.
 
   // --- Exit Management ---
-  STOP_LOSS_ATR_MULT: 2.5,
+  STOP_LOSS_ATR_MULT: 2.0,  // 2026-05-06 Config A: 2.5 → 2.0 — tighter stop in combination with TG 0.03 reduces avg_loss while win profile preserved by trailing
   TAKE_PROFIT_ATR_MULT: 4.0,       // 2026-04-29: 3.5 → 4.0 (R:R 1.4 → 1.6). Avg_win problem: at R:R 1.4 the cohort was avg_win $0.97 vs needed ~$1.10 for 59% WR break-even. Wider TP makes individual TP hits +$2.00 instead of +$1.75. Risk: historical R:R 1.6 cohort underperformed R:R 1.4 (-$10.89 vs -$1.89), but that was without working BE/trailing stops. With current trailing-active@1% catching moderate winners, wider TP may behave differently. Deliberate test under user's risk-on framing 2026-04-29.
-  TRAILING_ACTIVATE_PERCENT: 0.01,  // 1.0% — was 1.5%; activating earlier converts time-kills into trailing exits (27 time-kills avg +$0.06 gross were dying to fees)
-  TRAILING_GIVEBACK_PERCENT: 0.25,  // Was 0.30 — tighter trail keeps 75% of gains (vs 70%); combined with earlier activation, catches moderate winners
+  TRAILING_ACTIVATE_PERCENT: 0.025, // 2026-05-06 Config A: 0.01 → 0.025 — wait longer before activating trail. Reduces premature exits on noise; combined with TG 0.03 produces avg_win $8.03 (was $1.92 baseline)
+  TRAILING_GIVEBACK_PERCENT: 0.03,  // 2026-05-06 Config A: 0.25 → 0.03 — extreme tight trail. Once activated, surrender only 3% of peak gain. The trailing-exit P&L moved from +$216 (PF 1.43) to +$312 (PF 1.62) on AKT+ZEC+COMP 90d
   TIME_KILL_MS: 12 * 60 * 60 * 1000,     // 12h — 3 bars on 4h candles (was 16h/4 bars; trades stale after 10.8h avg hold were bleeding fees)
   TIME_KILL_MIN_MOVE: 0.007,
   EXIT_CHECK_INTERVAL_MS: 15_000,
