@@ -23,6 +23,7 @@ import {
   getOpenTrades,
   getOpenTradesByStrategy,
   getClosedTrades,
+  getClosedTradesByStrategy,
 } from '../attribution/attributionStore.ts';
 import { analyzeClosedTrade } from '../attribution/postTradeAnalyzer.ts';
 
@@ -244,8 +245,12 @@ export function stopV2Engine(): void {
  * Get current engine status snapshot.
  */
 export function getV2Status(): V2EngineStatus {
-  const openTrades = getOpenTrades();
-  const closedTrades = getClosedTrades(1000);
+  // ISOLATION: filter to TREND only. This is the TREND engine's status — must
+  // not include MOMENTUM, SNIPER_KRAKEN, or SNIPER_CRYPTOCOM trade counts /
+  // P&L. Reports for those go through their own /momentum/status and
+  // /sniper/* endpoints respectively.
+  const openTrades = getOpenTradesByStrategy('TREND');
+  const closedTrades = getClosedTradesByStrategy('TREND', 1000);
   const totalPnlNet = closedTrades.reduce((sum, t) => sum + (t.pnlNet ?? 0), 0);
 
   return {

@@ -28,13 +28,28 @@ v2Router.get('/status', (_req: Request, res: Response) => {
   }
 });
 
-// --- GET /trades ---
+// --- GET /trades --- DAY-TRADING ONLY (TREND + MOMENTUM)
+// Sniper trades are returned by /api/v2/sniper/trades. Keeping these endpoints
+// separate enforces the reporting contract: sniper P&L is never aggregated
+// with day-trading P&L. Pass ?all=1 for backward compat with old callers.
 v2Router.get('/trades', (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string, 10) || 50;
-    const open = getOpenTrades();
-    const closed = getClosedTrades(limit);
-    res.json({ open, closed });
+    if (req.query.all === '1') {
+      const open = getOpenTrades();
+      const closed = getClosedTrades(limit);
+      res.json({ open, closed, includesSniper: true });
+      return;
+    }
+    const openTrend = getOpenTradesByStrategy('TREND');
+    const openMom = getOpenTradesByStrategy('MOMENTUM');
+    const closedTrend = getClosedTradesByStrategy('TREND', limit);
+    const closedMom = getClosedTradesByStrategy('MOMENTUM', limit);
+    res.json({
+      open: [...openTrend, ...openMom],
+      closed: [...closedTrend, ...closedMom],
+      strategies: ['TREND', 'MOMENTUM'],
+    });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
