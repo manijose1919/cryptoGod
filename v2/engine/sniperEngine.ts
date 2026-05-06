@@ -396,7 +396,7 @@ export function buildCryptocomSniper(adapter: ExchangeAdapter, budget: number): 
   cryptocomSniper = createSniperEngine(
     'cryptocom',
     adapter,
-    '../../services/exchangeAdapters/cryptoComAdapter.js',
+    '../../services/exchangeAdapters/cryptocomAdapter.js',
     'SNIPER_CRYPTOCOM',
     budget,
     'SNIPER-CRYPTOCOM',
