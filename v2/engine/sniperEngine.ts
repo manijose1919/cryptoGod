@@ -72,14 +72,44 @@ async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   }
 }
 
+// Threshold: more than this many "new" listings in one pass is implausible —
+// it means the cache was empty and we're catching up. Treat as warmup.
+const WARMUP_THRESHOLD = 20;
+
 async function refreshKrakenPairList(): Promise<void> {
   if (!detectorModule) return;
   try {
     const mod = await import('../../services/exchangeAdapters/krakenAdapter.js');
     const result = await mod.krakenAdapter.getInstruments();
     const tickers = (result?.data ?? []).map((i: { instrument_name: string }) => i.instrument_name);
+
+    // First refresh: do a warmup acknowledge before letting detectNewListings
+    // run. Otherwise an empty in-memory cache would mis-flag every existing
+    // pair as "new" and the sniper would try to enter on BTCUSD, ETHUSD, etc.
+    if (lastPairRefresh === 0) {
+      const ackFn = detectorModule.acknowledgeKnownTickers as ((t: string[]) => number) | undefined;
+      if (ackFn) {
+        const ackedCount = ackFn(tickers);
+        console.log(`[SNIPER] Warmup: acknowledged ${ackedCount}/${tickers.length} pair(s) — sniper now tracks only genuinely new listings`);
+      }
+    }
+
     const detectFn = detectorModule.detectNewListings as (t: string[]) => string[];
     const newlyDetected = detectFn ? detectFn(tickers) : [];
+
+    // Defense-in-depth: if a refresh ever returns >WARMUP_THRESHOLD "new"
+    // tickers, that's a cache-empty signature, not a real listing event.
+    // Acknowledge them silently rather than letting them become tradeable.
+    if (newlyDetected.length > WARMUP_THRESHOLD) {
+      console.warn(`[SNIPER] Implausible new-listing burst (${newlyDetected.length}) — likely cache-empty event, treating as warmup`);
+      const ackFn = detectorModule.acknowledgeKnownTickers as ((t: string[]) => number) | undefined;
+      if (ackFn) ackFn(newlyDetected);
+      // Still increment pairRefreshCount so we don't get stuck in a warmup loop.
+      stats.pairRefreshCount++;
+      lastPairRefresh = Date.now();
+      return;
+    }
+
     stats.pairRefreshCount++;
     stats.newListingsDetected += newlyDetected.length;
     lastPairRefresh = Date.now();
