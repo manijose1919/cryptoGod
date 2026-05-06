@@ -2,6 +2,7 @@ import type { Candle, SignalSnapshot } from '../../pipeline/types.ts';
 import type { RegimeResult } from '../../indicators/indicators.ts';
 import type { StrategyConfig, EntrySignal } from './types.ts';
 import { evaluateSignals } from '../../pipeline/signalGenerator.ts';
+import { checkTimeGate } from '../../pipeline/timeGate.ts';
 
 const NO_ENTRY: EntrySignal = {
   shouldEnter: false, confidence: 0, entryPrice: 0,
@@ -84,6 +85,17 @@ export function detectEntry(
 ): EntrySignal {
   if (!strategy.allowedRegimes.includes(regime.regime)) return NO_ENTRY;
 
+  // TimeGate overlay (2026-05-06): blocks signals during data-discovered worst
+  // hours/days regardless of which strategy is asking. The backtest passes the
+  // current candle's time; in live, it falls back to wall-clock.
+  const lastCandleTime = candles[candles.length - 1]?.time;
+  const tg = checkTimeGate(lastCandleTime);
+  if (!tg.allow) return NO_ENTRY;
+
+  // Note: scoreBoost is consumed inside detectTrend (composite-score logic);
+  // other strategies don't have a composite score so the boost only widens
+  // the time-window, not their entry threshold.
+
   switch (strategy.name) {
     case 'TREND': return detectTrend(strategy, candles, signals, regime);
     case 'BREAKOUT': return detectBreakout(strategy, candles, signals, regime);
@@ -99,7 +111,7 @@ export function detectEntry(
 // ============================================================
 function detectTrend(
   config: StrategyConfig,
-  _candles: Candle[],
+  candles: Candle[],
   signals: SignalSnapshot,
   regime: RegimeResult,
 ): EntrySignal {
@@ -122,7 +134,10 @@ function detectTrend(
   const pctB = signals.bb_percent_b as number;
   if (pctB > 0.95) score -= Math.round(10 + (pctB - 0.95) * 200);
 
-  if (score < config.entryParams.minCompositeScore) return NO_ENTRY;
+  // TimeGate score boost — during proven-best hours, lower threshold by BOOST_AMOUNT
+  const tg = checkTimeGate(candles[candles.length - 1]?.time);
+  const adjustedThreshold = config.entryParams.minCompositeScore - tg.scoreBoost;
+  if (score < adjustedThreshold) return NO_ENTRY;
 
   const price = signals.close_price as number;
   const atr = atrDollar(signals);

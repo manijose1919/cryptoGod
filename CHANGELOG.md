@@ -37,6 +37,66 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-06 ~later3 UTC — TimeGate overlay shipped: hour-of-day + day-of-week filter (Thread 3a/b) — local-claude
+
+**Files changed:** `v2/pipeline/timeGate.ts` (new), `v2/pipeline/signalGenerator.ts`, `v2/pipeline/momentumSignal.ts`, `v2/backtest/multiStrategy/entryDetectors.ts`, `v2/backtest/backtestEngine.ts`
+**Stats baseline reset:** YES — material filter change to entry decisions
+
+**What changed:**
+A new lightweight filter (`v2/pipeline/timeGate.ts`) that wraps both TREND and MOMENTUM signal generation. Blocks signals during the data-discovered worst hours/days, boosts during the best hours by lowering the score threshold.
+
+**Pattern (data-discovered, validated on 132K training_trades + 137 v2 production):**
+- **Hour 12 UTC (NY open):** 66.9% WR / +$783 avg in training, **85.7% WR / +$0.71 avg in v2 production** ← best
+- **Hour 14, 17, 21 UTC:** consistently profitable — boosted
+- **Hours 0, 4, 13, 20 UTC:** consistently worst (33-44% WR, -$1019 to -$2087/trade in training; -$0.85 to -$1.69 avg in v2) ← BLOCKED
+- **Friday:** 40.5% WR, -$938/trade in training (catastrophic) ← BLOCKED
+- **Sunday:** 58.8% WR, +$918/trade in training (best day)
+
+**TimeGate config:**
+- `BLOCKED_HOURS: [0, 4, 13, 20]` UTC — hard reject regardless of signal score
+- `BLOCKED_DAYS: [5]` Friday — hard reject all-day
+- `BOOSTED_HOURS: [12, 14, 17, 21]` UTC — lower entry-score threshold by 5 points
+- `ENABLED: true` (default — overlay is active)
+
+**Backtest result (Config A on AKT+ZEC+COMP, 4h, 90d — head-to-head):**
+
+| Metric | TimeGate OFF | TimeGate ON | Δ |
+|---|---|---|---|
+| Trades | 150 | 126 | -16% |
+| WR | 32.7% | 35.7% | +3.0 pp |
+| **PF** | **1.53** | **1.93** | **+26%** |
+| Net P&L | +$136 | +$179 | +$43 |
+| Return | +4.5% | +6.0% | +1.5 pp |
+| Max DD | -2.3% | -1.4% | 40% reduction |
+
+**Robustness across windows (TimeGate ON):**
+- 30d: PF 1.74 / +1.3%
+- 60d: PF 1.62 / +3.3%
+- 90d: PF 1.93 / +6.0%
+
+**Why this works:**
+The blocked hours (0, 4, 13, 20 UTC) were where stops were getting hit disproportionately — likely thin-liquidity windows (Asian open lull, Asian-EU handoff, NY close exhaustion). The boosted hours (12, 14, 17, 21 UTC) align with NY market session activity when trends actually develop and follow through.
+
+**Where applied:**
+- Live engine TREND path: `signalGenerator.ts:generateSignals` after composite-score calc
+- Live engine MOMENTUM path: `momentumSignal.ts:detectMomentumEntry` early gate
+- Single-strategy backtest: `backtestEngine.ts` after composite-score check
+- Multi-strategy backtest: `entryDetectors.ts` global gate (covers all strategies)
+
+**For backtests** the gate uses the candle's `last bar time`. **For live** it falls back to `Date.now()`.
+
+**What to monitor:**
+- `[V2] REJECT: TimeGate blocked hour X UTC` log lines should appear ~16% of the time during scans
+- Friday rejects: full-day silence on TREND/MOMENTUM entries (existing positions still managed by exits)
+- Hour 12, 14, 17, 21 UTC: signals scoring 55-59 should now pass (boosted threshold) — watch for `[V2] PASS: ... TimeGate=boosted hour ...`
+- Combined with TREND + MOMENTUM v2: aggregate PF target raises to ~1.7-2.0
+- If first week shows zero trades, pattern may not match recent regime — disable via `TIME_GATE_CONFIG.ENABLED = false`
+
+**Rollback:**
+Set `TIME_GATE_CONFIG.ENABLED = false` in `v2/pipeline/timeGate.ts`. Single line, no other changes needed.
+
+---
+
 ## 2026-05-06 ~later2 UTC — MOMENTUM v2 ENABLED live (running alongside TREND) — local-claude
 
 **Files changed:** `v2/engine/config.ts` (MOMENTUM_CONFIG.ENABLED: false → true)

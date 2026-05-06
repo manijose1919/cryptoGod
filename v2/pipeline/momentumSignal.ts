@@ -19,6 +19,7 @@
 import type { Candle, SignalResult } from './types.ts';
 import { computeSignals, detectRegime, macd } from '../indicators/indicators.ts';
 import { MOMENTUM_CONFIG } from '../engine/config.ts';
+import { checkTimeGate } from './timeGate.ts';
 
 // --- helpers ---
 
@@ -46,6 +47,14 @@ export function detectMomentumEntry(
   ticker: string,
 ): SignalResult | null {
   if (candles.length < MOMENTUM_CONFIG.MIN_CANDLES) return null;
+
+  // --- TimeGate (hour-of-day + day-of-week filter) ---
+  // Same data-discovered overlay applied to TREND. For backtest, candle time;
+  // for live, current wall clock. MOMENTUM does NOT use scoreBoost (no
+  // composite-score threshold to lower); only honors hard-block hours/days.
+  const lastCandleTime = candles[candles.length - 1]?.time;
+  const tg = checkTimeGate(lastCandleTime);
+  if (!tg.allow) return null;
 
   const { signals } = computeSignals(candles);
   const regimeResult = detectRegime(candles);

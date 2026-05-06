@@ -10,6 +10,7 @@ import { EXIT_REASON } from '../pipeline/types.ts';
 import { V2_CONFIG } from '../engine/config.ts';
 import { computeSignals } from '../indicators/indicators.ts';
 import { evaluateSignals } from '../pipeline/signalGenerator.ts';
+import { checkTimeGate } from '../pipeline/timeGate.ts';
 import { scanMarket } from '../pipeline/marketScanner.ts';
 import { SIGNAL_ACTIVE_THRESHOLDS } from '../attribution/postTradeAnalyzer.ts';
 import type {
@@ -300,7 +301,11 @@ function simulateTicker(
       compositeScore -= Math.round(6 + (pctB - 0.80) * 120);
     }
 
-    if (compositeScore < V2_CONFIG.MIN_COMPOSITE_SCORE) continue;
+    // TimeGate overlay — block entries during data-discovered worst hours/days,
+    // boost during best hours by lowering the score threshold.
+    const tg = checkTimeGate(window[window.length - 1]?.time);
+    if (!tg.allow) continue;
+    if (compositeScore < V2_CONFIG.MIN_COMPOSITE_SCORE - tg.scoreBoost) continue;
 
     const confidence = compositeScore / 100;
 

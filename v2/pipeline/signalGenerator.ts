@@ -5,6 +5,7 @@
 
 import type { Candle, ScanResult, SignalResult } from './types.ts';
 import { V2_CONFIG } from '../engine/config.ts';
+import { checkTimeGate } from './timeGate.ts';
 import { computeSignals } from '../indicators/indicators.ts';
 import { getSignalScores } from '../attribution/attributionStore.ts';
 
@@ -261,16 +262,30 @@ export function generateSignals(
 
     const confidence = compositeScore / 100;
 
-    const passed = compositeScore >= V2_CONFIG.MIN_COMPOSITE_SCORE
+    // TimeGate overlay (2026-05-06): hour-of-day + day-of-week filter discovered
+    // from data analysis on 132K training trades + 137 v2 production trades.
+    // Blocks worst hours (0, 4, 13, 20 UTC) and Fridays; boosts entries during
+    // proven-best hours (12, 14, 17, 21 UTC) by lowering score threshold.
+    // For backtests, candle's last-bar time is passed in via tickerCandles;
+    // for live, defaults to Date.now() for current wall-clock.
+    const lastCandleTime = candles[candles.length - 1]?.time;
+    const tg = checkTimeGate(lastCandleTime);
+    const adjustedThreshold = V2_CONFIG.MIN_COMPOSITE_SCORE - tg.scoreBoost;
+
+    const passed = tg.allow
+                && compositeScore >= adjustedThreshold
                 && confidence >= V2_CONFIG.MIN_CONFIDENCE;
 
     const activeSignals = evals.filter((e) => e.active).map((e) => e.name);
     const bbNote = pctB > 0.95 ? `, BB%B=${pctB.toFixed(2)}(penalty)` : '';
     const tcNote = tcVeto ? `, TC=${tcVal.toFixed(1)}(sell-zone)` : '';
     const confNote = confidence < V2_CONFIG.MIN_CONFIDENCE ? `, conf=${confidence.toFixed(2)}<${V2_CONFIG.MIN_CONFIDENCE}` : '';
-    const reason = passed
-      ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}${tcNote}`
-      : `REJECT: score=${compositeScore.toFixed(1)} < min ${V2_CONFIG.MIN_COMPOSITE_SCORE}${bbNote}${tcNote}${confNote}`;
+    const tgNote = !tg.allow ? `, TimeGate=${tg.reason}` : (tg.scoreBoost > 0 ? `, TimeGate=${tg.reason}(thresh ${adjustedThreshold})` : '');
+    const reason = !tg.allow
+      ? `REJECT: TimeGate ${tg.reason} (score=${compositeScore.toFixed(1)} ignored)`
+      : passed
+        ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}${tcNote}${tgNote}`
+        : `REJECT: score=${compositeScore.toFixed(1)} < min ${adjustedThreshold}${bbNote}${tcNote}${confNote}${tgNote}`;
 
     results.push({
       ticker: scan.ticker,
