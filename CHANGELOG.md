@@ -37,6 +37,95 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-06 ~later4 UTC — New-coin SNIPER engine shipped (isolated side-project) — local-claude
+
+**Files changed:**
+- `v2/engine/config.ts` (added `SNIPER_CONFIG` block)
+- `v2/engine/sniperEngine.ts` (new — engine with own loop, budget, stats)
+- `v2/pipeline/sniperSignal.ts` (new — entry detector, reuses `services/newCoinDetector.js`)
+- `v2/pipeline/sniperExitManager.ts` (new — rug-pull-aware exits)
+- `v2/index.ts` (boot wiring under `SNIPER_CONFIG.ENABLED`)
+- `v2/dashboard/attributionAPI.ts` (added `/api/v2/sniper/{status,trades,scorecard}`)
+
+**Stats baseline reset:** NO (sniper is isolated — TREND/MOM stats untouched)
+
+### What this is
+A side-project trading engine that snipes new Kraken USD listings during their early volatility window. Uses the existing `services/newCoinDetector.js` for listing detection + rug-pull screening; adds a v2-style entry/exit pipeline with its own independent budget ($500 paper).
+
+### **REPORTING CONTRACT (read carefully — this is a standing rule)**
+
+**Day-trading and sniper P&L are NEVER aggregated. EVER.** They are fundamentally different strategies and combining their stats hides the real performance of each.
+
+**When the user asks for a progress report:** output TWO separate sections, one after the other. Never a combined "total PF" / "total PnL" / "total WR" line that mixes them.
+
+```
+═══ DAY-TRADING (TREND + MOMENTUM) ═══
+[stats from v2_trades WHERE strategy IN ('TREND','MOMENTUM')
+ AND entry_time >= stats_baseline_time]
+- Total trades, WR, PF, PnL, max DD
+- Exit reasons breakdown
+- Recent trades
+
+═══ NEW-COIN SNIPER ═══
+[stats from v2_trades WHERE strategy = 'SNIPER']
+- Total trades, WR, PF, PnL
+- Active listings tracked + rug-pull scores
+- Recent sniper trades
+```
+
+**SQL contract:**
+- Day-trading: `WHERE strategy IN ('TREND','MOMENTUM') AND entry_time >= (SELECT value FROM settings WHERE key='stats_baseline_time')`
+- Sniper: `WHERE strategy = 'SNIPER'` (no baseline filter — sniper has its own clean history starting now)
+
+**API contract:**
+- Day-trading scorecard: `GET /api/v2/scorecard` (existing — covers TREND + MOMENTUM)
+- Sniper scorecard: `GET /api/v2/sniper/scorecard` (new — sniper-only stats)
+- Sniper status: `GET /api/v2/sniper/status` (new — engine state, active listings)
+
+**Telegram contract:**
+- Day-trading alerts: `[V2]` prefix
+- Sniper alerts: `[SNIPER]` prefix
+- Both go to the same Telegram chat — visual prefix distinguishes them
+
+### Why an isolated engine?
+1. **Different fundamentals:** day-trading TREND/MOM target structured uptrends in known liquid coins; sniper hunts asymmetric volatility in unknown new listings. Mixing the win/loss profiles misleads tuning decisions.
+2. **Cannot backtest:** sniper has no historical "new listing event" data to replay. Day-trading was tuned via 90d backtests; sniper has to be tuned from live trade outcomes.
+3. **Different risk:** sniper has 6× higher rug-pull risk per trade. Tighter stops (-3%), shorter time-kill (8h), wider trail giveback (30%). Mixing this with day-trading's 12h holds and 2-2.5× ATR stops would muddle the post-trade analysis.
+4. **Different success bar:** if sniper hits PF 1.2 with $50 trades, that's a win. Day-trading needs PF 1.6+ with larger size. Combined stats would mark sniper as "underperforming" when it's actually doing its job.
+
+### Engine specs
+- **Budget:** $500 (paper) — entirely separate from TREND ($3K) and MOMENTUM ($1K)
+- **Detection:** polls Kraken AssetPairs every 30 min via `newCoinDetector.detectNewListings`
+- **Listing window:** 30 min – 7 days post-listing (skip first 30 min of liquidity chaos)
+- **Entry rules** (ALL must hit):
+  - Rug-pull score < 2 (no major red flags)
+  - Bar volume ≥ $500 USD
+  - RSI ≤ 70 (not overbought)
+  - Volume ratio ≥ 1.5× 12-bar avg
+  - 3+ of last 5 closes higher than previous
+- **Position size:** 10% of $500 × confidence (max 20%) = ~$25-100/trade
+- **Max open:** 2 sniper positions simultaneously
+- **Exits:** -3% hard stop / +5% trail activation / 30% giveback / 8h time-kill / rug-pull score ≥ 3 → instant exit
+
+### What to monitor
+- **Detection rate:** `getSniperStatus().newListingsDetected` should increment as Kraken adds new pairs (typically 1-3 per week)
+- **Active listings tracked:** non-zero means detector is working; check the `listingsSample` array in /api/v2/sniper/status
+- **First sniper trade:** could be days/weeks away — depends on Kraken listing cadence
+- **Rug-pull triggers:** check `[SNIPER] Trade closed: ... reason=stop_loss` with peakPrice/exitPrice ratio for rug-pull exits
+- **Per-trade size:** should be $25-100 — if much higher, position sizing has a bug
+
+### Promotion path (if successful)
+After ≥20 closed sniper trades with PF > 1.3 and positive net P&L:
+1. Increase budget from $500 to $1000-2000
+2. Consider live mode (not paper)
+3. May raise MAX_OPEN_POSITIONS from 2 to 3-4
+4. Even if promoted, **reporting stays isolated** — never merge into TREND/MOM stats
+
+### Rollback
+Set `SNIPER_CONFIG.ENABLED = false` in `v2/engine/config.ts`. Engine won't boot on next restart. Open sniper positions will not be auto-closed (rare; max 2 at any time) — manage manually if needed.
+
+---
+
 ## 2026-05-06 ~later3 UTC — TimeGate overlay shipped: hour-of-day + day-of-week filter (Thread 3a/b) — local-claude
 
 **Files changed:** `v2/pipeline/timeGate.ts` (new), `v2/pipeline/signalGenerator.ts`, `v2/pipeline/momentumSignal.ts`, `v2/backtest/multiStrategy/entryDetectors.ts`, `v2/backtest/backtestEngine.ts`
