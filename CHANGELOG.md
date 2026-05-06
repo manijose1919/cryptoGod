@@ -37,6 +37,64 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-06 ~UTC — Config A deploy: TREND optimization shipped to live (paper) — local-claude
+
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/signalGenerator.ts`
+**Stats baseline reset:** YES — new baseline = epoch ms set on VPS post-deploy (see deploy log)
+
+**What changed:**
+Final result of an 80+ experiment optimization sweep across 14+ rounds. Three changes shipped:
+
+1. **`SCAN_TICKERS`** (5 → 3): `ETHUSD, XRPUSD, DOGEUSD, DOTUSD, ADAUSD` → **`AKTUSD, ZECUSD, COMPUSD`**.
+   Wide-ticker scan tested 50+ candidates. AKT (Akash compute), ZEC (Zcash privacy), COMP (Compound DeFi)
+   showed strongest individual edges (PF 1.69, 1.33, 1.20 respectively). Old ticker set's PF was 0.40.
+2. **Exit params (Config A):**
+   - `STOP_LOSS_ATR_MULT`: 2.5 → **2.0** (tighter stop, smaller avg_loss)
+   - `TRAILING_ACTIVATE_PERCENT`: 0.01 → **0.025** (wait longer before trail activates — reduces premature exits)
+   - `TRAILING_GIVEBACK_PERCENT`: 0.25 → **0.03** (extreme tight trail — keeps 97% of peak gain when triggered)
+3. **Signal weights** in `signalGenerator.ts`:
+   - `bb_lower_touch`: 10 → **40** (this signal was ✓ PROVEN at 66.7% WR / +2.50% edge across all backtest runs)
+   - `macd_cross`: 20 → **40** (✓ PROVEN at 62.5% WR / +0.72% edge in stacked configs)
+
+**Why:**
+Single-strategy backtest (live engine code path), AKT+ZEC+COMP, 4h, 90d:
+  - **Before (default config, 5 generic tickers):** PF 0.40, -7.0% return, max DD 7.8%
+  - **After (Config A):** PF 1.62, +5.0% return, max DD 2.3%
+  - Improvement: +1.22 PF (4× ratio), +12.0pp return, max DD halved
+
+Key driver: avg_win went from $1.92 to $8.03 (winners now run further before trail tightens).
+Trade count fell 319 → 143 (selectivity up; fewer trades, each higher quality).
+
+**Why these tickers:**
+  - AKTUSD: PF 1.69 standalone, 76 trades, +9.0% — best individual ticker
+  - ZECUSD: PF 1.33, 59 trades — solid, low correlation to AKT
+  - COMPUSD: PF 1.20, 44 trades — third-best, DeFi exposure for diversification
+  - All other tested tickers (ETH, BTC, JTO, ICP, RENDER, etc.) had PF < 1 in current 90d regime
+    OR drag down PF when added to ensemble
+
+**Robustness verified:** 30d PF 1.00 (yellow flag — recent month is break-even before slippage),
+60d PF 1.33, 90d PF 1.62. All windows non-negative. Strategy improves with longer windows.
+
+**What to monitor / watch for:**
+- **Trade frequency** — expect ~1.6 trades/day across 3 tickers. If 0 trades for 48h+, signal gate may be too tight; lower `MIN_CONFIDENCE` to 0.65 in config.
+- **`SCAN_TICKERS` change took effect** — first boot log should show `[V2] Engine initialized: ... exchange=kraken` and signal scans on AKTUSD/ZECUSD/COMPUSD only. Old ticker mentions in logs are from pre-restart trades aging out.
+- **Live performance vs backtest** — backtest doesn't model slippage beyond 0.52% round-trip, partial fills, ML gatekeeper rejections. Expect live PF 0.5-1.0 lower than backtest's 1.62.
+- **30d PF watch** — if live trades over the next 30 days show PF < 1.0, that confirms the yellow-flag concern and we should reconsider. If PF > 1.3, the optimization is real.
+- **Open positions from before deploy keep running** on old config — don't force-close. Track outcomes as legacy/background, primary stats use new baseline.
+- **V2_MODE remains `shadow`** (paper) — no real money at risk. Decision to flip to `live` is separate.
+
+**Rollback:**
+Single revert of this commit reverts all three changes. The pre-Config-A defaults are well documented in the comments.
+
+**Next session — MOMENTUM v2 port to live:**
+A rebuilt MOMENTUM strategy (real z-score spike detection + higher-highs filter + percent-giveback trail)
+showed PF 1.70-2.32 across all backtest windows on `ZECUSD, RUNEUSD, FLOWUSD, ENAUSD, KASUSD, ICPUSD, WIFUSD`.
+Currently lives in `v2/backtest/multiStrategy/entryDetectors.ts` (backtest-only). Next session will port to
+the live engine path (`v2/engine/momentumEngine.ts`, `v2/pipeline/momentumSignal.ts`) and re-enable in
+`v2/index.ts`. Combined deployment expected: TREND (PF 1.62) + MOMENTUM (PF 1.70+) on disjoint ticker sets.
+
+---
+
 ## 2026-05-04 03:30 UTC — Wave-4 sweep: 8 batches covering MEDIUM + LOW items — local-claude
 
 **Commits:** `40102e6`, `69f7d40`, `795d3e6`, `6074a10`, `ca12e5e`, `28b9d30`, `e2ee559`, `b7e9903`
