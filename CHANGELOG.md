@@ -37,6 +37,64 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-06 ~later UTC — MOMENTUM v2 ported to live engine (default disabled) — local-claude
+
+**Files changed:** `v2/pipeline/momentumSignal.ts` (rebuilt), `v2/pipeline/momentumExitManager.ts` (rebuilt), `v2/engine/momentumEngine.ts` (rebuilt), `v2/engine/config.ts` (added MOMENTUM_CONFIG block), `v2/index.ts` (re-enabled MOMENTUM gated on MOMENTUM_CONFIG.ENABLED), `v2/backtest/multiStrategy/entryDetectors.ts` (v2 entry logic — already in use for backtests)
+**Stats baseline reset:** no — MOMENTUM_CONFIG.ENABLED=false by default; this is dormant code, no live behavior change until flag flips
+
+**What changed:**
+Port of the MOMENTUM v2 rebuild (validated in backtest at PF 1.70-2.32 across windows) from the multi-strategy backtest path to the live engine code path. New code lands disabled by default — flip `MOMENTUM_CONFIG.ENABLED` to `true` when ready to ship live.
+
+**Why MOMENTUM v1 was broken:**
+Original entry compared `|macdHist|` (price-acceleration units) to `avgAbsMove` of price changes (price units). Different scales → near-random output → 0% WR over 7 trades historically. Original exit used `histogram_decay` which fired at first momentum stall — too sensitive, exited at losses.
+
+**v2 entry logic:**
+- z-score spike: `(macdHist - mean20) / stdev20 ≥ 1.0` — proper statistical "is this unusual"
+- Higher-highs filter: 3+ of last 5 closes higher than previous bar
+- Current bar's high > prior 3 bars' highs (real breakout, not single-bar wick)
+- RSI bracket 50-70 (momentum but not overbought)
+- Volume ≥ 1.3× 20-bar avg
+- Stop: 3-bar swing low - 0.2 ATR (not arbitrary ATR-multiple)
+
+**v2 exit logic:**
+- Take-profit: 3× ATR (added — original had no TP, relied entirely on histogram_decay)
+- Break-even at +1.5% PnL
+- Trailing stop: activates at +2.5%, gives back only 5% of peak gain (replaces histogram_decay)
+- Quick-kill: tighten stop after 4 bars with no progress
+- Time-kill: 16 bars (16 × 4h = 2.7d)
+
+**Backtest reference (multi-strategy backtest, identical entry logic to live):**
+- 7 tickers: ZECUSD, RUNEUSD, FLOWUSD, ENAUSD, KASUSD, ICPUSD, WIFUSD
+- Timeframe: 4h
+- 30d: PF 2.32 / +0.9% / max DD 0.2%
+- 60d: PF 2.15 / +1.2% / max DD 0.2%
+- 90d: PF 1.70 / +1.0% / max DD 0.4%
+- Latest validation (post-port): PF 1.41 / +0.6% / max DD 0.6% (window slid forward; still profitable)
+- Avg win/loss ratio: 4.04-4.66× across runs
+
+**Why ZECUSD overlaps with TREND's SCAN_TICKERS:**
+Different signal patterns extract different edges from the same asset. TREND fires on composite-score breakouts; MOMENTUM fires on z-score histogram spikes after pullbacks. They rarely fire simultaneously. Position-cap protection prevents double-stacking.
+
+**To ship MOMENTUM v2 live (next session):**
+1. Flip `MOMENTUM_CONFIG.ENABLED` to `true` in `v2/engine/config.ts`
+2. Push commit + deploy via VPS hook
+3. Set new `stats_baseline_time` (per CLAUDE.md — material strategy enable counts as a config change)
+4. Monitor for 50+ MOMENTUM closes before evaluating — initial sample is noisy
+
+**What to monitor when enabled:**
+- `[MOM] Trade opened: ...` log lines — should fire ~1×/day across 7 tickers
+- `[MOM] Trade closed: ... reason=trailing PnL=$+X` — most exits should be `trailing` or `take_profit`
+- `[MOM] Trade closed: ... reason=stop_loss` should be ~30% of exits (the strategy's WR ~30%)
+- `[MOM ExitMgr] skipped X` warnings should be rare
+- If z-score threshold (1.0) produces zero trades for >48h, lower to 0.7 in MOMENTUM_CONFIG
+
+**Rollback:**
+`MOMENTUM_CONFIG.ENABLED = false` (or revert this commit). Live engine path matches the multi-strategy backtest path now — same logic in two places. Future changes to one should mirror to the other.
+
+**`v2/backtest/multiStrategy/entryDetectors.ts`** (the v2 detect functions for MR/BO/MOM): committed alongside this change. The MR and BREAKOUT v2 rebuilds are present but their live engines are NOT being re-enabled (PF 0.18 and 0.37 respectively in clean tests — not viable). Code is preserved for future rework reference.
+
+---
+
 ## 2026-05-06 ~UTC — Config A deploy: TREND optimization shipped to live (paper) — local-claude
 
 **Files changed:** `v2/engine/config.ts`, `v2/pipeline/signalGenerator.ts`
