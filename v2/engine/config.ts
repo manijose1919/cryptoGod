@@ -108,7 +108,7 @@ export const V2_CONFIG = {
 // ============================================
 
 export const MOMENTUM_CONFIG = {
-  ENABLED: false,  // 2026-05-06: v2 logic ported from backtest path. Default off until live verification.
+  ENABLED: true,   // 2026-05-06: ENABLED for live testing alongside TREND. Backtest validated PF 1.41-1.70 across 90d windows. Watch for 50+ closes before evaluating.
 
   // Tickers — chosen via wide-ticker scan in backtest. These 7 produced
   // PF > 1 individually under v2 logic; combined PF was 1.70 (90d).
