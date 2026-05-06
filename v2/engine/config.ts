@@ -98,19 +98,78 @@ export const V2_CONFIG = {
 } as const;
 
 // ============================================
-// MOMENTUM Exit Config (used by momentumExitManager)
-// Centralized so tuning doesn't require code edits.
-// MOMENTUM strategy currently DISABLED (see v2/index.ts) — these values are
-// preserved for when the strategy is reworked with a redesigned signal.
+// MOMENTUM Strategy Config (v2 — rebuilt 2026-05-06)
+// ============================================
+// Replaces the old "1h MACD-spike" momentum that produced 0% WR.
+// New strategy: 4h candles, z-score histogram spike, higher-highs filter,
+// percent-giveback trail. Backtest proved: PF 1.70-2.32 across 30/60/90d.
+//
+// To enable: set ENABLED: true (v2/index.ts gates engine startup on this).
+// ============================================
+
+export const MOMENTUM_CONFIG = {
+  ENABLED: false,  // 2026-05-06: v2 logic ported from backtest path. Default off until live verification.
+
+  // Tickers — chosen via wide-ticker scan in backtest. These 7 produced
+  // PF > 1 individually under v2 logic; combined PF was 1.70 (90d).
+  // ZECUSD overlaps with TREND's SCAN_TICKERS — that's intentional, the two
+  // strategies pick different signal patterns and rarely fire simultaneously.
+  SCAN_TICKERS: ['ZECUSD', 'RUNEUSD', 'FLOWUSD', 'ENAUSD', 'KASUSD', 'ICPUSD', 'WIFUSD'] as readonly string[],
+
+  CANDLE_INTERVAL: '4h' as string,  // 4h was the best timeframe — 1h gave PF 0 (too noisy)
+  ALLOWED_REGIMES: ['STRONG_UP', 'UP', 'SIDEWAYS'] as readonly string[],
+  MIN_CANDLES: 50,
+
+  // Entry filters (v2):
+  HISTOGRAM_SPIKE_Z: 1.0,  // macdHist must be ≥1 std-dev above 20-bar rolling mean
+  RSI_MIN: 50,
+  RSI_MAX: 70,
+  VOLUME_MULTIPLIER: 1.3,
+  MIN_UP_BARS: 3,  // require 3+ of last 5 closes > previous
+
+  // Position sizing:
+  POSITION_SIZE_PERCENT: 0.20,
+  MAX_POSITION_PERCENT: 0.30,
+  MAX_OPEN_POSITIONS: 2,
+
+  // Loop:
+  LOOP_INTERVAL_MS: 60_000,
+  LOOP_OFFSET_MS: 15_000,  // 15s after TREND so logs interleave cleanly
+} as const;
+
+// ============================================
+// MOMENTUM Exit Config (used by momentumExitManager v2)
+// Switched from histogram_decay (too sensitive, exits at first stall)
+// to percent_giveback trail — same pattern as TREND/MR.
 // ============================================
 
 export const MOM_EXIT_CONFIG = {
-  SL_ATR_MULT: 2.0,
-  HISTOGRAM_DECAY_THRESHOLD: 0.50,   // exit when current MACD hist < 50% of peak
-  BREAKEVEN_TRIGGER: 0.01,           // raise SL to entry+offset at +1.0% PnL
-  BREAKEVEN_OFFSET: 0.001,           // BE stop sits at entry × 1.001
-  TIME_KILL_BARS: 6,                  // 6 × 1h = 6 hours
+  SL_ATR_MULT: 2.0,                    // backup ATR-based stop if swing-low not available
+
+  // Take-profit (v2 added):
+  TP_ATR_MULT: 3.0,                    // hard TP at 3× ATR
+
+  // Break-even:
+  BREAKEVEN_TRIGGER: 0.015,            // raise SL to entry+offset at +1.5% PnL
+  BREAKEVEN_OFFSET: 0.001,             // BE stop sits at entry × 1.001
+
+  // Trailing (replaces histogram_decay):
+  TRAIL_ACTIVATE: 0.025,               // activate at +2.5% PnL — wait for real momentum
+  TRAIL_GIVEBACK: 0.05,                // give back only 5% of peak gain when triggered
+
+  // Quick-kill (v2 added):
+  QUICK_KILL_ENABLED: true,
+  QUICK_KILL_BARS: 4,                  // 4 × 4h = 16h with no progress
+  QUICK_KILL_MIN_GAIN: 0.006,
+  QUICK_KILL_SL_TIGHTEN: 1.2,
+
+  // Time-kill:
+  TIME_KILL_BARS: 16,                  // 16 × 4h = 2.7 days — 4h candles need more room than 1h
   TIME_KILL_MIN_MOVE: 0.005,
+
+  // Legacy field — kept for backward compat with momentumExitManager v1 references.
+  // No longer used; the new exit manager uses TRAIL_ACTIVATE/TRAIL_GIVEBACK above.
+  HISTOGRAM_DECAY_THRESHOLD: 0.50,
 } as const;
 
 // ============================================

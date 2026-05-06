@@ -12,7 +12,7 @@ import { initMREngine, startMREngine, stopMREngine, getMRStatus } from './engine
 import { initBreakoutEngine, startBreakoutEngine, stopBreakoutEngine, getBreakoutStatus } from './engine/breakoutEngine.ts';
 import { initMomentumEngine, startMomentumEngine, stopMomentumEngine, getMomentumStatus } from './engine/momentumEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
-import { V2_CONFIG, MR_CONFIG } from './engine/config.ts';
+import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG } from './engine/config.ts';
 
 export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine };
 
@@ -48,12 +48,27 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
     // Re-enable when strategy is reworked
     console.log('[V2] Breakout engine disabled (unprofitable in backtest)');
 
-    // Momentum engine DISABLED — 7 trades, 0 wins, -$9.78 net (commit 2a96f56)
-    // MACD histogram spikes on 1h candles happen at move exhaustion (BB%B>0.9, TC>75)
-    // not at move initiation — buys the top every time.
-    // Re-disabled 2026-04-29 after force-push to vps remote inadvertently restored
-    // the init/start calls. Re-enable only after redesigning the entry signal.
-    console.log('[V2] Momentum engine disabled (0% WR over 7 trades, buying overbought)');
+    // Momentum engine v2 (rebuilt 2026-05-06)
+    // Original (1h, 1.5x histogram-ratio entry, histogram_decay exit):
+    //   0% WR over 7 trades — entry math compared macd-hist (price-acceleration)
+    //   to abs price-changes (different scales, near-random output).
+    // v2 (4h, z-score spike vs 20-bar stdev, higher-highs filter, RSI 50-70,
+    //     percent-giveback trail, 3x ATR TP, swing-low stop):
+    //   PF 1.70 / 90d, 1.85 / 60d, 1.92 / 30d on
+    //   ZECUSD,RUNEUSD,FLOWUSD,ENAUSD,KASUSD,ICPUSD,WIFUSD
+    // Default disabled (MOMENTUM_CONFIG.ENABLED=false) — flip to true when
+    // ready to ship live. Single-strategy backtest validates before flipping.
+    if (MOMENTUM_CONFIG.ENABLED) {
+      try {
+        initMomentumEngine(krakenV2, initialBudget);
+        startMomentumEngine();
+        console.log('[V2] Momentum engine v2 running (4h, z-score spike, 7 tickers)');
+      } catch (err: unknown) {
+        console.warn(`[V2] Momentum engine failed to start: ${(err as Error).message}`);
+      }
+    } else {
+      console.log('[V2] Momentum engine v2 disabled (MOMENTUM_CONFIG.ENABLED=false). Set true to ship live.');
+    }
   } catch (err: any) {
     console.error(`[V2] Boot failed: ${err.message}`);
   }
