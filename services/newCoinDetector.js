@@ -79,6 +79,37 @@ function sendTelegramMessage(text) {
 // ============================================
 
 /**
+ * Bulk-acknowledge a set of tickers as already-known WITHOUT treating them as
+ * new listings. Used by sniperEngine on cold start to warm up the in-memory
+ * cache from the live Kraken pair list — prevents the entire universe from
+ * being mis-flagged as "new" when initialize() can't load the DB cache for
+ * any reason (race condition, fresh DB, etc.).
+ */
+export function acknowledgeKnownTickers(tickers) {
+  if (!Array.isArray(tickers) || tickers.length === 0) return 0;
+  let added = 0;
+  for (const t of tickers) {
+    if (!t || typeof t !== 'string') continue;
+    if (!knownTickersCache.has(t)) {
+      knownTickersCache.add(t);
+      added++;
+      // Persist so subsequent restarts find it via initialize().
+      try {
+        if (database && typeof database.upsertKnownTicker === 'function') {
+          database.upsertKnownTicker(t, { acknowledged: true, source: 'sniper-warmup' });
+        }
+      } catch (e) {
+        // Non-fatal — cache is the authoritative source for this run.
+      }
+    }
+  }
+  if (added > 0) {
+    console.log(`[NewCoinDetector] Acknowledged ${added} ticker(s) as known (warmup, no new-listing flag)`);
+  }
+  return added;
+}
+
+/**
  * Returns a copy of the new coin trading rules.
  */
 export function getNewCoinRules() {
@@ -367,6 +398,7 @@ export function getStats() {
 export default {
   getNewCoinRules,
   initialize,
+  acknowledgeKnownTickers,
   detectNewListings,
   updateNewCoinSignals,
   markRugPullExit,
