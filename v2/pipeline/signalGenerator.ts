@@ -62,7 +62,18 @@ function getScorecardVerdicts(): Map<string, string> {
 
 /**
  * Adjust signal weight based on scorecard verdict.
- * Proven → 1.5x weight, Negative → 0.5x weight, Inconclusive → 1.0x
+ * Proven → 1.5x weight, Negative → 0x (full prune), Inconclusive → 1.0x
+ *
+ * 2026-05-06: Negative multiplier was 0.5x (soft prune). With 133 trades of
+ * data per signal we have enough confidence to hard-prune: signals showing
+ * edge < -0.002 across MIN_TRADES_FOR_SCORING+ trades are excluded entirely.
+ * Self-adapting — if a signal later turns positive in fresh data, it revives.
+ *
+ * Currently affected (verdict='negative' as of this change):
+ *   - bb_percent_b → bb_lower_touch (base 40 → 0)
+ *   - trend_strength → trend_strength eval (base 25 → 0)
+ * Others (atr_percent, price_vs_ema50) are tracked but not in EVAL_TO_SCORECARD,
+ * so this change doesn't reach them. They were already unused in the composite.
  */
 function adaptWeight(evalName: string, baseWeight: number): number {
   const scorecardName = EVAL_TO_SCORECARD[evalName];
@@ -70,7 +81,7 @@ function adaptWeight(evalName: string, baseWeight: number): number {
   const verdicts = getScorecardVerdicts();
   const verdict = verdicts.get(scorecardName);
   if (verdict === 'proven') return Math.round(baseWeight * 1.5);
-  if (verdict === 'negative') return Math.round(baseWeight * 0.5);
+  if (verdict === 'negative') return 0;
   return baseWeight;
 }
 
