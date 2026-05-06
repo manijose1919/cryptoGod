@@ -12,7 +12,7 @@ import { recomputeAllScores } from '../attribution/postTradeAnalyzer.ts';
 import { getV2Status } from '../engine/tradeEngine.ts';
 import { getDualStatus, getDualTrades, initDualEngine, startDualEngine, stopDualEngine } from '../engine/dualExchangeEngine.ts';
 import { getBearishStatus, stopBearishServices, startBearishServices, initBearishServices } from '../engine/bearishServices.ts';
-import { getSniperStatus } from '../engine/sniperEngine.ts';
+import { getSniperStatus, getKrakenSniperStatus, getCryptocomSniperStatus } from '../engine/sniperEngine.ts';
 import { initKrakenAdapter, krakenV2 } from '../exchange/krakenAdapter.ts';
 import { initCryptoComAdapter, cryptoComV2 } from '../exchange/cryptoComV2Adapter.ts';
 
@@ -78,6 +78,38 @@ v2Router.post('/recompute-scores', (_req: Request, res: Response) => {
 // Reports must NEVER aggregate sniper P&L with TREND/MOMENTUM (day-trading).
 // See CHANGELOG.md "Reporting Contract for Day-Trading vs Sniper" entry.
 
+// Helper — compute scorecard for a given strategy tag (or set of tags)
+function buildScorecard(tags: string[]): Record<string, unknown> {
+  const open: ReturnType<typeof getOpenTradesByStrategy> = [];
+  const closed: ReturnType<typeof getClosedTradesByStrategy> = [];
+  for (const tag of tags) {
+    open.push(...getOpenTradesByStrategy(tag));
+    closed.push(...getClosedTradesByStrategy(tag, 1000));
+  }
+  if (closed.length === 0) {
+    return { trades: 0, open: open.length, message: 'No closed trades yet — paper-only, accumulating data.' };
+  }
+  let wins = 0, totalWin = 0, totalLoss = 0, totalPnl = 0;
+  for (const t of closed) {
+    const pnl = t.pnlNet ?? 0;
+    totalPnl += pnl;
+    if (pnl > 0) { wins++; totalWin += pnl; }
+    else { totalLoss += Math.abs(pnl); }
+  }
+  const wr = (wins / closed.length) * 100;
+  const pf = totalLoss > 0 ? totalWin / totalLoss : (totalWin > 0 ? Infinity : 0);
+  return {
+    trades: closed.length,
+    open: open.length,
+    winRate: wr.toFixed(1),
+    profitFactor: isFinite(pf) ? pf.toFixed(2) : 'inf',
+    totalPnl: totalPnl.toFixed(2),
+    avgWin: wins > 0 ? (totalWin / wins).toFixed(4) : '0',
+    avgLoss: (closed.length - wins) > 0 ? (totalLoss / (closed.length - wins)).toFixed(4) : '0',
+  };
+}
+
+// --- Combined sniper status (both exchanges) ---
 v2Router.get('/sniper/status', (_req: Request, res: Response) => {
   try {
     res.json(getSniperStatus());
@@ -86,45 +118,69 @@ v2Router.get('/sniper/status', (_req: Request, res: Response) => {
   }
 });
 
+// --- Per-exchange sniper status ---
+v2Router.get('/sniper/kraken/status', (_req: Request, res: Response) => {
+  try {
+    res.json(getKrakenSniperStatus() ?? { error: 'kraken sniper not running' });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+v2Router.get('/sniper/cryptocom/status', (_req: Request, res: Response) => {
+  try {
+    res.json(getCryptocomSniperStatus() ?? { error: 'cryptocom sniper not running' });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// --- Sniper trades (combined or per-exchange) ---
 v2Router.get('/sniper/trades', (req: Request, res: Response) => {
   try {
     const limit = parseInt(req.query.limit as string, 10) || 50;
-    const open = getOpenTradesByStrategy('SNIPER');
-    const closed = getClosedTradesByStrategy('SNIPER', limit);
+    const exchange = req.query.exchange as string | undefined;
+    const tags = exchange === 'kraken' ? ['SNIPER_KRAKEN']
+      : exchange === 'cryptocom' ? ['SNIPER_CRYPTOCOM']
+      : ['SNIPER_KRAKEN', 'SNIPER_CRYPTOCOM', 'SNIPER']; // 'SNIPER' covers any pre-dual legacy trades
+    const open: ReturnType<typeof getOpenTradesByStrategy> = [];
+    const closed: ReturnType<typeof getClosedTradesByStrategy> = [];
+    for (const tag of tags) {
+      open.push(...getOpenTradesByStrategy(tag));
+      closed.push(...getClosedTradesByStrategy(tag, limit));
+    }
     res.json({ open, closed });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
 });
 
+// --- Sniper scorecards: combined + per-exchange ---
+// Reports must produce TWO separate sections per exchange when possible.
 v2Router.get('/sniper/scorecard', (_req: Request, res: Response) => {
   try {
-    const closed = getClosedTradesByStrategy('SNIPER', 1000);
-    const open = getOpenTradesByStrategy('SNIPER');
-    if (closed.length === 0) {
-      res.json({ trades: 0, open: open.length, message: 'No closed sniper trades yet — paper-only side project, accumulating data.' });
-      return;
-    }
-    let wins = 0, totalWin = 0, totalLoss = 0, totalPnl = 0;
-    for (const t of closed) {
-      const pnl = t.pnlNet ?? 0;
-      totalPnl += pnl;
-      if (pnl > 0) { wins++; totalWin += pnl; }
-      else { totalLoss += Math.abs(pnl); }
-    }
-    const wr = closed.length > 0 ? (wins / closed.length) * 100 : 0;
-    const pf = totalLoss > 0 ? totalWin / totalLoss : (totalWin > 0 ? Infinity : 0);
     res.json({
-      trades: closed.length,
-      open: open.length,
-      winRate: wr.toFixed(1),
-      profitFactor: isFinite(pf) ? pf.toFixed(2) : 'inf',
-      totalPnl: totalPnl.toFixed(2),
-      avgWin: wins > 0 ? (totalWin / wins).toFixed(4) : '0',
-      avgLoss: (closed.length - wins) > 0 ? (totalLoss / (closed.length - wins)).toFixed(4) : '0',
       isolated: true,
       note: 'Sniper stats are isolated from TREND/MOMENTUM. Never aggregate.',
+      kraken: buildScorecard(['SNIPER_KRAKEN']),
+      cryptocom: buildScorecard(['SNIPER_CRYPTOCOM']),
+      legacy: buildScorecard(['SNIPER']),  // any pre-dual-exchange sniper trades
     });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+v2Router.get('/sniper/kraken/scorecard', (_req: Request, res: Response) => {
+  try {
+    res.json({ isolated: true, ...buildScorecard(['SNIPER_KRAKEN']) });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+v2Router.get('/sniper/cryptocom/scorecard', (_req: Request, res: Response) => {
+  try {
+    res.json({ isolated: true, ...buildScorecard(['SNIPER_CRYPTOCOM']) });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }

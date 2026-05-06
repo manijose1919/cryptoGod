@@ -182,9 +182,18 @@ export const MOM_EXIT_CONFIG = {
 // ============================================
 
 export const SNIPER_CONFIG = {
-  ENABLED: true,             // ship enabled — paper mode for safety
-  BUDGET_USD: 500,           // separate bucket; not aggregated with TREND/MOM
-  STRATEGY_TAG: 'SNIPER' as const,  // v2_trades.strategy filter for reports
+  ENABLED: true,             // master enable — both kraken + cryptocom respect this
+
+  // --- Per-exchange budgets + enable flags (2026-05-06: dual-exchange) ---
+  KRAKEN_ENABLED: true,
+  CRYPTOCOM_ENABLED: true,
+  KRAKEN_BUDGET_USD: 500,
+  CRYPTOCOM_BUDGET_USD: 500,
+
+  // Legacy field — used by single-exchange code paths if any remain. Kept for
+  // back-compat; the dual setup uses KRAKEN_BUDGET_USD / CRYPTOCOM_BUDGET_USD.
+  BUDGET_USD: 500,
+  STRATEGY_TAG: 'SNIPER' as const,
 
   // --- Detection / scan loop ---
   PAIR_REFRESH_INTERVAL_MS: 30 * 60 * 1000,  // re-fetch Kraken pair list every 30 min
