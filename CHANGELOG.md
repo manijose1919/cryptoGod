@@ -37,6 +37,36 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-06 ~later5 UTC — Hard-prune negative-edge signals (0.5× → 0×) — local-claude
+
+**Files changed:** `v2/pipeline/signalGenerator.ts` (one-line `adaptWeight` change)
+**Stats baseline reset:** YES — material entry-decision change
+
+**What changed:**
+The adaptive signal weighting system was already auto-down-weighting "negative" verdicts to 0.5× (soft prune). With 133 trades per signal — enough data — going to 0× (hard prune). Single-line edit in `adaptWeight()`.
+
+**Why:**
+Day-trading scorecard shows 4 signals with edge < -0.002 across 133 trades:
+- `bb_percent_b` → bb_lower_touch eval: edge -0.0034, 28.6% WR
+- `trend_strength` → trend_strength eval: edge -0.0035, 41.4% WR
+- `atr_percent`: edge -0.0035 (tracked, not in composite — no change)
+- `price_vs_ema50`: edge -0.0038 (tracked, not in composite — no change)
+
+The first two were already at 0.5× weight via the adaptive system. Hard-pruning to 0× removes them from the composite entirely. Total composite weight drops from 175 to 110 (37% reduction in dead weight).
+
+**Self-adapting:** if either signal later shows edge > 0.003 with WR > 0.55, it auto-revives at 1.5× ("proven" verdict). No code change needed.
+
+**What to monitor:**
+- **Entry frequency:** with 2 signals removed, fewer setups will hit MIN_COMPOSITE_SCORE=60. Expect a 10-20% drop in trade count over the next week.
+- **WR + PF:** the pruned signals were correlated with losing trades. If pruning works as expected, WR rises (trade-quality up) even as count falls.
+- **Daily report comparison:** first 24h post-baseline = small sample. Wait ≥10 trades before judging.
+- **Risk:** if MIN_COMPOSITE_SCORE=60 becomes too hard to hit, threshold may need lowering to 55-58 to maintain useful entry rate.
+
+**Rollback:**
+Change `return 0` back to `return Math.round(baseWeight * 0.5)` in `signalGenerator.ts:adaptWeight`. Single line.
+
+---
+
 ## 2026-05-06 ~later4 UTC — New-coin SNIPER engine shipped (isolated side-project) — local-claude
 
 **Files changed:**
