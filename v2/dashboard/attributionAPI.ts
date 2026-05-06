@@ -6,12 +6,13 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 
-import { getOpenTrades, getClosedTrades, getSignalScores } from '../attribution/attributionStore.ts';
+import { getOpenTrades, getClosedTrades, getSignalScores, getOpenTradesByStrategy, getClosedTradesByStrategy } from '../attribution/attributionStore.ts';
 import { getScorecard } from '../attribution/signalScorecard.ts';
 import { recomputeAllScores } from '../attribution/postTradeAnalyzer.ts';
 import { getV2Status } from '../engine/tradeEngine.ts';
 import { getDualStatus, getDualTrades, initDualEngine, startDualEngine, stopDualEngine } from '../engine/dualExchangeEngine.ts';
 import { getBearishStatus, stopBearishServices, startBearishServices, initBearishServices } from '../engine/bearishServices.ts';
+import { getSniperStatus } from '../engine/sniperEngine.ts';
 import { initKrakenAdapter, krakenV2 } from '../exchange/krakenAdapter.ts';
 import { initCryptoComAdapter, cryptoComV2 } from '../exchange/cryptoComV2Adapter.ts';
 
@@ -65,6 +66,65 @@ v2Router.post('/recompute-scores', (_req: Request, res: Response) => {
     recomputeAllScores();
     const scorecard = getScorecard();
     res.json({ status: 'ok', scorecard });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// ============================================
+// SNIPER endpoints (new-coin sniper, side-project, isolated stats)
+// ============================================
+// IMPORTANT: These endpoints return ONLY trades tagged strategy='SNIPER'.
+// Reports must NEVER aggregate sniper P&L with TREND/MOMENTUM (day-trading).
+// See CHANGELOG.md "Reporting Contract for Day-Trading vs Sniper" entry.
+
+v2Router.get('/sniper/status', (_req: Request, res: Response) => {
+  try {
+    res.json(getSniperStatus());
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+v2Router.get('/sniper/trades', (req: Request, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string, 10) || 50;
+    const open = getOpenTradesByStrategy('SNIPER');
+    const closed = getClosedTradesByStrategy('SNIPER', limit);
+    res.json({ open, closed });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+v2Router.get('/sniper/scorecard', (_req: Request, res: Response) => {
+  try {
+    const closed = getClosedTradesByStrategy('SNIPER', 1000);
+    const open = getOpenTradesByStrategy('SNIPER');
+    if (closed.length === 0) {
+      res.json({ trades: 0, open: open.length, message: 'No closed sniper trades yet — paper-only side project, accumulating data.' });
+      return;
+    }
+    let wins = 0, totalWin = 0, totalLoss = 0, totalPnl = 0;
+    for (const t of closed) {
+      const pnl = t.pnlNet ?? 0;
+      totalPnl += pnl;
+      if (pnl > 0) { wins++; totalWin += pnl; }
+      else { totalLoss += Math.abs(pnl); }
+    }
+    const wr = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+    const pf = totalLoss > 0 ? totalWin / totalLoss : (totalWin > 0 ? Infinity : 0);
+    res.json({
+      trades: closed.length,
+      open: open.length,
+      winRate: wr.toFixed(1),
+      profitFactor: isFinite(pf) ? pf.toFixed(2) : 'inf',
+      totalPnl: totalPnl.toFixed(2),
+      avgWin: wins > 0 ? (totalWin / wins).toFixed(4) : '0',
+      avgLoss: (closed.length - wins) > 0 ? (totalLoss / (closed.length - wins)).toFixed(4) : '0',
+      isolated: true,
+      note: 'Sniper stats are isolated from TREND/MOMENTUM. Never aggregate.',
+    });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }

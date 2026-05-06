@@ -173,6 +173,55 @@ export const MOM_EXIT_CONFIG = {
 } as const;
 
 // ============================================
+// SNIPER Strategy Config (new-coin sniper, 2026-05-06)
+// ============================================
+// Side-project strategy: snipe new Kraken USD listings during their early
+// volatility window. Cannot be backtested (by definition new data) — paper-only
+// at first; tune from live trade outcomes. Stats kept separate from TREND/MOM
+// per the reporting contract in CHANGELOG.md.
+// ============================================
+
+export const SNIPER_CONFIG = {
+  ENABLED: true,             // ship enabled — paper mode for safety
+  BUDGET_USD: 500,           // separate bucket; not aggregated with TREND/MOM
+  STRATEGY_TAG: 'SNIPER' as const,  // v2_trades.strategy filter for reports
+
+  // --- Detection / scan loop ---
+  PAIR_REFRESH_INTERVAL_MS: 30 * 60 * 1000,  // re-fetch Kraken pair list every 30 min
+  LOOP_INTERVAL_MS: 60_000,                  // entry/exit check every 60s
+  LOOP_OFFSET_MS: 30_000,                    // 30s after MOMENTUM (which is +15s after TREND)
+
+  // --- Listing eligibility window ---
+  // Skip the absolute first 30 min — worst slippage, manipulation, no structure.
+  // Stop sniping after 7 days — by then it's just another tradable coin.
+  MIN_LISTING_AGE_MS: 30 * 60 * 1000,
+  MAX_LISTING_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+  CANDLE_INTERVAL: '15m' as string,
+  MIN_CANDLES: 20,            // need ~5h of 15m bars to compute indicators
+
+  // --- Entry triggers (ALL must hit) ---
+  RSI_MAX: 70,                // not yet overbought
+  VOLUME_MULTIPLIER: 1.5,     // current bar vol >= 1.5× last 12-bar avg
+  MIN_UP_BARS: 3,             // 3+ of last 5 bars closed higher than previous
+  MAX_RUG_PULL_SCORE: 1,      // detector score must be < 2 (no major red flags)
+  MIN_BAR_VOLUME_USD: 500,    // floor: avoid dead-listing dust
+
+  // --- Position sizing ---
+  POSITION_SIZE_PERCENT: 0.10,   // 10% of $500 = $50 per trade (small)
+  MAX_POSITION_PERCENT: 0.20,    // hard cap 20% even with high confidence
+  MAX_OPEN_POSITIONS: 2,         // never more than 2 sniper trades simultaneously
+
+  // --- Exits ---
+  STOP_LOSS_PERCENT: 0.03,             // -3% hard stop
+  TRAIL_ACTIVATE_PERCENT: 0.05,        // start trailing at +5%
+  TRAIL_GIVEBACK_PERCENT: 0.30,        // give back 30% of peak gain (wider than TREND — newcoins are wild)
+  TIME_KILL_MS: 8 * 60 * 60 * 1000,    // 8h max hold
+
+  // --- Telegram ---
+  TELEGRAM_TAG: '[SNIPER]',
+} as const;
+
+// ============================================
 // MEAN_REVERSION Strategy Config
 // Profitable on 15m with maker fees: +$6.33, 52% WR, PF 1.73
 // ============================================

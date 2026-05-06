@@ -11,10 +11,11 @@ import { initBearishServices, startBearishServices, stopBearishServices, getBear
 import { initMREngine, startMREngine, stopMREngine, getMRStatus } from './engine/meanReversionEngine.ts';
 import { initBreakoutEngine, startBreakoutEngine, stopBreakoutEngine, getBreakoutStatus } from './engine/breakoutEngine.ts';
 import { initMomentumEngine, startMomentumEngine, stopMomentumEngine, getMomentumStatus } from './engine/momentumEngine.ts';
+import { initSniperEngine, startSniperEngine, stopSniperEngine, getSniperStatus } from './engine/sniperEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
-import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG } from './engine/config.ts';
+import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG } from './engine/config.ts';
 
-export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine };
+export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine, getSniperStatus, stopSniperEngine };
 
 export async function bootV2(initialBudget = 1000): Promise<void> {
   console.log(`[V2] Booting Phoenix V2 in ${V2_CONFIG.MODE} mode...`);
@@ -68,6 +69,22 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       }
     } else {
       console.log('[V2] Momentum engine v2 disabled (MOMENTUM_CONFIG.ENABLED=false). Set true to ship live.');
+    }
+
+    // Sniper engine (new-coin sniper, 2026-05-06)
+    // SIDE PROJECT — fully isolated stats. Trades tagged strategy='SNIPER'.
+    // Reports must NEVER aggregate sniper P&L with TREND/MOMENTUM (see CHANGELOG).
+    // Cannot be backtested (by definition new data) — paper-only at first.
+    if (SNIPER_CONFIG.ENABLED) {
+      try {
+        await initSniperEngine(krakenV2);
+        startSniperEngine();
+        console.log(`[V2] Sniper engine running (15m, $${SNIPER_CONFIG.BUDGET_USD} isolated budget, paper mode)`);
+      } catch (err: unknown) {
+        console.warn(`[V2] Sniper engine failed to start: ${(err as Error).message}`);
+      }
+    } else {
+      console.log('[V2] Sniper engine disabled (SNIPER_CONFIG.ENABLED=false).');
     }
   } catch (err: any) {
     console.error(`[V2] Boot failed: ${err.message}`);
