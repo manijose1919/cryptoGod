@@ -4,7 +4,7 @@
 // ============================================
 
 import type { V2Trade, SignalScore } from '../pipeline/types.ts';
-import { getClosedTrades, upsertSignalScore } from './attributionStore.ts';
+import { getClosedTradesByStrategy, upsertSignalScore } from './attributionStore.ts';
 
 // --- Signal Active Thresholds ---
 
@@ -40,7 +40,13 @@ export function analyzeClosedTrade(trade: V2Trade): void {
  * then upsert each signal score to the DB.
  */
 export function recomputeAllScores(): void {
-  const trades = getClosedTrades(1000);
+  // ISOLATION: only score signals from day-trading strategies (TREND + MOMENTUM).
+  // Sniper trades use different signals (sniper_age_hours, rug_score, etc.) and
+  // their inclusion would pollute the day-trading scorecard, which then drives
+  // adaptWeight() decisions in signalGenerator. The sniper has its own scorecard.
+  const trends = getClosedTradesByStrategy('TREND', 1000);
+  const moms = getClosedTradesByStrategy('MOMENTUM', 1000);
+  const trades = [...trends, ...moms];
   if (trades.length === 0) return;
 
   const now = Date.now();

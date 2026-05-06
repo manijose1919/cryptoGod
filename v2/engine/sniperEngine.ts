@@ -112,7 +112,21 @@ export function createSniperEngine(
         return;
       }
       const result = await adapterObj.getInstruments();
-      const tickers = (result?.data ?? []).map((i) => i.instrument_name);
+      const rawNames = (result?.data ?? []).map((i) => i.instrument_name);
+
+      // Per-exchange ticker filtering:
+      //   * Kraken: krakenAdapter already returns only USD spot pairs in BASEUSD format
+      //   * Crypto.com: returns 800+ mixed instruments — must filter to spot USD only
+      //     (skip -PERP perpetuals, skip _USDT/_USDC; Canadian compliance is USD-only)
+      const tickers = exchange === 'cryptocom'
+        ? rawNames.filter((n) =>
+            typeof n === 'string'
+            && n.endsWith('_USD')
+            && !n.includes('-PERP')
+            && !n.includes('_USDT')
+            && !n.includes('_USDC'),
+          )
+        : rawNames;
 
       // First refresh: warmup acknowledge to prevent flagging the entire
       // exchange's pair universe as "new listings".
