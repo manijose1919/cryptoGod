@@ -37,6 +37,35 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-06 ~later2 UTC — MOMENTUM v2 ENABLED live (running alongside TREND) — local-claude
+
+**Files changed:** `v2/engine/config.ts` (MOMENTUM_CONFIG.ENABLED: false → true)
+**Stats baseline reset:** YES — new baseline set on VPS post-deploy
+
+**What changed:**
+Single-line flip activating the ported MOMENTUM v2 engine. Now both TREND (Config A on AKT+ZEC+COMP) and MOMENTUM v2 (on ZEC, RUNE, FLOW, ENA, KAS, ICP, WIF) run concurrently in paper mode.
+
+**Why now:**
+Code was validated in backtest (PF 1.70 / 90d, 2.32 / 30d) and ported to the live engine path in commit `80c409b`. Multi-strategy backtest after port confirmed PF 1.41 holds with the latest data. No reason to keep dormant — let it accumulate live trades for evaluation.
+
+**Expected behavior:**
+- 7-ticker scan on 4h candles, ~1 entry per day
+- Average position duration: 2-4 days
+- Max concurrent positions: 2 (separate budget pool from TREND)
+- ZECUSD overlap with TREND is intentional — different signal patterns, position-cap protection prevents double-stacking
+
+**What to monitor:**
+- `[MOM] Trade opened/closed` log lines should appear within ~24h
+- Aggregate (TREND + MOMENTUM) trade count: ~3-5/day
+- If MOMENTUM produces 0 trades after 48h: lower `HISTOGRAM_SPIKE_Z` threshold from 1.0 to 0.7 in `MOMENTUM_CONFIG`
+- If MOMENTUM produces too many losers (>70% loss rate over first 20 trades): increase z-threshold to 1.3 OR reduce `SCAN_TICKERS` to top-3 (ZEC, RUNE, FLOW which had highest individual P&L in backtest)
+- Combined PF target: 1.4-1.6 across both strategies
+
+**Rollback:**
+Revert this single-line commit — sets ENABLED back to false. No state corruption risk.
+
+---
+
 ## 2026-05-06 ~later UTC — MOMENTUM v2 ported to live engine (default disabled) — local-claude
 
 **Files changed:** `v2/pipeline/momentumSignal.ts` (rebuilt), `v2/pipeline/momentumExitManager.ts` (rebuilt), `v2/engine/momentumEngine.ts` (rebuilt), `v2/engine/config.ts` (added MOMENTUM_CONFIG block), `v2/index.ts` (re-enabled MOMENTUM gated on MOMENTUM_CONFIG.ENABLED), `v2/backtest/multiStrategy/entryDetectors.ts` (v2 entry logic — already in use for backtests)
