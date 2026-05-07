@@ -37,6 +37,25 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-07 ~12:00 UTC — Re-disable MOMENTUM engine (no confidence gate) — vps-claude
+
+**Commits:** (see below)
+**Files changed:** `v2/engine/config.ts`
+**Stats baseline reset:** no
+
+**What changed:**
+MOMENTUM_CONFIG.ENABLED set back to false. Was flipped to true in Wave 4 (2026-05-06) but the momentum engine has its own entry path (momentumEngine.ts) that bypasses the signalGenerator confidence gate entirely — it entered ENAUSD at 0.601 confidence, well below the 0.70 threshold enforced on TREND. Prior live record was 0W/4L (-$2.80). This re-enable was premature — #30 (MOMENTUM redesign) is still deferred.
+
+**Why:**
+Discovered ENAUSD MOMENTUM position open at conf 0.601. Investigated and confirmed the momentum engine calls detectMomentumEntry() directly with no MIN_CONFIDENCE check. The confidence gate fix (commit 79eed18) only applies to the TREND signal pipeline.
+
+**What to monitor / watch for:**
+- Boot logs should show `[V2] Momentum engine disabled` again
+- The open ENAUSD MOMENTUM position will run to completion on its existing stop/TP — no force close
+- Rollback: set ENABLED back to true in config.ts (but fix the confidence gate first)
+
+---
+
 ## 2026-05-06 ~later6 UTC — Dual-exchange SNIPER (Kraken + Crypto.com isolated) — local-claude
 
 **Files changed:**
