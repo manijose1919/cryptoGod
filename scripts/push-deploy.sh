@@ -67,15 +67,21 @@ else
 fi
 echo "[push-deploy] API online"
 
-# Verify the deployed working tree is at the expected SHA
+# Verify the BARE repo (deploy target) received the push.
+# NOTE: /opt/trading-bot/ has its OWN /opt/trading-bot/.git/ directory (stale —
+# created by an earlier `git pull origin` that didn't get cleaned up). That
+# local .git is NOT what serves the running code; the bare repo's hook checks
+# out master into the working tree via GIT_WORK_TREE. So the working tree's
+# `git rev-parse HEAD` is stale by design and not a useful health check.
+# The bare repo's master ref is the source of truth for "what was deployed."
 if [ "$ON_VPS" = "1" ]; then
-  DEPLOYED_SHA=$(cd /opt/trading-bot && git rev-parse HEAD)
+  DEPLOYED_SHA=$(cd /opt/trading-bot.git && git rev-parse master)
 else
-  DEPLOYED_SHA=$(ssh root@31.97.7.138 "cd /opt/trading-bot && git rev-parse HEAD")
+  DEPLOYED_SHA=$(ssh root@31.97.7.138 "cd /opt/trading-bot.git && git rev-parse master")
 fi
 
 if [ "$DEPLOYED_SHA" != "$EXPECTED_SHA" ]; then
-  echo "ERROR: deployed SHA ($DEPLOYED_SHA) != expected ($EXPECTED_SHA)" >&2
+  echo "ERROR: deployed bare-repo SHA ($DEPLOYED_SHA) != expected ($EXPECTED_SHA)" >&2
   echo "       The post-receive hook may have failed; check deploy.log on VPS." >&2
   exit 3
 fi
