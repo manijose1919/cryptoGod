@@ -117,7 +117,8 @@ Then notify all reporters (VPS Claude, future Claude sessions): primary stats us
 ### Git Hygiene (STANDING RULE)
 
 - Commit all code/config changes with descriptive messages capturing the data-driven reasoning.
-- Push to origin (and to vps when changes need to deploy). Never leave material edits uncommitted.
+- **ALWAYS push to BOTH remotes.** `origin` (GitHub) is the audit trail; `vps` (local bare repo on the VPS) is the deploy trigger. Pushing to origin alone does NOT update what's running — only the `vps` push triggers the post-receive hook that runs `git checkout`, `npm install`, `npx vite build`, and `pm2 restart`. Forgetting the `vps` push is the single most common deploy-skip incident; "I pushed the fix" without a vps push means the fix isn't running yet.
+- **Use `bash scripts/push-deploy.sh` instead of two separate `git push` commands** — it pushes to both remotes, waits for the API to come back online, and verifies the deployed SHA matches the pushed SHA. Catches partial deploys before you assume success.
 - For material trading changes, prefer **one logical change per commit** so individual rollbacks via `git revert <SHA>` are clean.
 - Even experimental changes get committed (and reverted in a later commit if they don't pan out) — git log is the audit trail of what was tried and learned.
 

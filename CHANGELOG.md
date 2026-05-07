@@ -37,6 +37,38 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-07 12:38 UTC — Forced restart of `2f7df24` + push-deploy.sh + privilege diagnosis — local-claude
+
+**Files changed:**
+- `scripts/push-deploy.sh` (new — atomic dual-remote push + post-deploy verification)
+- `CLAUDE.md` (Git Hygiene: ALWAYS push to BOTH; use push-deploy.sh)
+
+**What happened:**
+VPS Claude pushed `2f7df24` (re-disable MOMENTUM — entries bypass confidence gate) to `origin` only. The `vps` bare repo never got the commit, so the post-receive hook never fired, and PM2 kept running pre-`2f7df24` code that still had MOMENTUM enabled. The user noticed the bot was still opening MOMENTUM trades and asked for a restart.
+
+Local Claude pulled `2f7df24` from origin, force-pushed to `vps`, which triggered the deploy hook. PM2 restarted at 12:38:42 UTC (PID 105546). Boot logs confirm `[V2] Momentum engine v2 disabled`.
+
+**Diagnosis: not a permissions issue.** VPS Claude (user `claude`, UID 1001) actually has full deploy privileges:
+- `NOPASSWD: /usr/bin/pm2` in sudoers
+- `/opt/trading-bot.git/` is `drwxrwsr-x root:claude` (SETGID) — group-writable to claude
+- `/opt/trading-bot/` is 777 — full claude r/w/x
+- `sqlite3` works for stats queries / baseline writes
+
+Root cause was workflow knowledge: VPS Claude pushed only to `origin` (GitHub backup), not to `vps` (the deploy trigger). CLAUDE.md said "push to vps when changes need to deploy" — too soft.
+
+**Fix shipped:**
+1. `scripts/push-deploy.sh` — pushes to BOTH remotes, waits for API to come back online, verifies deployed SHA matches pushed SHA. Auto-detects whether running on VPS or local and uses the right verification path.
+2. CLAUDE.md Git Hygiene strengthened: "ALWAYS push to BOTH" + "use push-deploy.sh."
+
+**For VPS Claude specifically:**
+- Run `bash scripts/push-deploy.sh` after every commit instead of separate pushes
+- The `vps` remote is `/opt/trading-bot.git` (local file path — no SSH needed from VPS)
+- Script will fail loudly if the deployed SHA doesn't match — you'll know immediately if the deploy didn't take
+
+**Stats baseline reset:** NO (no trading-config change beyond what `2f7df24` already shipped)
+
+---
+
 ## 2026-05-07 ~12:00 UTC — Re-disable MOMENTUM engine (no confidence gate) — vps-claude
 
 **Commits:** (see below)
