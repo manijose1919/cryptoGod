@@ -108,7 +108,7 @@ export const V2_CONFIG = {
 // ============================================
 
 export const MOMENTUM_CONFIG = {
-  ENABLED: true,   // 2026-05-06: ENABLED for live testing alongside TREND. Backtest validated PF 1.41-1.70 across 90d windows. Watch for 50+ closes before evaluating.
+  ENABLED: false,   // 2026-05-07: RE-DISABLED. Was enabled 2026-05-06 but bypasses signal confidence gate (enters at 0.60 conf). Prior live record 0W/4L. Defer until #30 MOMENTUM redesign ships a proper entry filter.
 
   // Tickers — chosen via wide-ticker scan in backtest. These 7 produced
   // PF > 1 individually under v2 logic; combined PF was 1.70 (90d).
