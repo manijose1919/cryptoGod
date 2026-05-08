@@ -168,7 +168,13 @@ export async function checkExits(
       pnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
       trade.atrPercent != null && trade.atrPercent > 0
     ) {
-      const tighterStop = trade.entryPrice - (trade.entryPrice * trade.atrPercent / 100) * V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
+      // Scale quick-kill tightening by volatility: high-vol assets (>1.5% ATR)
+      // get a gentler pull (0.6× instead of 1.2×) to avoid stopping into normal noise.
+      const atrPct = trade.atrPercent!;
+      const qkMult = atrPct > 1.5 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.5
+                    : atrPct > 1.0 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.75
+                    : V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
+      const tighterStop = trade.entryPrice - (trade.entryPrice * atrPct / 100) * qkMult;
       if (tighterStop > trade.currentStop) {
         newStop = tighterStop;
         mutators.setStop(trade.id, newStop, trade);

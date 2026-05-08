@@ -37,6 +37,26 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-08 — Quick-kill ATR scaling + time_kill 12h→8h — vps-claude
+
+**Commits:** (see below)
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/exitManager.ts`
+**Stats baseline reset:** no (want to see contrast vs prior trades in continuous stats)
+
+**What changed:**
+1. **Quick-kill ATR scaling** — the flat 1.2× ATR stop tightening at 4h was pulling stops into normal volatility noise on high-vol assets. The two worst trailing losses (-$4.85 ETH, -$3.51 ADA) both exited at exactly 4.0h hold. Now scales by ATR: >1.5% ATR → 0.6× mult, >1.0% ATR → 0.9× mult, else 1.2× (unchanged for low-vol). This gives ETH/ADA roughly 2× the breathing room at quick-kill time.
+2. **TIME_KILL_MS 12h→8h** — time_kill trades were 8 trades, 25% WR, -$8.33 total. Hold duration data: >12h trades win 33%, <4h trades win 71%. Cutting stale positions at 8h instead of 12h reduces fee bleed on positions that aren't going to work.
+
+**Why:**
+28-trade post-baseline dataset showed time_kill and quick-kill-triggered trailing exits as the two biggest PnL drains. Quick-kill mechanical stops accounted for ~$8 of losses; time_kill for ~$8. Both are exit-side tuning, not entry changes.
+
+**What to monitor / watch for:**
+- Fewer 4.0h trailing losses on ETH/ADA — should hold longer through normal pullbacks
+- Time_kill exits now happen at 8h instead of 12h — watch for any that would have recovered in the 8-12h window (check if time_kill avg PnL improves)
+- If quick-kill stops are now too loose and positions bleed further before stopping, the 0.5 scaling factor may need to come up to 0.65
+- Rollback: revert single commit
+
+---
 ## 2026-05-07 12:38 UTC — Forced restart of `2f7df24` + push-deploy.sh + privilege diagnosis — local-claude
 
 **Files changed:**
