@@ -56,11 +56,17 @@ export const krakenV2: ExchangeAdapter = {
       const wsPrice = _wsService.getLatestPrice(ticker);
       if (wsPrice && wsPrice > 0) return wsPrice;
     }
-    // Fallback: REST candles, last close
+    // Fallback: REST candles, last close.
+    // krakenAdapter.getCandles returns rows shaped {t,o,h,l,c,v} — abbreviated
+    // keys. Earlier code read `.close` (long form) which is always undefined
+    // here, causing pnlPercent=NaN in checkExits and every exit branch
+    // (SL/TP/trail/time-kill) to silently fail. The defensive `c ?? close ?? 0`
+    // matches the cryptocom adapter's pattern and accepts either shape.
     const adapter = getAdapter();
     const candles = await adapter.getCandles(ticker, '1m', 1);
     if (candles && candles.length > 0) {
-      return candles[candles.length - 1].close;
+      const last = candles[candles.length - 1];
+      return last.c ?? last.close ?? 0;
     }
     throw new Error(`Cannot get price for ${ticker}`);
   },

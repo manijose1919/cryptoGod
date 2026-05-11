@@ -37,11 +37,63 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-11 13:30 UTC — 🚨 Critical fix: krakenAdapter.getLatestPrice returned undefined for new SCAN_TICKERS — local-claude
+
+**Files changed:** `v2/exchange/krakenAdapter.ts` (one line)
+**Stats baseline reset:** NO (urgent bug fix restoring intended behavior, not a strategy/config change)
+**Manual intervention:** closed `b04cf666` (TREND/ZECUSD) via SQL at $553.27 bid before deploying — exit_reason=`manual_close`, pnl_net=-$3.75
+
+### The bug (root cause of every "weird" thing observed since Config A)
+
+`v2/exchange/krakenAdapter.ts:getLatestPrice` had:
+```ts
+return candles[candles.length - 1].close;
+```
+But `services/exchangeAdapters/krakenAdapter.js:getCandles` returns rows shaped `{t, o, h, l, c, v}` (abbreviated). The property `.close` doesn't exist — it's `.c`. So every call returned `undefined`.
+
+The cryptocom V2 adapter had been correctly using `last.c ?? last.close ?? 0` (defensive). Kraken was missed.
+
+### Why it stayed hidden for so long
+The WS service hardcodes its subscription list to BTC/ETH/SOL/XRP/ADA/LINK/DOT/AVAX/DOGE/BNB. For trades on those tickers, `getLatestPrice` returned the WS cached price and never hit the broken REST fallback. So while TREND traded BTC/ETH/etc., everything looked fine.
+
+**Config A (2026-05-06) switched SCAN_TICKERS to AKTUSD/ZECUSD/COMPUSD** — none of which are in the WS hardcoded list. From that moment forward, every TREND exit check fell into the broken REST fallback. `getLatestPrice` returned `undefined`, `pnlPercent = (undefined - entry) / entry` became `NaN`, and every exit condition silently failed (NaN comparisons always return false).
+
+### What this explains
+- **"0 closed trades since baseline"** in every progress report. Exits *literally could not fire*. Trades stayed open forever.
+- **ZECUSD's 94.6h hold without trail activation**, despite 132 of the last 24h's 1m closes being above the trail trigger.
+- **AKTUSD currently +6.1% with `trailing_activated=0`** — same bug, same silent NaN.
+- **ENAUSD's `manual_close` on 2026-05-10** — VPS Claude/user noticed the trade wasn't exiting near TP and intervened manually. Same root cause; just manifested earlier.
+- **VPS Claude's 2026-05-08 quick-kill/time-kill tuning (`0c4193f`)** could not actually have any effect on the running TREND engine — those conditions all branch on `pnlPercent`, which was NaN. The tuning becomes live with this fix.
+- **The Sniper engines also have this bug dormant** — they use the same V2 Kraken adapter for sniper-Kraken's `getLatestPrice`. Sniper hasn't entered a trade yet so it's never bitten, but the fix applies universally.
+
+### The fix
+```ts
+const last = candles[candles.length - 1];
+return last.c ?? last.close ?? 0;
+```
+
+Defensive — accepts either shape. Matches cryptocom adapter pattern.
+
+### Validation plan
+After deploy:
+1. AKTUSD (currently $0.8359, +6.1% from $0.7881 entry) — the very next exit-check loop should compute valid `pnlPercent ≈ 0.061`, activate the trail (>0.025 trigger), and lock in profit via giveback math.
+2. Watch `trailing_activated` flip from 0 to 1 in the DB within ~60 seconds of deploy.
+3. If AKT continues higher, trail will follow; if it pulls back, trail caps the giveback.
+
+### Known follow-up work (deferred — separate commits)
+- **TREND's `exitManager.ts` doesn't update `peak_price`** unlike every other strategy. This is a latent issue, but doesn't directly cause the trail bug (TREND's trail uses `currentPrice` not `peak_price`). Worth fixing for parity + future peak-based time-kill design.
+- **`decision_log` is only persisted at entry**, never appended post-entry. If exit-check decisions had been persisted, this bug would have been caught the first time someone looked — every row would have shown `"Holding: PnL NaN%"`. Persisting decisions every N loops would close this observability gap.
+- **WS service hardcoded subscription list** is decoupled from `V2_CONFIG.SCAN_TICKERS`. Should be derived from config (so changing scan tickers auto-subscribes). Until then, exit logic relies entirely on the REST fallback for non-default tickers.
+
+---
+
 ## 2026-05-08 — Quick-kill ATR scaling + time_kill 12h→8h — vps-claude
 
 **Commits:** (see below)
 **Files changed:** `v2/engine/config.ts`, `v2/pipeline/exitManager.ts`
 **Stats baseline reset:** no (want to see contrast vs prior trades in continuous stats)
+
+**⚠️ Retroactive note (added 2026-05-11 by local-claude):** This change couldn't actually take effect in the running engine because of the krakenAdapter NaN bug fixed on 2026-05-11. The 28-trade dataset cited below came from pre-Config-A trades on BTC/ETH/etc. where WS gave valid prices. Once Config A switched SCAN_TICKERS, ALL exits became broken. The new 8h time_kill / scaled quick-kill becomes live alongside the 2026-05-11 fix.
 
 **What changed:**
 1. **Quick-kill ATR scaling** — the flat 1.2× ATR stop tightening at 4h was pulling stops into normal volatility noise on high-vol assets. The two worst trailing losses (-$4.85 ETH, -$3.51 ADA) both exited at exactly 4.0h hold. Now scales by ATR: >1.5% ATR → 0.6× mult, >1.0% ATR → 0.9× mult, else 1.2× (unchanged for low-vol). This gives ETH/ADA roughly 2× the breathing room at quick-kill time.
