@@ -37,6 +37,39 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-12 17:00 UTC — BE-stop offset +0.1% → +0.7% (covers fees+slippage) — local-claude
+
+**Files changed:** `v2/pipeline/exitManager.ts` (one line in section 2b, plus comment)
+**Stats baseline reset:** NO (tuning of exit protection, not entry strategy; expect existing cohort to remain comparable)
+
+### What changed
+Break-even stop offset raised from `entry * 1.001` (+0.1%) to `entry * 1.007` (+0.7%). The trigger remains at +0.8% pnlPercent — only the *stop level* moved.
+
+### Why
+The old comment said "+0.1% covers slippage" but the math didn't work:
+- Kraken round-trip = 0.16% maker entry + 0.26% taker exit = **0.42% fees**
+- Typical slippage on thin books like AKTUSD ≈ **0.2%**
+- True net-zero break-even needs ≈ **+0.62% offset**
+
+When the old BE stop fired, trades came out around -0.4% net — small but consistent loss. The diagnosis was triggered by AKTUSD trade #2 on 2026-05-12: 12-minute hold, BE triggered, BE hit, exit at -$1.88 with `exit_reason='trailing'` (because `currentStop > initialStop`, so the code routes BE hits through the trailing-exit label).
+
+The new +0.7% offset leaves ~+0.1% net after fees+slippage when the BE stop fires. Turns the "lose small" outcome into "win small" without changing when BE engages.
+
+### Why not also raise the trigger (Option B) or make it ATR-aware (Option C)
+Raising the trigger from +0.8% to +1.5% would change WHEN we protect — and if a real reversal starts at +1.0% (under the new trigger), we'd ride it back to the −10% initial SL. Worse failure mode for marginal gain.
+
+ATR-aware BE is architecturally cleaner (mirrors VPS Claude's quick-kill ATR scaling) but n=1 BE-hit data point is too thin to justify the complexity now. Defer until 10+ BE-hit trades show whether high-ATR tickers actually hit BE more than baseline.
+
+### What to monitor
+- **Next BE-stop hit:** should now exit positive (+0.1% to +0.3% net) rather than negative. Look for `exit_reason='trailing'` exits with small *positive* P&L.
+- **The ride-through path doesn't change:** if a trade reaches +2.5% (trail activation), the trail's `currentStop > trade.currentStop` guard means stops only ratchet *up*. The +0.7% BE doesn't squeeze it.
+- **Possible new failure mode:** between +0.8% (BE trigger) and +0.7% (BE stop), there's no overlap. So a trade that triggers BE at exactly +0.8% then drops to exactly +0.7% in the same loop exits at +0.7% gross = +0.28% net. Fine. But if loops are spaced more than ~1s apart and price whipsaws, we might miss the trigger entirely and never set BE — same as before this change.
+
+### Rollback
+Single line. Change `1.007` back to `1.001` in `v2/pipeline/exitManager.ts:section 2b`.
+
+---
+
 ## 2026-05-11 13:30 UTC — 🚨 Critical fix: krakenAdapter.getLatestPrice returned undefined for new SCAN_TICKERS — local-claude
 
 **Files changed:** `v2/exchange/krakenAdapter.ts` (one line)
