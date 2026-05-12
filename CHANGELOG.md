@@ -37,6 +37,49 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-12 17:15 UTC — Observability: persist exit-check decisions to decision_log — local-claude
+
+**Files changed:**
+- `v2/attribution/attributionStore.ts` (new `appendTradeDecision()` function)
+- `v2/engine/tradeEngine.ts` (call it from `checkOpenExits()` on state change or heartbeat)
+
+**Stats baseline reset:** NO (this is observability infrastructure, not a trading-config change)
+
+### What it does
+`checkExits` already emits a `DecisionRecord` on every exit-check loop (`result.decision`), but before today those records were discarded after the loop — `decision_log` in `v2_trades` only stored the entry decision. This change persists them when something interesting happens.
+
+**Persistence triggers:**
+1. **State change** (always persist): `currentStop` moved, `trailingActivated` flipped, or `shouldExit` set
+2. **Heartbeat** (every 30 loops ≈ 30 min on 60s `BOT_LOOP_INTERVAL_MS`): periodic snapshot of "still holding, PnL X%, stop at Y"
+
+**Bounded growth:** the log keeps at most 50 records — the entry decision (index 0) plus the last 49. Drops middle entries when full. For typical trade lengths (4-30h), this is way more than enough; for unusual >25h trades, early heartbeats roll off but the entry + last-near-exit detail is preserved.
+
+**Per-trade dedup:** `checkOpenExits()` is called up to 3 times per main loop (after scan reject, after signal reject, end of loop). Without dedup, each heartbeat would persist 3 identical records. The `_lastDecisionPersistLoop` Map keys are trade IDs and skip duplicate same-loop heartbeats. State changes bypass dedup (they're rare and worth seeing).
+
+### Why now
+We just spent **5 days unaware** that exits were silently broken (krakenAdapter NaN bug — commit `70bcafa`). Throughout that period, `checkExits` was producing decisions like `"Holding: PnL NaN%, stop 507.70"` — that one log line would have made the bug obvious within hours of the first symptom. But because decisions weren't persisted, we couldn't see them.
+
+This is also a force multiplier for the BE-stop fix validation: when AKTUSD #3 (or any future trade) hits BE-trigger territory, we'll be able to read back the exact sequence of state transitions instead of inferring from the final exit row.
+
+### Cost
+- One read + one write to `v2_trades.decision_log` per persisted decision
+- ~1-3 persists per trade per 30 min (heartbeat) plus 0-N for state changes
+- Bounded log size (50 records) keeps row size manageable
+- Failures are caught + logged; never break exit logic (observability failures must not cause trading failures)
+
+### Knock-on cleanup
+- `_lastDecisionPersistLoop.delete(tradeId)` runs when `closeTrade()` is called — keeps the Map from growing unbounded over many trades.
+
+### What to monitor
+- **Next loop boundary (loopCount % 30 == 0)** for currently open AKTUSD #3 should produce a fresh heartbeat record in its `decision_log`
+- **Next BE-trigger event** for any trade should append a state-change record exactly when `currentStop` is raised
+- **`decision_log` column size** in v2_trades for long-held trades — should hover around log[0] + ~10-20 heartbeats for a 5-10h hold
+
+### Rollback
+Two-line revert in `tradeEngine.ts:checkOpenExits` (the new `if (isStateChange || heartbeatDue)` block). The new `appendTradeDecision` function in `attributionStore.ts` can stay (no callers = dead code, harmless).
+
+---
+
 ## 2026-05-12 17:00 UTC — BE-stop offset +0.1% → +0.7% (covers fees+slippage) — local-claude
 
 **Files changed:** `v2/pipeline/exitManager.ts` (one line in section 2b, plus comment)

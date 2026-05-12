@@ -290,6 +290,72 @@ export function updateTradePeakHistogram(tradeId: string, newPeak: number): void
   _updatePeakHistStmt.run({ tradeId, newPeak });
 }
 
+// --- Decision Log Persistence (post-entry) ---
+//
+// 2026-05-12: previously decision_log was JSON-encoded once at trade insert
+// and never updated. checkExits emits a DecisionRecord on every loop
+// (`result.decision`) but those records were discarded. When the
+// krakenAdapter NaN bug silently broke all exits for 5 days, the decision
+// records would have shown "Holding: PnL NaN%, stop 507.70" on every loop —
+// but they weren't persisted, so the bug stayed invisible.
+//
+// `appendTradeDecision` reads the current log, appends the new decision,
+// trims to a bounded size (default 50), and writes back. Callers should
+// use this only on state changes (stop moved, trailing activated, exit
+// triggered) or as a periodic heartbeat — not every loop, which would
+// bloat the column.
+
+let _readDecisionLogStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
+let _writeDecisionLogStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
+
+/**
+ * Append a decision record to a trade's decision_log, keeping the entry
+ * decision (index 0) and the most recent (maxRecords - 1) records. Drops
+ * middle records when the cap is exceeded — the entry decision is the most
+ * informative early-state snapshot; recent records show the trade's
+ * evolution close to exit.
+ *
+ * @param tradeId    The trade id (UUID).
+ * @param decision   The DecisionRecord to append.
+ * @param maxRecords Max log length (default 50). On overflow, keeps log[0]
+ *                   plus the last (maxRecords-1) entries.
+ */
+export function appendTradeDecision(
+  tradeId: string,
+  decision: DecisionRecord,
+  maxRecords: number = 50,
+): void {
+  if (!_readDecisionLogStmt) {
+    _readDecisionLogStmt = getDb().prepare(
+      `SELECT decision_log FROM v2_trades WHERE id = @tradeId`,
+    );
+  }
+  if (!_writeDecisionLogStmt) {
+    _writeDecisionLogStmt = getDb().prepare(
+      `UPDATE v2_trades SET decision_log = @log WHERE id = @tradeId`,
+    );
+  }
+
+  const row = _readDecisionLogStmt.get({ tradeId }) as { decision_log: string } | undefined;
+  if (!row) return; // trade not found — nothing to do
+
+  let log: DecisionRecord[];
+  try {
+    const parsed = JSON.parse(row.decision_log || '[]');
+    log = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    log = [];
+  }
+
+  log.push(decision);
+  if (log.length > maxRecords) {
+    // Keep entry (index 0) + last (maxRecords - 1) records. Drops middle.
+    log = [log[0], ...log.slice(-(maxRecords - 1))];
+  }
+
+  _writeDecisionLogStmt.run({ tradeId, log: JSON.stringify(log) });
+}
+
 // --- Queries ---
 
 export function getOpenTrades(): V2Trade[] {
