@@ -24,6 +24,7 @@ import {
   getOpenTradesByStrategy,
   getClosedTrades,
   getClosedTradesByStrategy,
+  appendTradeDecision,
 } from '../attribution/attributionStore.ts';
 import { analyzeClosedTrade } from '../attribution/postTradeAnalyzer.ts';
 
@@ -37,6 +38,14 @@ let isRunning = false;
 let loopInProgress = false; // Prevents concurrent runLoop() calls
 let exchange: ExchangeAdapter | null = null;
 let budget = 0;
+
+// 2026-05-12: decision_log heartbeat dedup.
+// checkOpenExits is called up to 3x per loop iteration. Without dedup we'd
+// persist 3 identical heartbeat records each tick. Map keys are trade IDs;
+// values are the last loopCount we persisted a decision for. State changes
+// (stop moved / trail activated / exit) bypass this and persist unconditionally.
+const _lastDecisionPersistLoop = new Map<string, number>();
+const DECISION_HEARTBEAT_LOOPS = 30; // ~30 min on 60s BOT_LOOP_INTERVAL_MS
 
 const stats = {
   lastLoopTime: 0,
@@ -529,6 +538,31 @@ async function checkOpenExits(): Promise<void> {
     const exitResults = await checkExits(openTrades, exchange);
 
     for (const result of exitResults) {
+      // Persist the decision when it's worth seeing later:
+      //  - shouldExit (always persist the final decision)
+      //  - state change (stop moved, trailing just activated)
+      //  - periodic heartbeat (every DECISION_HEARTBEAT_LOOPS, dedup'd per trade)
+      //
+      // Without this, a silently-broken exit loop (like the krakenAdapter
+      // NaN bug in commit 70bcafa) leaves no trace — decision_log only had
+      // the entry record. Now post-entry behavior is observable.
+      const tradeId = result.trade.id;
+      const stopChanged = result.newStop !== result.trade.currentStop;
+      const isStateChange = stopChanged || result.trailingJustActivated || result.shouldExit;
+      const heartbeatDue =
+        stats.loopCount % DECISION_HEARTBEAT_LOOPS === 0 &&
+        _lastDecisionPersistLoop.get(tradeId) !== stats.loopCount;
+
+      if (isStateChange || heartbeatDue) {
+        try {
+          appendTradeDecision(tradeId, result.decision);
+          _lastDecisionPersistLoop.set(tradeId, stats.loopCount);
+        } catch (e) {
+          // Non-fatal — observability failure should never break exit logic.
+          console.warn(`[V2] decision_log append failed for ${result.trade.ticker}: ${(e as Error).message}`);
+        }
+      }
+
       if (!result.shouldExit || !result.exitReason) continue;
 
       const trade = result.trade;
@@ -570,6 +604,7 @@ async function checkOpenExits(): Promise<void> {
 
       // Close in DB
       closeTrade(trade.id, result.exitPrice, result.exitReason, totalFees);
+      _lastDecisionPersistLoop.delete(trade.id); // Trade closed; clear heartbeat tracker
 
       // Analyze for signal scoring
       const closedTrade = {
