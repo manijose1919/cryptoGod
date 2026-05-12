@@ -140,7 +140,17 @@ export async function checkExits(
     let newStop = trade.currentStop;
 
     // --- 2b. Break-Even Stop ---
-    // Once price moves +0.8% (covers round-trip fees), raise SL to entry+0.1%.
+    // Once price moves +0.8%, raise SL to entry+0.7%.
+    //
+    // 2026-05-12: BE offset raised from +0.1% to +0.7%. The old +0.1%
+    // claimed to cover slippage but actually fell short of Kraken's
+    // round-trip fees (0.16% maker entry + 0.26% taker exit = 0.42%) plus
+    // typical slippage (~0.2% on thin orderbooks). When the BE stop got
+    // hit, the trade lost ~0.4% net. New +0.7% offset leaves ~+0.1% net
+    // after fees+slippage when the stop fires — turns "lose small" into
+    // "win small." Confirmed casualty: AKTUSD #2 on 2026-05-12 lost $1.88
+    // hitting the old BE stop after only 12 min held.
+    //
     // Acts as a floor — capital preservation for trades that haven't yet
     // reached the trailing activation threshold. Below trailing, this is
     // the only protection; above trailing, it's harmless because trailing
@@ -149,7 +159,7 @@ export async function checkExits(
     // so config tweaks to trailing don't accidentally squeeze the BE window.
     const rawPnlPercent = pnlPercent; // pnlPercent is already raw (no fee adjustment)
     if (rawPnlPercent >= 0.008) {
-      const breakEvenStop = trade.entryPrice * 1.001; // Slightly above entry to cover slippage
+      const breakEvenStop = trade.entryPrice * 1.007; // Above entry by enough to net positive after fees+slippage
       if (breakEvenStop > trade.currentStop) {
         newStop = breakEvenStop;
         mutators.setStop(trade.id, newStop, trade);
