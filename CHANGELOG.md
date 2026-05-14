@@ -37,6 +37,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-14 — Risk-based position sizing cap — vps-claude
+
+**Commits:** (see below)
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/riskGate.ts`
+**Stats baseline reset:** no
+
+**What changed:**
+Added `MAX_RISK_PER_TRADE_PERCENT: 0.01` (1% of equity) as a position size cap. After computing the base position size (equity × 0.25 × confidence × F&G), the risk gate now also computes `maxRiskUsd / stopDistPercent` and caps position size to whichever is smaller.
+
+High-ATR assets like AKT (5% ATR → 10% stop distance) will now get ~$50-80 positions instead of ~$208. Low-ATR assets (DOGE/ADA with ~5% stop distance) will mostly be unaffected since their risk-cap is ~$100-160, close to what they already get.
+
+Log messages for risk-capped trades show `RISK-CAPPED from $X (stop=Y%)` so we can see it working.
+
+**Why:**
+AKT post-mortem: 8 trades, 4 wins (+$12.47), 1 stop_loss (-$21.93). The stop_loss alone wiped all wins because AKT's 10% stop distance on a $208 position = $20+ max loss, vs ~$5-8 for lower-ATR pairs. Position sizing didn't account for stop distance — every asset got roughly the same dollar position regardless of volatility.
+
+**What to monitor / watch for:**
+- AKT/ZEC/high-ATR entries should show `RISK-CAPPED` in log and position sizes of ~$50-80 instead of ~$200
+- Low-ATR pairs (DOGE, ADA) should be unaffected or only slightly capped
+- If 1% is too conservative and positions are tiny, raise to 0.015 or 0.02
+- Rollback: revert single commit
+
+---
 ## 2026-05-12 17:15 UTC — Observability: persist exit-check decisions to decision_log — local-claude
 
 **Files changed:**
