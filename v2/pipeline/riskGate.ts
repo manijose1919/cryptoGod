@@ -143,22 +143,7 @@ export function evaluateRisk(
       continue;
     }
 
-    // Position sizing: scale by confidence × Fear & Greed multiplier × pullback multiplier
-    const maxPositionUsd = portfolio.availableCapital * V2_CONFIG.BASE_POSITION_PERCENT;
-    const pullbackMult = signal.regime === REGIME.PULLBACK_UP
-      ? V2_CONFIG.MTF_POSITION_MULTIPLIER
-      : 1.0;
-    const positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier * pullbackMult;
-
-    // Gate 6: Position size validity + minimum order size ($10 Kraken minimum)
-    // isFinite catches NaN from any upstream undefined/0 multiplier — `NaN < 10` is
-    // false so a bare `< 10` check would let NaN-sized orders through.
-    if (!isFinite(positionSizeUsd) || positionSizeUsd < 10) {
-      results.push(makeReject(signal, `Position size invalid or below minimum: $${positionSizeUsd}`));
-      continue;
-    }
-
-    // Compute stop loss and take profit prices using actual close price (not EMA which lags)
+    // Compute stop loss and take profit prices first — needed for risk-based sizing
     const lastPrice = (signal.signals.close_price || signal.signals.ema_12) as number;
     const atrValue = signal.signals.atr as number;
     // Defensive: guard against missing/invalid pricing data — produces NaN stops
@@ -169,9 +154,36 @@ export function evaluateRisk(
     }
     const stopLoss = lastPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
     const takeProfit = lastPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    const stopDistPercent = (lastPrice - stopLoss) / lastPrice;
+
+    // Position sizing: scale by confidence × Fear & Greed multiplier × pullback multiplier
+    const maxPositionUsd = portfolio.availableCapital * V2_CONFIG.BASE_POSITION_PERCENT;
+    const pullbackMult = signal.regime === REGIME.PULLBACK_UP
+      ? V2_CONFIG.MTF_POSITION_MULTIPLIER
+      : 1.0;
+    let positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier * pullbackMult;
+
+    // Risk-based cap: limit position so max loss (entry→stop) ≤ MAX_RISK_PER_TRADE_PERCENT of equity.
+    // High-ATR assets (e.g. AKT 5% ATR → 10% stop) get smaller positions; low-ATR assets unaffected.
+    const maxRiskUsd = portfolio.totalEquity * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT;
+    const riskCapSizeUsd = stopDistPercent > 0 ? maxRiskUsd / stopDistPercent : positionSizeUsd;
+    const riskCapped = positionSizeUsd > riskCapSizeUsd;
+    if (riskCapped) {
+      positionSizeUsd = riskCapSizeUsd;
+    }
+
+    // Gate 6: Position size validity + minimum order size ($10 Kraken minimum)
+    // isFinite catches NaN from any upstream undefined/0 multiplier — `NaN < 10` is
+    // false so a bare `< 10` check would let NaN-sized orders through.
+    if (!isFinite(positionSizeUsd) || positionSizeUsd < 10) {
+      results.push(makeReject(signal, `Position size invalid or below minimum: $${positionSizeUsd}`));
+      continue;
+    }
+
     const quantity = positionSizeUsd / lastPrice;
 
     const pullbackNote = signal.regime === REGIME.PULLBACK_UP ? `, pullback=${pullbackMult}x` : '';
+    const riskNote = riskCapped ? `, RISK-CAPPED from $${riskCapSizeUsd.toFixed(0)} (stop=${(stopDistPercent * 100).toFixed(1)}%)` : '';
     results.push({
       ticker: signal.ticker,
       passed: true,
@@ -180,7 +192,7 @@ export function evaluateRisk(
       stopLoss,
       takeProfit,
       expectedReturn,
-      reason: `APPROVED: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x${pullbackNote}`,
+      reason: `APPROVED: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x${pullbackNote}${riskNote}`,
     });
   }
 

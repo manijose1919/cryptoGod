@@ -43,6 +43,7 @@ export const V2_CONFIG = {
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
   BASE_POSITION_PERCENT: 0.25,  // Base size as % of equity — actual size = base × confidence × F&G multiplier (can exceed this)
+  MAX_RISK_PER_TRADE_PERCENT: 0.01, // 1% of equity max loss per trade. Caps position size so entry-to-stop = this amount. Prevents high-ATR assets (AKT 5% ATR → 10% stop) from risking 3-4× more than low-ATR assets.
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
 
   // --- Risk ---
