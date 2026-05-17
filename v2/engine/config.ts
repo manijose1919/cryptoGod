@@ -12,6 +12,7 @@ export const V2_CONFIG = {
   // --- Scan ---
   SCAN_TICKERS: [
     'AKTUSD', 'ZECUSD', 'COMPUSD',
+    'SOLUSD', 'HYPEUSD', 'SUIUSD', 'LINKUSD',
     // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
     //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
     //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
@@ -20,6 +21,8 @@ export const V2_CONFIG = {
     // Robustness: 30d PF 1.00 (break-even, yellow flag), 60d PF 1.33, 90d PF 1.62 — improves with longer window
     // Removed: ETHUSD, XRPUSD, DOGEUSD, DOTUSD, ADAUSD (all PF<1 in current 90d regime under tuned config)
     // Per-ticker (90d, Config A): ETH -4.2%, XRP losing, DOGE losing, DOT/ADA worst-2 (-$84/-$112)
+    // 2026-05-17: Added SOL ($9.4M vol), HYPE ($7M vol, +7.1% today), SUI ($5.6M vol), LINK ($2.3M vol)
+    //   — diversify out of 3 correlated mid-cap alts all stuck in DOWN regime. Higher vol + different sectors.
   ],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 0.3,  // Calibrated for 4h candles (0.05 was for 1m/15m)
