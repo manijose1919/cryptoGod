@@ -37,6 +37,26 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-17 — Add SOL, HYPE, SUI, LINK to SCAN_TICKERS — vps-claude
+
+**Commits:** (see below)
+**Files changed:** `v2/engine/config.ts`
+**Stats baseline reset:** no
+
+**What changed:**
+Added 4 tickers to TREND SCAN_TICKERS: SOLUSD, HYPEUSD, SUIUSD, LINKUSD. Scan goes from 3 → 7 tickers.
+
+**Why:**
+Bot had zero trades for 3 days — all 3 existing tickers (AKT, ZEC, COMP) were in DOWN/STRONG_DOWN regime. These are correlated mid-cap alts that all move together. Adding higher-vol, differently-correlated assets gives the regime gate more chances to find UP opportunities. HYPE was +7.1% on the day of adding. SOL/LINK are in the CLAUDE.md Canadian-allowed list.
+
+**What to monitor / watch for:**
+- More diverse regime mix in scan logs — not all 7 tickers should be DOWN simultaneously
+- HYPE has high ATR (~8.6% daily range) — risk-based sizing will cap its position. Watch for `RISK-CAPPED` in logs
+- If any new ticker consistently loses, can remove individually without disrupting others
+- Rollback: remove the 4 tickers from the array
+
+---
+
 ## 2026-05-14 — Risk-based position sizing cap — vps-claude
 
 **Commits:** (see below)
