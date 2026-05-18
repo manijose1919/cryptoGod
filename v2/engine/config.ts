@@ -132,7 +132,8 @@ export const V2_CONFIG = {
 // ============================================
 
 export const MOMENTUM_CONFIG = {
-  ENABLED: false,   // 2026-05-07: RE-DISABLED. Was enabled 2026-05-06 but bypasses signal confidence gate (enters at 0.60 conf). Prior live record 0W/4L. Defer until #30 MOMENTUM redesign ships a proper entry filter.
+  ENABLED: false,   // 2026-05-18: RE-DISABLED pending backtest validation. Confidence gate + risk-based sizing now added. Set true after validating PF>1.
+  MIN_CONFIDENCE: 0.70,  // Added 2026-05-18: was missing, caused 0W/4L live at conf 0.60
 
   // Tickers — chosen via wide-ticker scan in backtest. These 7 produced
   // PF > 1 individually under v2 logic; combined PF was 1.70 (90d).
