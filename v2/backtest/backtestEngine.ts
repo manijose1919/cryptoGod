@@ -289,7 +289,7 @@ function simulateTicker(
         : 0;
 
       if (regime.regime === 'STRONG_UP') compositeScore += 8;
-      else if (regime.regime === 'UP') compositeScore += 5;
+      else if (regime.regime === 'UP') compositeScore += 2;
       compositeScore = Math.min(compositeScore, 100);
 
       const pctB = signals.bb_percent_b as number;
