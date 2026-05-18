@@ -235,9 +235,11 @@ export function generateSignals(
       : 0;
 
     // Regime bonus: reward trend alignment
+    // UP reduced from +5 to +2 — backtest data: UP regime 43.8% WR vs STRONG_UP 64%.
+    // Lower bonus raises the effective threshold for UP entries.
     if (regime.regime === 'STRONG_UP') compositeScore += 8;
-    else if (regime.regime === 'UP') compositeScore += 5;
-    else if (regime.regime === 'PULLBACK_UP') compositeScore += 3;  // 4h bullish but 15m dipped
+    else if (regime.regime === 'UP') compositeScore += 2;
+    else if (regime.regime === 'PULLBACK_UP') compositeScore += 3;
 
     compositeScore = Math.min(compositeScore, 100);
 

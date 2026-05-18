@@ -12,9 +12,10 @@ export const V2_CONFIG = {
   // --- Scan ---
   SCAN_TICKERS: [
     'AKTUSD', 'ZECUSD', 'COMPUSD',
-    'SOLUSD', 'HYPEUSD', 'SUIUSD', 'LINKUSD',
+    'SOLUSD', 'HYPEUSD', 'SUIUSD',
     // MOMENTUM tickers (merged 2026-05-18 — momentum signals now routed through main pipeline)
-    'RUNEUSD', 'ENAUSD', 'KASUSD', 'ICPUSD',
+    'RUNEUSD', 'ENAUSD', 'ICPUSD',
+    // Removed: LINKUSD (PF<1, 26.7% WR across all windows), KASUSD (PF<1, 25% WR)
     // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
     //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
     //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
@@ -87,7 +88,7 @@ export const V2_CONFIG = {
   TAKE_PROFIT_ATR_MULT: 4.0,       // 2026-04-29: 3.5 → 4.0 (R:R 1.4 → 1.6). Avg_win problem: at R:R 1.4 the cohort was avg_win $0.97 vs needed ~$1.10 for 59% WR break-even. Wider TP makes individual TP hits +$2.00 instead of +$1.75. Risk: historical R:R 1.6 cohort underperformed R:R 1.4 (-$10.89 vs -$1.89), but that was without working BE/trailing stops. With current trailing-active@1% catching moderate winners, wider TP may behave differently. Deliberate test under user's risk-on framing 2026-04-29.
   TRAILING_ACTIVATE_PERCENT: 0.025, // 2026-05-06 Config A: 0.01 → 0.025 — wait longer before activating trail. Reduces premature exits on noise; combined with TG 0.03 produces avg_win $8.03 (was $1.92 baseline)
   TRAILING_GIVEBACK_PERCENT: 0.03,  // 2026-05-06 Config A: 0.25 → 0.03 — extreme tight trail. Once activated, surrender only 3% of peak gain. The trailing-exit P&L moved from +$216 (PF 1.43) to +$312 (PF 1.62) on AKT+ZEC+COMP 90d
-  TIME_KILL_MS: 8 * 60 * 60 * 1000,      // 8h — was 12h; data shows >12h trades win 33%, >4h win 42%. Cutting stale positions earlier reduces fee bleed.
+  TIME_KILL_MS: 6 * 60 * 60 * 1000,      // 6h — was 8h; backtest shows time_kill is #1 PnL drag (-$125/128 trades). Cutting 2h earlier reduces fee bleed on stale positions.
   TIME_KILL_MIN_MOVE: 0.007,
   EXIT_CHECK_INTERVAL_MS: 15_000,
 
