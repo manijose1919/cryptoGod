@@ -126,7 +126,7 @@ export function evaluateRisk(
       continue;
     }
 
-    // Gate 4: Already holding this ticker (within same strategy)
+    // Gate 4: Already holding this ticker (any side — never long and short simultaneously)
     if (portfolio.openPositions.has(signal.ticker)) {
       results.push(makeReject(signal, `Already holding ${signal.ticker}`));
       continue;
@@ -168,17 +168,15 @@ export function evaluateRisk(
       results.push(makeReject(signal, `ATR% missing or invalid (${atrPercent})`));
       continue;
     }
-    const tpPercent = atrPercent * V2_CONFIG.TAKE_PROFIT_ATR_MULT / 100;
-    const slPercent = atrPercent * V2_CONFIG.STOP_LOSS_ATR_MULT / 100;
-    // H6/H7: use exchange-aware ROUND_TRIP_REAL (maker entry + taker exit).
-    // Old code assumed pure-maker round-trip when USE_MAKER_ORDERS=true (0.32%
-    // on Kraken), but the actual exit path uses placeMarketSell (taker), so
-    // real round-trip is 0.42% (maker entry 0.16% + taker exit 0.26%). The
-    // 0.10% under-estimate let marginal-edge trades through that the gate
-    // was supposed to reject.
-    const feeRoundTrip = V2_CONFIG.USE_MAKER_ORDERS
-      ? fees.ROUND_TRIP_REAL
-      : fees.ROUND_TRIP_TAKER;
+    const isShort = signal.side === 'short';
+    const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : V2_CONFIG.STOP_LOSS_ATR_MULT;
+    const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    const tpPercent = atrPercent * tpMult / 100;
+    const slPercent = atrPercent * slMult / 100;
+    // Shorts use taker fees both sides on Kraken
+    const feeRoundTrip = isShort
+      ? V2_CONFIG.SHORT_FEE_ROUND_TRIP ?? fees.ROUND_TRIP_TAKER
+      : (V2_CONFIG.USE_MAKER_ORDERS ? fees.ROUND_TRIP_REAL : fees.ROUND_TRIP_TAKER);
 
     // Gate 5: Expected return must exceed minimum
     // TP% is the raw target move — confidence already scales position size, not ER
@@ -197,9 +195,13 @@ export function evaluateRisk(
       results.push(makeReject(signal, `Invalid pricing data: lastPrice=${lastPrice}, atr=${atrValue}`));
       continue;
     }
-    const stopLoss = lastPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
-    const takeProfit = lastPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
-    const stopDistPercent = (lastPrice - stopLoss) / lastPrice;
+    const stopLoss = isShort
+      ? lastPrice + atrValue * slMult   // stop above entry for shorts
+      : lastPrice - atrValue * slMult;
+    const takeProfit = isShort
+      ? lastPrice - atrValue * tpMult   // TP below entry for shorts
+      : lastPrice + atrValue * tpMult;
+    const stopDistPercent = Math.abs(lastPrice - stopLoss) / lastPrice;
 
     // Position sizing: scale by confidence × Fear & Greed multiplier × pullback multiplier
     const maxPositionUsd = portfolio.availableCapital * V2_CONFIG.BASE_POSITION_PERCENT;
@@ -229,6 +231,7 @@ export function evaluateRisk(
 
     const pullbackNote = signal.regime === REGIME.PULLBACK_UP ? `, pullback=${pullbackMult}x` : '';
     const riskNote = riskCapped ? `, RISK-CAPPED from $${riskCapSizeUsd.toFixed(0)} (stop=${(stopDistPercent * 100).toFixed(1)}%)` : '';
+    const sideNote = isShort ? ' [SHORT]' : '';
     results.push({
       ticker: signal.ticker,
       passed: true,
@@ -237,7 +240,8 @@ export function evaluateRisk(
       stopLoss,
       takeProfit,
       expectedReturn,
-      reason: `APPROVED: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x${pullbackNote}${riskNote}`,
+      side: signal.side,
+      reason: `APPROVED${sideNote}: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x${pullbackNote}${riskNote}`,
     });
   }
 

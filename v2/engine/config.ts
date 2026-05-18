@@ -60,6 +60,15 @@ export const V2_CONFIG = {
   TREND_MATURITY_PENALTY_THRESHOLD: 70,  // start penalizing composite score above this maturity
   TREND_MATURITY_MAX_PENALTY: 15,        // subtract up to 15 from composite score for exhausted trends
 
+  // --- Short Selling ---
+  SHORTS_ENABLED: false,                 // paper-test before enabling
+  SHORT_ALLOWED_REGIMES: ['STRONG_DOWN', 'DOWN'] as readonly string[],
+  SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
+  SHORT_STOP_LOSS_ATR_MULT: 2.0,
+  SHORT_TAKE_PROFIT_ATR_MULT: 3.5,
+  SHORT_TRAILING_ACTIVATE_PERCENT: 0.025,
+  SHORT_TRAILING_GIVEBACK_PERCENT: 0.03,
+
   // --- Risk ---
   MAX_DAILY_LOSS_PERCENT: 0.03,
   CIRCUIT_BREAKER_COOLDOWN_MS: 15 * 60 * 1000, // 15 minutes

@@ -10,7 +10,7 @@ import type { ExchangeAdapter } from '../exchange/types.ts';
 // Pipeline imports
 import { scanMarket, getPassedTickers, setHTFRegime } from '../pipeline/marketScanner.ts';
 import { detectRegime } from '../indicators/indicators.ts';
-import { generateSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
+import { generateSignals, generateShortSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
 import { evaluateRisk, getApproved } from '../pipeline/riskGate.ts';
 import { executeTrade } from '../pipeline/executor.ts';
 import { checkExits } from '../pipeline/exitManager.ts';
@@ -507,6 +507,41 @@ async function runLoop(): Promise<void> {
         }
       }
       console.log(`[V2] Loop #${stats.loopCount}: risk rejected all ${riskResults.length} signals (${passedScan.length} scanned, ${passedSignals.length} signaled)`);
+    }
+
+    // ==============================
+    // Stage 5b: Short pipeline (when enabled)
+    // ==============================
+    if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live') {
+      const shortScanResults = scanMarket(tickerCandles, 'short');
+      const passedShortScan = getPassedTickers(shortScanResults);
+      if (passedShortScan.length > 0) {
+        const shortSignals = generateShortSignals(passedShortScan, tickerCandles);
+        const passedShortSignals = getPassedSignals(shortSignals);
+        if (passedShortSignals.length > 0) {
+          const shortPortfolio = loadPortfolio(budget, 'TREND');
+          const shortCbState = getCircuitBreakerState(shortPortfolio, 'TREND');
+          const shortRiskResults = evaluateRisk(passedShortSignals, shortPortfolio, shortCbState, exchange?.getName() ?? 'kraken', tickerCandles);
+          const shortApproved = getApproved(shortRiskResults);
+          if (shortApproved.length > 0) {
+            const bestShort = shortApproved[0];
+            const bestShortSignal = passedShortSignals.find(s => s.ticker === bestShort.ticker);
+            if (bestShortSignal) {
+              console.log(`[V2] Loop #${stats.loopCount}: executing SHORT ${bestShortSignal.ticker} score=${bestShortSignal.compositeScore.toFixed(1)}`);
+              const { trade } = await executeTrade(bestShortSignal, bestShort, exchange, []);
+              if (trade) {
+                try {
+                  insertTrade(trade);
+                  console.log(`[V2] SHORT opened: ${trade.ticker} @ $${trade.entryPrice.toFixed(2)}`);
+                  await sendEntryAlert(trade);
+                } catch (e) {
+                  console.error(`[V2] insertTrade (short) failed: ${(e as Error).message}`);
+                }
+              }
+            }
+          }
+        }
+      }
     }
 
     // ==============================

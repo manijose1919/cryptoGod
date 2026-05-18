@@ -127,6 +127,7 @@ export interface SignalResult {
   confidence: number;
   signals: SignalSnapshot;
   regime: Regime;
+  side?: 'long' | 'short';
   reason?: string;
 }
 
@@ -138,6 +139,7 @@ export interface RiskResult {
   stopLoss: number;
   takeProfit: number;
   expectedReturn: number;
+  side?: 'long' | 'short';
   reason?: string;
 }
 

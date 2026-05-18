@@ -331,3 +331,83 @@ export function generateSignals(
 export function getPassedSignals(results: SignalResult[]): SignalResult[] {
   return results.filter((r) => r.passed);
 }
+
+/**
+ * Generate SHORT signals — inverted scoring for bearish entries.
+ * Only called when SHORTS_ENABLED and tickers pass scan with side='short'.
+ */
+export function generateShortSignals(
+  scanResults: ScanResult[],
+  tickerCandles: Map<string, Candle[]>,
+): SignalResult[] {
+  const results: SignalResult[] = [];
+
+  for (const scan of scanResults) {
+    if (!scan.passed) continue;
+    const candles = tickerCandles.get(scan.ticker);
+    if (!candles || candles.length < V2_CONFIG.MIN_CANDLES) continue;
+
+    const { signals, regime } = computeSignals(candles);
+
+    // Short-specific signal scoring (inverted from long)
+    const rsiVal = signals.rsi as number ?? 50;
+    const macdHist = signals.macd_histogram as number ?? 0;
+    const trendStr = signals.trend_strength as number ?? 0;
+    const tcVal = signals.tc_value as number ?? 50;
+    const pctB = signals.bb_percent_b as number ?? 0.5;
+
+    // RSI: 30-55 is healthy downtrend without oversold bounce risk
+    const rsiScore = rsiVal >= 30 && rsiVal <= 55 ? 80 + (50 - rsiVal) : (rsiVal < 30 ? 30 : 40);
+    // MACD: negative histogram = bearish momentum
+    const macdScore = macdHist < 0 ? Math.min(95, 60 + Math.abs(macdHist) * 500) : 30;
+    // Trend: negative trend strength = strong downtrend
+    const trendScore = trendStr < 0 ? Math.min(90, 50 + Math.abs(trendStr) * 2) : 30;
+    // TC: >60 suggests selling pressure
+    const tcScore = tcVal > 80 ? 90 : (tcVal > 60 ? 70 : 40);
+    // BB: price in lower half confirms downtrend
+    const bbScore = pctB < 0.3 ? 80 : (pctB < 0.5 ? 65 : 35);
+
+    let compositeScore = (rsiScore * 0.25 + macdScore * 0.25 + trendScore * 0.20 + tcScore * 0.15 + bbScore * 0.15);
+
+    // Regime bonus for shorts
+    if (regime.regime === 'STRONG_DOWN') compositeScore += 8;
+    else if (regime.regime === 'DOWN') compositeScore += 5;
+
+    compositeScore = Math.min(100, compositeScore);
+
+    // Trend maturity penalty (applies to shorts too — exhausted downtrend = risky short)
+    if (regime.trendMaturity > V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD) {
+      const excess = regime.trendMaturity - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+      const maxExcess = 100 - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+      compositeScore -= Math.round((excess / maxExcess) * V2_CONFIG.TREND_MATURITY_MAX_PENALTY);
+    }
+
+    const confidence = compositeScore / 100;
+
+    const lastCandleTime = candles[candles.length - 1]?.time;
+    const tg = checkTimeGate(lastCandleTime);
+    const adjustedThreshold = V2_CONFIG.MIN_COMPOSITE_SCORE - tg.scoreBoost;
+
+    const passed = tg.allow
+                && compositeScore >= adjustedThreshold
+                && confidence >= V2_CONFIG.MIN_CONFIDENCE;
+
+    const reason = passed
+      ? `SHORT PASS: score=${compositeScore.toFixed(1)}, RSI=${rsiVal.toFixed(0)}, MACD=${macdHist.toFixed(4)}`
+      : `SHORT REJECT: score=${compositeScore.toFixed(1)} < ${adjustedThreshold}`;
+
+    results.push({
+      ticker: scan.ticker,
+      passed,
+      compositeScore,
+      confidence,
+      signals,
+      regime: regime.regime,
+      side: 'short',
+      reason,
+    });
+  }
+
+  results.sort((a, b) => b.compositeScore - a.compositeScore);
+  return results;
+}

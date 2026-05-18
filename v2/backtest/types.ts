@@ -23,6 +23,7 @@ export interface BacktestConfig {
 export interface BacktestTrade {
   id: string;
   ticker: string;
+  side: 'long' | 'short';
   entryBar: number;        // bar index in candle array
   entryPrice: number;
   entryTime: number;       // Unix ms
