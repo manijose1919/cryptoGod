@@ -210,6 +210,17 @@ export async function checkExits(
         else if (trade.atrPercent < 0.3) givebackFraction *= 0.7;  // Low vol: tighten 30%
       }
 
+      // Loose-early / tight-late trailing profile:
+      // When profit is just above activation (1.0-1.5x threshold), widen trail
+      // to let the trade breathe through initial pullbacks. As profit grows, tighten.
+      const profitVsActivation = pnlPercent / V2_CONFIG.TRAILING_ACTIVATE_PERCENT;
+      if (profitVsActivation < 1.5) {
+        givebackFraction *= 1.5;
+      } else if (profitVsActivation < 2.0) {
+        const t = (profitVsActivation - 1.5) / 0.5;
+        givebackFraction *= 1.5 - t * 0.5;
+      }
+
       // Profit-tier tightening: bigger winners get tighter trails
       const tpTarget = trade.takeProfitTarget
         ? (trade.takeProfitTarget - trade.entryPrice) / trade.entryPrice
