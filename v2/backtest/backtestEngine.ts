@@ -317,6 +317,13 @@ function simulateTicker(
       compositeScore -= Math.round(6 + (pctB - 0.80) * 120);
     }
 
+    // Trend maturity penalty
+    if (regime.trendMaturity > V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD) {
+      const excess = regime.trendMaturity - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+      const maxExcess = 100 - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+      compositeScore -= Math.round((excess / maxExcess) * V2_CONFIG.TREND_MATURITY_MAX_PENALTY);
+    }
+
     // TimeGate overlay — block entries during data-discovered worst hours/days,
     // boost during best hours by lowering the score threshold.
     const tg = checkTimeGate(window[window.length - 1]?.time);

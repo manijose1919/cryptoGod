@@ -271,6 +271,16 @@ export function generateSignals(
       compositeScore -= 30; // Strong penalty — should push score below threshold
     }
 
+    // Trend maturity penalty: penalize extended/exhausted trends
+    let maturityNote = '';
+    if (regime.trendMaturity > V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD) {
+      const excess = regime.trendMaturity - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+      const maxExcess = 100 - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+      const penalty = Math.round((excess / maxExcess) * V2_CONFIG.TREND_MATURITY_MAX_PENALTY);
+      compositeScore -= penalty;
+      maturityNote = `, maturity=${regime.trendMaturity}(-${penalty})`;
+    }
+
     const confidence = compositeScore / 100;
 
     // TimeGate overlay (2026-05-06): hour-of-day + day-of-week filter discovered
@@ -295,8 +305,8 @@ export function generateSignals(
     const reason = !tg.allow
       ? `REJECT: TimeGate ${tg.reason} (score=${compositeScore.toFixed(1)} ignored)`
       : passed
-        ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}${tcNote}${tgNote}`
-        : `REJECT: score=${compositeScore.toFixed(1)} < min ${adjustedThreshold}${bbNote}${tcNote}${confNote}${tgNote}`;
+        ? `PASS: score=${compositeScore.toFixed(1)}, active=[${activeSignals.join(', ')}]${bbNote}${tcNote}${maturityNote}${tgNote}`
+        : `REJECT: score=${compositeScore.toFixed(1)} < min ${adjustedThreshold}${bbNote}${tcNote}${confNote}${maturityNote}${tgNote}`;
 
     results.push({
       ticker: scan.ticker,
