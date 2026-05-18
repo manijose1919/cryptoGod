@@ -80,6 +80,7 @@ export function evaluateRisk(
   const results: RiskResult[] = [];
   const now = Date.now();
   const fees = getExchangeFees(exchangeName);
+  const tickersApprovedThisBatch = new Set<string>(); // Prevent same ticker approved twice in one loop
 
   // Gate 0 (global): Fear & Greed extreme greed block
   const fgBlock = getFearGreedBlock();
@@ -126,9 +127,9 @@ export function evaluateRisk(
       continue;
     }
 
-    // Gate 4: Already holding this ticker (any side — never long and short simultaneously)
-    if (portfolio.openPositions.has(signal.ticker)) {
-      results.push(makeReject(signal, `Already holding ${signal.ticker}`));
+    // Gate 4: Already holding this ticker or already approved this loop
+    if (portfolio.openPositions.has(signal.ticker) || tickersApprovedThisBatch.has(signal.ticker)) {
+      results.push(makeReject(signal, `Already holding or approved ${signal.ticker}`));
       continue;
     }
 
@@ -231,6 +232,7 @@ export function evaluateRisk(
 
     const pullbackNote = signal.regime === REGIME.PULLBACK_UP ? `, pullback=${pullbackMult}x` : '';
     const riskNote = riskCapped ? `, RISK-CAPPED from $${riskCapSizeUsd.toFixed(0)} (stop=${(stopDistPercent * 100).toFixed(1)}%)` : '';
+    tickersApprovedThisBatch.add(signal.ticker);
     const sideNote = isShort ? ' [SHORT]' : '';
     results.push({
       ticker: signal.ticker,

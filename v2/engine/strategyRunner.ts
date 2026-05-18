@@ -74,7 +74,7 @@ export function runAllStrategies(
       for (const [ticker, candles] of tfCandles) {
         // Breakout has its own regime check internally
         const boSignal = detectBreakoutEntry(candles, ticker);
-        if (boSignal && boSignal.confidence >= 0.60) {
+        if (boSignal && boSignal.confidence >= 0.70) {
           results.push({ ...boSignal, _strategy: 'BREAKOUT', _timeframe: tf });
         }
       }
@@ -115,7 +115,20 @@ export function runAllStrategies(
 
   // Sort by confidence descending — best signal first
   results.sort((a, b) => b.confidence - a.confidence);
-  return results;
+
+  // Deduplicate: keep only the best signal per ticker.
+  // Multiple strategies/timeframes can fire on the same ticker —
+  // without dedup, we'd open multiple positions on the same asset.
+  const seen = new Set<string>();
+  const deduped: StrategySignal[] = [];
+  for (const sig of results) {
+    const key = `${sig.ticker}:${sig.side ?? 'long'}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(sig);
+    }
+  }
+  return deduped;
 }
 
 function getUniqueTfs(): string[] {
