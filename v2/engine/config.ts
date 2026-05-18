@@ -49,6 +49,9 @@ export const V2_CONFIG = {
   MAX_RISK_PER_TRADE_PERCENT: 0.01, // 1% of equity max loss per trade. Caps position size so entry-to-stop = this amount. Prevents high-ATR assets (AKT 5% ATR → 10% stop) from risking 3-4× more than low-ATR assets.
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
 
+  // --- Re-entry Cooldown ---
+  REENTRY_COOLDOWN_MS: 8 * 60 * 60 * 1000,  // 8h (2 candles) — prevents churn on same ticker after exit
+
   // --- Risk ---
   MAX_DAILY_LOSS_PERCENT: 0.03,
   CIRCUIT_BREAKER_COOLDOWN_MS: 15 * 60 * 1000, // 15 minutes

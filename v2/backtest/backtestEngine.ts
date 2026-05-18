@@ -201,6 +201,7 @@ function simulateTicker(
     dailyPnl: 0,
     lastLossTime: 0,
   };
+  let lastExitTime = 0; // Re-entry cooldown tracking
 
   // Walk bar-by-bar from MIN_CANDLES to end
   for (let bar = V2_CONFIG.MIN_CANDLES; bar < candles.length; bar++) {
@@ -248,6 +249,7 @@ function simulateTicker(
         if (pnlNet < 0) state.lastLossTime = currentCandle.time;
 
         state.closedTrades.push(trade);
+        lastExitTime = currentCandle.time;
       } else {
         stillOpen.push(trade);
       }
@@ -257,6 +259,11 @@ function simulateTicker(
 
     // --- CHECK ENTRY ---
     if (state.openTrades.length >= config.maxOpenPositions) continue;
+
+    // Re-entry cooldown
+    if (lastExitTime > 0 && V2_CONFIG.REENTRY_COOLDOWN_MS > 0) {
+      if (currentCandle.time - lastExitTime < V2_CONFIG.REENTRY_COOLDOWN_MS) continue;
+    }
 
     // Circuit breaker cooldown
     if (state.lastLossTime > 0) {
