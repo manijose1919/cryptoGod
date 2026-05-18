@@ -17,7 +17,7 @@ import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
 import { checkMomentumExits } from '../pipeline/momentumExitManager.ts';
 import { insertTrade, closeTrade, getOpenTradesByStrategy } from '../attribution/attributionStore.ts';
 import { loadPortfolio } from './positionManager.ts';
-import { MOMENTUM_CONFIG, MOM_EXIT_CONFIG, getExchangeFees } from './config.ts';
+import { MOMENTUM_CONFIG, MOM_EXIT_CONFIG, V2_CONFIG, getExchangeFees } from './config.ts';
 import { randomUUID } from 'node:crypto';
 
 const STRATEGY = 'MOMENTUM';
@@ -103,30 +103,43 @@ async function runLoop(): Promise<void> {
       const signal = detectMomentumEntry(candles, ticker);
       if (!signal) continue;
 
-      const equity = portfolio.totalEquity;
-      let posSize = equity * MOMENTUM_CONFIG.POSITION_SIZE_PERCENT * signal.confidence;
-      if (posSize > equity * MOMENTUM_CONFIG.MAX_POSITION_PERCENT) {
-        posSize = equity * MOMENTUM_CONFIG.MAX_POSITION_PERCENT;
+      // Confidence gate (was missing — produced 0W/4L live before fix)
+      if (signal.confidence < MOMENTUM_CONFIG.MIN_CONFIDENCE) {
+        if (stats.loopCount % 10 === 0) {
+          console.log(`[MOM] ${ticker} rejected: conf=${signal.confidence.toFixed(2)} < ${MOMENTUM_CONFIG.MIN_CONFIDENCE}`);
+        }
+        continue;
       }
-      if (posSize > portfolio.availableCapital) posSize = portfolio.availableCapital;
-      if (posSize < 5) continue;
 
       const price = signal.signals.close_price as number;
       const atrPct = signal.signals.atr_percent as number;
       const atrDollar = price * atrPct / 100;
 
-      // Stop: prefer swing-low (computed in signal). Fall back to ATR-based
-      // if signal didn't expose it (defensive — shouldn't happen with v2 signal).
+      // Compute stop first — needed for risk-based position sizing
       const swingLow = signal.signals.mom_swing_low as number | undefined;
       let sl: number;
       if (swingLow != null && swingLow > 0 && swingLow < price) {
-        // Signal returns the bare swing-low; pull it ~0.2 ATR below for safety,
-        // matching the v2 backtest detector's `swingLow - atr * 0.2`.
         sl = Math.min(swingLow - atrDollar * 0.2, price - atrDollar * 1.5);
       } else {
         sl = price - atrDollar * MOM_EXIT_CONFIG.SL_ATR_MULT;
       }
-      if (sl >= price) continue; // sanity
+      if (sl >= price) continue;
+
+      // Position sizing with risk-based cap
+      const equity = portfolio.totalEquity;
+      let posSize = equity * MOMENTUM_CONFIG.POSITION_SIZE_PERCENT * signal.confidence;
+      // Risk cap: max loss per trade ≤ MAX_RISK_PER_TRADE_PERCENT of equity
+      const stopDistPercent = (price - sl) / price;
+      if (stopDistPercent > 0) {
+        const maxRiskUsd = equity * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT;
+        const riskCapSize = maxRiskUsd / stopDistPercent;
+        if (posSize > riskCapSize) posSize = riskCapSize;
+      }
+      if (posSize > equity * MOMENTUM_CONFIG.MAX_POSITION_PERCENT) {
+        posSize = equity * MOMENTUM_CONFIG.MAX_POSITION_PERCENT;
+      }
+      if (posSize > portfolio.availableCapital) posSize = portfolio.availableCapital;
+      if (posSize < 5) continue;
 
       // Take-profit: 3× ATR target (per MOM_EXIT.TP_ATR_MULT)
       const tp = price + atrDollar * MOM_EXIT_CONFIG.TP_ATR_MULT;
