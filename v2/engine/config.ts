@@ -124,6 +124,89 @@ export const V2_CONFIG = {
 } as const;
 
 // ============================================
+// Multi-Timeframe Strategy Configuration
+// ============================================
+
+// Which timeframes each strategy runs on
+export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
+  TREND:           ['1h', '4h'],
+  MOMENTUM:        ['1h', '4h'],
+  BREAKOUT:        ['15m', '1h'],
+  MEAN_REVERSION:  ['5m', '15m'],
+  SCALP:           ['1m', '5m'],
+};
+
+// Per-strategy exit parameters
+export interface StrategyExitConfig {
+  slAtrMult: number;
+  tpAtrMult: number;
+  trailActivatePercent: number;
+  trailGivebackPercent: number;
+  timeKillBars: number;      // bars to hold before time-kill
+  timeKillMinMove: number;
+  quickKillBars: number;     // bars before quick-kill tightens
+  quickKillMinGain: number;
+  quickKillSlMult: number;
+  useTrailing: boolean;
+}
+
+export const STRATEGY_EXIT_CONFIGS: Record<string, StrategyExitConfig> = {
+  TREND: {
+    slAtrMult: 2.0, tpAtrMult: 4.0,
+    trailActivatePercent: 0.025, trailGivebackPercent: 0.03,
+    timeKillBars: 2, timeKillMinMove: 0.007,
+    quickKillBars: 1, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
+    useTrailing: true,
+  },
+  MOMENTUM: {
+    slAtrMult: 2.0, tpAtrMult: 3.0,
+    trailActivatePercent: 0.025, trailGivebackPercent: 0.05,
+    timeKillBars: 4, timeKillMinMove: 0.005,
+    quickKillBars: 2, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
+    useTrailing: true,
+  },
+  BREAKOUT: {
+    slAtrMult: 1.5, tpAtrMult: 3.0,
+    trailActivatePercent: 0.02, trailGivebackPercent: 0.04,
+    timeKillBars: 8, timeKillMinMove: 0.005,
+    quickKillBars: 2, quickKillMinGain: 0.004, quickKillSlMult: 1.0,
+    useTrailing: true,
+  },
+  MEAN_REVERSION: {
+    slAtrMult: 2.0, tpAtrMult: 1.5,  // tight TP — MR targets mean reversion, not trend
+    trailActivatePercent: 0.01, trailGivebackPercent: 0.10,
+    timeKillBars: 8, timeKillMinMove: 0.003,
+    quickKillBars: 2, quickKillMinGain: 0.002, quickKillSlMult: 0.8,
+    useTrailing: false,  // MR exits at TP or SL, no trailing
+  },
+  SCALP: {
+    slAtrMult: 0.75, tpAtrMult: 1.0,
+    trailActivatePercent: 0.005, trailGivebackPercent: 0.15,
+    timeKillBars: 30, timeKillMinMove: 0.002,
+    quickKillBars: 10, quickKillMinGain: 0.001, quickKillSlMult: 0.5,
+    useTrailing: false,
+  },
+};
+
+// Per-strategy cooldown (scales with timeframe)
+export const STRATEGY_COOLDOWN_MS: Record<string, number> = {
+  TREND:          8 * 3600 * 1000,   // 8h
+  MOMENTUM:       8 * 3600 * 1000,   // 8h
+  BREAKOUT:       2 * 3600 * 1000,   // 2h
+  MEAN_REVERSION: 30 * 60 * 1000,    // 30min
+  SCALP:          10 * 60 * 1000,    // 10min
+};
+
+// Convert timeframe string to milliseconds
+export function timeframeToMs(tf: string): number {
+  const map: Record<string, number> = {
+    '1m': 60_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
+    '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000,
+  };
+  return map[tf] ?? 3_600_000;
+}
+
+// ============================================
 // MOMENTUM Strategy Config (v2 — rebuilt 2026-05-06)
 // ============================================
 // Replaces the old "1h MACD-spike" momentum that produced 0% WR.

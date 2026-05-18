@@ -14,7 +14,8 @@ import {
   PIPELINE_STAGE,
   DECISION,
 } from './types.ts';
-import { V2_CONFIG } from '../engine/config.ts';
+import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, timeframeToMs } from '../engine/config.ts';
+import type { StrategyExitConfig } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 import { updateTradeStop, markTrailingActivated, updateTradePeakPrice } from '../attribution/attributionStore.ts';
 
@@ -91,6 +92,13 @@ export async function checkExits(
     try {
     const currentPrice = await exchange.getLatestPrice(trade.ticker);
     const isShort = trade.side === 'short';
+
+    // Per-strategy exit config (falls back to TREND defaults)
+    const exitCfg: StrategyExitConfig = STRATEGY_EXIT_CONFIGS[trade.strategy ?? 'TREND'] ?? STRATEGY_EXIT_CONFIGS.TREND;
+    // Use strategy-specific params, falling back to V2_CONFIG for backward compat
+    const cfgTrailActivate = exitCfg.trailActivatePercent;
+    const cfgTrailGiveback = exitCfg.trailGivebackPercent;
+    const cfgUseTrailing = exitCfg.useTrailing;
 
     // Update peak price (highest for longs, lowest for shorts)
     updateTradePeakPrice(trade.id, currentPrice, trade.side ?? 'long');
@@ -217,7 +225,7 @@ export async function checkExits(
     // --- 3. Trailing Stop ---
     let trailingJustActivated = false;
 
-    if (pnlPercent >= V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
+    if (cfgUseTrailing && pnlPercent >= cfgTrailActivate) {
       // Activate trailing if not yet active
       if (!trade.trailingActivated) {
         mutators.setTrailingActivated(trade.id, trade);
@@ -226,7 +234,7 @@ export async function checkExits(
 
       // ATR-aware giveback: use trade's ATR% to scale trail width.
       // High volatility = wider trail (avoid noise stops), low vol = tighter trail (lock profit).
-      let givebackFraction = V2_CONFIG.TRAILING_GIVEBACK_PERCENT;
+      let givebackFraction = cfgTrailGiveback;
       if (trade.atrPercent) {
         if (trade.atrPercent > 2.0) givebackFraction *= 1.3;      // High vol: widen 30%
         else if (trade.atrPercent > 1.0) givebackFraction *= 1.1;  // Med vol: widen 10%
@@ -236,7 +244,7 @@ export async function checkExits(
       // Loose-early / tight-late trailing profile:
       // When profit is just above activation (1.0-1.5x threshold), widen trail
       // to let the trade breathe through initial pullbacks. As profit grows, tighten.
-      const profitVsActivation = pnlPercent / V2_CONFIG.TRAILING_ACTIVATE_PERCENT;
+      const profitVsActivation = pnlPercent / cfgTrailActivate;
       if (profitVsActivation < 1.5) {
         givebackFraction *= 1.5;
       } else if (profitVsActivation < 2.0) {

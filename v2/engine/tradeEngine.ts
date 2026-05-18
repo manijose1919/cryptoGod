@@ -4,7 +4,7 @@
 // ============================================
 
 import type { Candle, V2Trade } from '../pipeline/types.ts';
-import { V2_CONFIG, MOMENTUM_CONFIG, getExchangeFees } from './config.ts';
+import { V2_CONFIG, MOMENTUM_CONFIG, STRATEGY_TIMEFRAMES, getExchangeFees } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // Pipeline imports
@@ -15,6 +15,9 @@ import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
 import { evaluateRisk, getApproved } from '../pipeline/riskGate.ts';
 import { executeTrade } from '../pipeline/executor.ts';
 import { checkExits } from '../pipeline/exitManager.ts';
+import { fetchAllCandles, getRequiredTimeframes } from './candleManager.ts';
+import { runAllStrategies } from './strategyRunner.ts';
+import type { StrategySignal } from './strategyRunner.ts';
 
 // Attribution imports
 import {
@@ -298,123 +301,60 @@ async function runLoop(): Promise<void> {
 
   try {
     // ==============================
-    // Stage 0: Fetch candles
+    // Stage 0: Fetch candles (multi-timeframe)
     // ==============================
-    const tickerCandles = new Map<string, Candle[]>();
+    const requiredTfs = getRequiredTimeframes(STRATEGY_TIMEFRAMES);
+    const allCandles = await fetchAllCandles(V2_CONFIG.SCAN_TICKERS as unknown as string[], requiredTfs);
 
-    // Fetch candles in parallel for all tickers (much faster than sequential)
-    const fetchResults = await Promise.allSettled(
-      V2_CONFIG.SCAN_TICKERS.map(async (ticker) => {
-        const candles = await fetchCandles(ticker);
-        return { ticker, candles };
-      }),
-    );
-
-    for (const result of fetchResults) {
-      if (result.status === 'fulfilled' && result.value.candles) {
-        tickerCandles.set(result.value.ticker, result.value.candles);
-      }
-    }
-
-    if (tickerCandles.size === 0) {
+    if (allCandles.size === 0) {
       console.log('[V2] No candle data available, skipping loop');
       stats.lastLoopTime = Date.now() - loopStart;
-      return;
-    }
-
-    // Track candle counts for diagnostics
-    stats.candleCounts = {};
-    for (const [ticker, candles] of tickerCandles) {
-      stats.candleCounts[ticker] = candles.length;
-    }
-
-    // ==============================
-    // Stage 0b: Fetch 4h candles for MTF regime (parallel)
-    // ==============================
-    if (V2_CONFIG.MTF_ENABLED) {
-      await Promise.allSettled(
-        V2_CONFIG.SCAN_TICKERS.map(async (ticker) => {
-          const candles4h = await fetch4hCandles(ticker);
-          if (candles4h && candles4h.length >= 50) {
-            const regime4h = detectRegime(candles4h);
-            setHTFRegime(ticker, regime4h.regime);
-            stats.htfRegimes[ticker] = regime4h.regime;
-          }
-        }),
-      );
-      // Log HTF regimes every 10 loops
-      if (stats.loopCount % 10 === 1) {
-        const htfEntries = Object.entries(stats.htfRegimes);
-        if (htfEntries.length > 0) {
-          console.log(`[V2] HTF regimes: ${htfEntries.map(([t, r]) => `${t}=${r}`).join(', ')}`);
-        }
-      }
-    }
-
-    // ==============================
-    // Stage 1: Market Scan
-    // ==============================
-    const scanResults = scanMarket(tickerCandles);
-    const passedScan = getPassedTickers(scanResults);
-    const scanRejections = scanResults.length - passedScan.length;
-    stats.rejectedByScan += scanRejections;
-    stats.lastScanReasons = scanResults.map(r => ({ ticker: r.ticker, reason: r.reason || (r.passed ? 'PASS' : 'UNKNOWN') }));
-
-    if (passedScan.length === 0) {
-      // Log rejection reasons every 10 loops for diagnostics
-      if (stats.loopCount % 10 === 1) {
-        for (const r of scanResults) {
-          console.log(`[V2] REJECT ${r.ticker}: ${r.reason}`);
-        }
-      }
-      console.log(`[V2] Loop #${stats.loopCount}: scan rejected all ${scanResults.length} tickers`);
-      stats.lastLoopTime = Date.now() - loopStart;
-      // Still check exits
       await checkOpenExits();
       return;
     }
 
-    // ==============================
-    // Stage 2: Signal Generation (TREND + MOMENTUM)
-    // ==============================
-    const signalResults = generateSignals(passedScan, tickerCandles);
-    const passedSignals = getPassedSignals(signalResults);
-    const signalRejections = signalResults.length - passedSignals.length;
-    stats.rejectedBySignal += signalRejections;
+    // Track candle counts for diagnostics (use primary TF)
+    stats.candleCounts = {};
+    for (const [ticker, tfMap] of allCandles) {
+      const primaryCandles = tfMap.get(V2_CONFIG.CANDLE_INTERVAL) ?? tfMap.values().next().value;
+      if (primaryCandles) stats.candleCounts[ticker] = primaryCandles.length;
+    }
 
-    // Stage 2b: Momentum signal detection on all scanned tickers
-    // Momentum uses different entry conditions (z-score spike, higher-highs)
-    // and can fire on tickers that failed the TREND composite score threshold.
-    if (MOMENTUM_CONFIG.ENABLED) {
-      for (const scan of passedScan) {
-        // Don't double-signal a ticker already approved by TREND
-        if (passedSignals.some(s => s.ticker === scan.ticker)) continue;
-        const candles = tickerCandles.get(scan.ticker);
-        if (!candles) continue;
-        const momSignal = detectMomentumEntry(candles, scan.ticker);
-        if (momSignal && momSignal.confidence >= MOMENTUM_CONFIG.MIN_CONFIDENCE) {
-          // Tag as MOMENTUM strategy — executor will set trade.strategy accordingly
-          momSignal.side = 'long';
-          (momSignal as any)._strategy = 'MOMENTUM';
-          passedSignals.push(momSignal);
-          if (stats.loopCount % 5 === 1) {
-            console.log(`[V2] MOM signal: ${scan.ticker} z=${(momSignal.signals.mom_z_score as number)?.toFixed(1)} conf=${momSignal.confidence.toFixed(2)}`);
-          }
-        }
+    // Build primary-TF tickerCandles for scan reasons (backward compat with status API)
+    const tickerCandles = new Map<string, Candle[]>();
+    for (const [ticker, tfMap] of allCandles) {
+      const candles = tfMap.get(V2_CONFIG.CANDLE_INTERVAL);
+      if (candles) tickerCandles.set(ticker, candles);
+    }
+
+    // Market scan on primary timeframe for diagnostics/logging
+    const scanResults = scanMarket(tickerCandles);
+    stats.lastScanReasons = scanResults.map(r => ({ ticker: r.ticker, reason: r.reason || (r.passed ? 'PASS' : 'UNKNOWN') }));
+    if (stats.loopCount % 10 === 1) {
+      for (const r of scanResults) {
+        if (!r.passed) console.log(`[V2] REJECT ${r.ticker}: ${r.reason}`);
       }
     }
+
+    // ==============================
+    // Stage 1+2: Multi-Strategy Signal Generation
+    // ==============================
+    // Runs TREND, MOMENTUM, BREAKOUT, MEAN_REVERSION, SCALP on their optimal TFs
+    const allSignals = runAllStrategies(allCandles, V2_CONFIG.SCAN_TICKERS as unknown as string[]);
+    const passedSignals = allSignals.filter(s => s.passed);
 
     if (passedSignals.length === 0) {
       if (stats.loopCount % 5 === 1) {
-        const top3 = signalResults.slice(0, 3);
-        const scoreStr = top3.map(s => `${s.ticker}=${s.compositeScore.toFixed(1)}`).join(', ');
-        console.log(`[V2] Loop #${stats.loopCount}: signal rejected all ${signalResults.length} candidates, top: [${scoreStr}] (min ${V2_CONFIG.MIN_COMPOSITE_SCORE})`);
-      } else {
-        console.log(`[V2] Loop #${stats.loopCount}: signal rejected all ${signalResults.length} candidates`);
+        console.log(`[V2] Loop #${stats.loopCount}: no signals from any strategy across ${requiredTfs.length} timeframes`);
       }
       stats.lastLoopTime = Date.now() - loopStart;
       await checkOpenExits();
       return;
+    }
+
+    if (stats.loopCount % 5 === 1) {
+      const sigSummary = passedSignals.map(s => `${s.ticker}/${(s as StrategySignal)._strategy}/${(s as StrategySignal)._timeframe}=${s.confidence.toFixed(2)}`).join(', ');
+      console.log(`[V2] Loop #${stats.loopCount}: ${passedSignals.length} signals: [${sigSummary}]`);
     }
 
     // ==============================
@@ -531,40 +471,7 @@ async function runLoop(): Promise<void> {
       console.log(`[V2] Loop #${stats.loopCount}: risk rejected all ${riskResults.length} signals (${passedScan.length} scanned, ${passedSignals.length} signaled)`);
     }
 
-    // ==============================
-    // Stage 5b: Short pipeline (when enabled)
-    // ==============================
-    if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live') {
-      const shortScanResults = scanMarket(tickerCandles, 'short');
-      const passedShortScan = getPassedTickers(shortScanResults);
-      if (passedShortScan.length > 0) {
-        const shortSignals = generateShortSignals(passedShortScan, tickerCandles);
-        const passedShortSignals = getPassedSignals(shortSignals);
-        if (passedShortSignals.length > 0) {
-          const shortPortfolio = loadPortfolio(budget, 'TREND');
-          const shortCbState = getCircuitBreakerState(shortPortfolio, 'TREND');
-          const shortRiskResults = evaluateRisk(passedShortSignals, shortPortfolio, shortCbState, exchange?.getName() ?? 'kraken', tickerCandles);
-          const shortApproved = getApproved(shortRiskResults);
-          if (shortApproved.length > 0) {
-            const bestShort = shortApproved[0];
-            const bestShortSignal = passedShortSignals.find(s => s.ticker === bestShort.ticker);
-            if (bestShortSignal) {
-              console.log(`[V2] Loop #${stats.loopCount}: executing SHORT ${bestShortSignal.ticker} score=${bestShortSignal.compositeScore.toFixed(1)}`);
-              const { trade } = await executeTrade(bestShortSignal, bestShort, exchange, []);
-              if (trade) {
-                try {
-                  insertTrade(trade);
-                  console.log(`[V2] SHORT opened: ${trade.ticker} @ $${trade.entryPrice.toFixed(2)}`);
-                  await sendEntryAlert(trade);
-                } catch (e) {
-                  console.error(`[V2] insertTrade (short) failed: ${(e as Error).message}`);
-                }
-              }
-            }
-          }
-        }
-      }
-    }
+    // Shorts are now handled by strategyRunner (Stage 1+2) — no separate pipeline needed
 
     // ==============================
     // Stage 6: Check exits
