@@ -37,6 +37,34 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-18 — Multi-timeframe multi-strategy architecture — vps-claude
+
+**Commits:** `2b69581`
+**Files changed:** `v2/engine/candleManager.ts` (new), `v2/engine/strategyRunner.ts` (new), `v2/pipeline/scalpSignal.ts` (new), `v2/engine/config.ts`, `v2/engine/tradeEngine.ts`, `v2/pipeline/exitManager.ts`, `v2/index.ts`
+**Stats baseline reset:** no
+
+**What changed:**
+Major architectural rebuild. The bot now runs 5 strategies across 6 timeframes:
+- **TREND** (1h, 4h): Composite score with maturity penalty
+- **MOMENTUM** (1h, 4h): Z-score spike + higher-highs
+- **BREAKOUT** (15m, 1h): N-bar high breakout + volume confirmation
+- **MEAN_REVERSION** (5m, 15m): RSI<30 + BB oversold
+- **SCALP** (1m, 5m): RSI pullback for quick entries
+
+New infrastructure:
+- `candleManager.ts`: Staggered multi-TF candle fetching (fast TFs every 60s, slow every 15min)
+- `strategyRunner.ts`: Runs all strategies on optimal TFs, collects + ranks signals
+- Per-strategy exit configs (SL/TP/trailing/time-kill scaled to each strategy)
+- Shorts integrated into strategy runner (no separate pipeline)
+
+**What to monitor / watch for:**
+- `[V2] Loop #N: X signals: [...]` — shows which strategies/TFs are firing
+- More diverse trade strategies in DB (check `strategy` column)
+- API rate limits: stagger should keep Kraken calls manageable
+- If a strategy produces bad trades, disable by removing from STRATEGY_TIMEFRAMES
+
+---
+
 ## 2026-05-18 — MOMENTUM rebuilt + shorts enabled — vps-claude
 
 **Commits:** `36fc293`
