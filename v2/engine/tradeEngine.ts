@@ -4,13 +4,14 @@
 // ============================================
 
 import type { Candle, V2Trade } from '../pipeline/types.ts';
-import { V2_CONFIG, getExchangeFees } from './config.ts';
+import { V2_CONFIG, MOMENTUM_CONFIG, getExchangeFees } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // Pipeline imports
 import { scanMarket, getPassedTickers, setHTFRegime } from '../pipeline/marketScanner.ts';
 import { detectRegime } from '../indicators/indicators.ts';
 import { generateSignals, generateShortSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
+import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
 import { evaluateRisk, getApproved } from '../pipeline/riskGate.ts';
 import { executeTrade } from '../pipeline/executor.ts';
 import { checkExits } from '../pipeline/exitManager.ts';
@@ -374,15 +375,36 @@ async function runLoop(): Promise<void> {
     }
 
     // ==============================
-    // Stage 2: Signal Generation
+    // Stage 2: Signal Generation (TREND + MOMENTUM)
     // ==============================
     const signalResults = generateSignals(passedScan, tickerCandles);
     const passedSignals = getPassedSignals(signalResults);
     const signalRejections = signalResults.length - passedSignals.length;
     stats.rejectedBySignal += signalRejections;
 
+    // Stage 2b: Momentum signal detection on all scanned tickers
+    // Momentum uses different entry conditions (z-score spike, higher-highs)
+    // and can fire on tickers that failed the TREND composite score threshold.
+    if (MOMENTUM_CONFIG.ENABLED) {
+      for (const scan of passedScan) {
+        // Don't double-signal a ticker already approved by TREND
+        if (passedSignals.some(s => s.ticker === scan.ticker)) continue;
+        const candles = tickerCandles.get(scan.ticker);
+        if (!candles) continue;
+        const momSignal = detectMomentumEntry(candles, scan.ticker);
+        if (momSignal && momSignal.confidence >= MOMENTUM_CONFIG.MIN_CONFIDENCE) {
+          // Tag as MOMENTUM strategy — executor will set trade.strategy accordingly
+          momSignal.side = 'long';
+          (momSignal as any)._strategy = 'MOMENTUM';
+          passedSignals.push(momSignal);
+          if (stats.loopCount % 5 === 1) {
+            console.log(`[V2] MOM signal: ${scan.ticker} z=${(momSignal.signals.mom_z_score as number)?.toFixed(1)} conf=${momSignal.confidence.toFixed(2)}`);
+          }
+        }
+      }
+    }
+
     if (passedSignals.length === 0) {
-      // Log top 3 scores every 5 loops for diagnostics
       if (stats.loopCount % 5 === 1) {
         const top3 = signalResults.slice(0, 3);
         const scoreStr = top3.map(s => `${s.ticker}=${s.compositeScore.toFixed(1)}`).join(', ');
@@ -566,7 +588,8 @@ async function runLoop(): Promise<void> {
 async function checkOpenExits(): Promise<void> {
   if (!exchange) return;
 
-  const openTrades = getOpenTradesByStrategy('TREND');
+  // Get ALL open trades (TREND + MOMENTUM + shorts) — one exit manager handles all
+  const openTrades = getOpenTrades();
   if (openTrades.length === 0) return;
 
   try {

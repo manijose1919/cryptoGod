@@ -7,9 +7,10 @@
 
 import type { Candle, SignalSnapshot, Regime } from '../pipeline/types.ts';
 import { EXIT_REASON } from '../pipeline/types.ts';
-import { V2_CONFIG } from '../engine/config.ts';
+import { V2_CONFIG, MOMENTUM_CONFIG } from '../engine/config.ts';
 import { computeSignals } from '../indicators/indicators.ts';
 import { evaluateSignals } from '../pipeline/signalGenerator.ts';
+import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
 import { checkTimeGate } from '../pipeline/timeGate.ts';
 import { scanMarket } from '../pipeline/marketScanner.ts';
 import { SIGNAL_ACTIVE_THRESHOLDS } from '../attribution/postTradeAnalyzer.ts';
@@ -266,97 +267,98 @@ function simulateTicker(
     const tickerCandles = new Map([[ticker, window]]);
     const scanResults = scanMarket(tickerCandles);
     const passed = scanResults.find((s) => s.ticker === ticker && s.passed);
-    if (!passed) continue;
 
-    // Compute signals
-    const { signals, regime } = computeSignals(window);
+    // --- TREND entry attempt ---
+    let trendEntry = false;
+    if (passed) {
+      const { signals, regime } = computeSignals(window);
+      const evals = evaluateSignals(signals);
+      const totalWeight = evals.reduce((sum, e) => sum + e.weight, 0);
+      let compositeScore = totalWeight > 0
+        ? evals.reduce((sum, e) => sum + e.score * e.weight, 0) / totalWeight
+        : 0;
 
-    // Evaluate signals (uses base weights — no scorecard data in backtest)
-    const evals = evaluateSignals(signals);
+      if (regime.regime === 'STRONG_UP') compositeScore += 8;
+      else if (regime.regime === 'UP') compositeScore += 5;
+      compositeScore = Math.min(compositeScore, 100);
 
-    // Compute composite score (replicating signalGenerator logic)
-    const totalWeight = evals.reduce((sum, e) => sum + e.weight, 0);
-    let compositeScore = totalWeight > 0
-      ? evals.reduce((sum, e) => sum + e.score * e.weight, 0) / totalWeight
-      : 0;
+      const pctB = signals.bb_percent_b as number;
+      if (pctB > 0.80) compositeScore -= Math.round(6 + (pctB - 0.80) * 120);
 
-    // Regime bonus
-    if (regime.regime === 'STRONG_UP') compositeScore += 8;
-    else if (regime.regime === 'UP') compositeScore += 5;
+      if (regime.trendMaturity > V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD) {
+        const excess = regime.trendMaturity - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+        const maxExcess = 100 - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
+        compositeScore -= Math.round((excess / maxExcess) * V2_CONFIG.TREND_MATURITY_MAX_PENALTY);
+      }
 
-    compositeScore = Math.min(compositeScore, 100);
+      const tg = checkTimeGate(window[window.length - 1]?.time);
+      const confidence = compositeScore / 100;
+      const atrPercent = signals.atr_percent as number;
+      const tpPercent = atrPercent * V2_CONFIG.TAKE_PROFIT_ATR_MULT / 100;
+      const expectedReturn = tpPercent - config.feeRoundTrip;
 
-    // BB overbought penalty
-    const pctB = signals.bb_percent_b as number;
-    if (pctB > 0.80) {
-      compositeScore -= Math.round(6 + (pctB - 0.80) * 120);
+      if (tg.allow
+        && compositeScore >= V2_CONFIG.MIN_COMPOSITE_SCORE - tg.scoreBoost
+        && expectedReturn >= V2_CONFIG.MIN_EXPECTED_RETURN
+      ) {
+        const maxPositionUsd = state.cash * V2_CONFIG.BASE_POSITION_PERCENT;
+        const positionSizeUsd = maxPositionUsd * confidence;
+        if (positionSizeUsd >= 10 && positionSizeUsd <= state.cash) {
+          const entryPrice = currentCandle.close;
+          const atrValue = signals.atr as number;
+          const stopLoss = entryPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
+          const takeProfit = entryPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+          const quantity = entryPrice > 0 ? positionSizeUsd / entryPrice : 0;
+
+          state.cash -= positionSizeUsd;
+          state.openTrades.push({
+            id: nextTradeId(ticker),
+            ticker, side: 'long', entryBar: bar, entryPrice,
+            entryTime: currentCandle.time, entrySignals: signals,
+            entryRegime: regime.regime, entryConfidence: confidence, compositeScore,
+            exitBar: null, exitPrice: null, exitTime: null, exitReason: null,
+            quantity, positionSizeUsd, stopLoss, takeProfit,
+            currentStop: stopLoss, trailingActivated: false, peakPrice: entryPrice,
+            pnlGross: null, pnlNet: null, feesPaid: 0,
+            holdBars: 0, holdDurationMs: null, atrPercent,
+          });
+          trendEntry = true;
+        }
+      }
     }
 
-    // Trend maturity penalty
-    if (regime.trendMaturity > V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD) {
-      const excess = regime.trendMaturity - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
-      const maxExcess = 100 - V2_CONFIG.TREND_MATURITY_PENALTY_THRESHOLD;
-      compositeScore -= Math.round((excess / maxExcess) * V2_CONFIG.TREND_MATURITY_MAX_PENALTY);
+    // --- MOMENTUM fallback entry ---
+    if (!trendEntry && MOMENTUM_CONFIG.ENABLED) {
+      const momSignal = detectMomentumEntry(window, ticker);
+      if (momSignal && momSignal.confidence >= MOMENTUM_CONFIG.MIN_CONFIDENCE) {
+        const momPrice = currentCandle.close;
+        const momAtr = momSignal.signals.atr as number;
+        const momAtrPct = momSignal.signals.atr_percent as number;
+        const momSwingLow = momSignal.signals.mom_swing_low as number | undefined;
+        let momSl = momPrice - momAtr * 2.0;
+        if (momSwingLow != null && momSwingLow > 0 && momSwingLow < momPrice) {
+          momSl = Math.min(momSwingLow - momAtr * 0.2, momPrice - momAtr * 1.5);
+        }
+        const momTp = momPrice + momAtr * 3.0;
+        let momPosSize = state.cash * V2_CONFIG.BASE_POSITION_PERCENT * momSignal.confidence;
+        if (momPosSize >= 10 && momPosSize <= state.cash) {
+          const momQty = momPrice > 0 ? momPosSize / momPrice : 0;
+          state.cash -= momPosSize;
+          state.openTrades.push({
+            id: nextTradeId(ticker) + 'M',
+            ticker, side: 'long', entryBar: bar, entryPrice: momPrice,
+            entryTime: currentCandle.time, entrySignals: momSignal.signals,
+            entryRegime: momSignal.regime, entryConfidence: momSignal.confidence,
+            compositeScore: momSignal.compositeScore,
+            exitBar: null, exitPrice: null, exitTime: null, exitReason: null,
+            quantity: momQty, positionSizeUsd: momPosSize, stopLoss: momSl, takeProfit: momTp,
+            currentStop: momSl, trailingActivated: false, peakPrice: momPrice,
+            pnlGross: null, pnlNet: null, feesPaid: 0,
+            holdBars: 0, holdDurationMs: null, atrPercent: momAtrPct,
+          });
+        }
+      }
     }
-
-    // TimeGate overlay — block entries during data-discovered worst hours/days,
-    // boost during best hours by lowering the score threshold.
-    const tg = checkTimeGate(window[window.length - 1]?.time);
-    if (!tg.allow) continue;
-    if (compositeScore < V2_CONFIG.MIN_COMPOSITE_SCORE - tg.scoreBoost) continue;
-
-    const confidence = compositeScore / 100;
-
-    // Expected return check
-    const atrPercent = signals.atr_percent as number;
-    const tpPercent = atrPercent * V2_CONFIG.TAKE_PROFIT_ATR_MULT / 100;
-    const expectedReturn = tpPercent - config.feeRoundTrip;
-    if (expectedReturn < V2_CONFIG.MIN_EXPECTED_RETURN) continue;
-
-    // Position sizing
-    const maxPositionUsd = state.cash * V2_CONFIG.BASE_POSITION_PERCENT;
-    const positionSizeUsd = maxPositionUsd * confidence;
-    if (positionSizeUsd < 10 || positionSizeUsd > state.cash) continue;
-
-    // Entry at bar close price
-    const entryPrice = currentCandle.close;
-    const atrValue = signals.atr as number;
-    const stopLoss = entryPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
-    const takeProfit = entryPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
-    const quantity = entryPrice > 0 ? positionSizeUsd / entryPrice : 0;
-
-    const trade: BacktestTrade = {
-      id: nextTradeId(ticker),
-      ticker,
-      side: 'long' as const,
-      entryBar: bar,
-      entryPrice,
-      entryTime: currentCandle.time,
-      entrySignals: signals,
-      entryRegime: regime.regime,
-      entryConfidence: confidence,
-      compositeScore,
-      exitBar: null,
-      exitPrice: null,
-      exitTime: null,
-      exitReason: null,
-      quantity,
-      positionSizeUsd,
-      stopLoss,
-      takeProfit,
-      currentStop: stopLoss,
-      trailingActivated: false,
-      peakPrice: entryPrice,
-      pnlGross: null,
-      pnlNet: null,
-      feesPaid: 0,
-      holdBars: 0,
-      holdDurationMs: null,
-      atrPercent,
-    };
-
-    state.cash -= positionSizeUsd;
-    state.openTrades.push(trade);
   }
 
   // Force-close any remaining open trades at last bar close

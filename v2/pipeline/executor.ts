@@ -138,7 +138,7 @@ export async function executeTrade(
       atrPercent: signal.signals.atr_percent,
       peakPrice: price,
       stopOrderId: null, // C2: paper mode never places a native SL
-      strategy: 'TREND',  // M23: set explicitly so attribution doesn't rely on the ?? 'TREND' default
+      strategy: (signal as any)._strategy ?? 'TREND',
       decisionLog: [...previousDecisions, decision],
       createdAt: Date.now(),
     };
