@@ -37,6 +37,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-18 — 6-feature enhancement sweep — vps-claude
+
+**Commits:** `d7c4bd1`, `83ec8ed`, `de864c3`, `046d9f2`, `b556f68`, `88cf359`
+**Files changed:** 11 files across v2/pipeline/, v2/engine/, v2/indicators/, v2/attribution/, v2/backtest/
+**Stats baseline reset:** no (features disabled by default, paper-test first)
+
+**What changed:**
+1. **Re-entry cooldown** (d7c4bd1): 8h cooldown per ticker after exit. Backtest: PF 1.10→1.13, trades 356→301, DD -$135→-$118.
+2. **Correlation check** (83ec8ed): Gate 4.5 rejects entries when avg Pearson corr > 0.70 with open positions. Portfolio-level guard.
+3. **Trailing giveback** (de864c3): Loose-early/tight-late profile — 1.5x giveback when profit near activation, tightens as profit grows.
+4. **Trend maturity** (046d9f2): 0-100 score on RegimeResult (consecutive bars + RSI extremeness + EMA distance). Penalizes exhausted trends by up to 15 points. Avg win +$6.73→+$7.14.
+5. **Short selling** (b556f68): Full pipeline support — scanner, signals, riskGate, executor, exitManager, backtest. SHORTS_ENABLED=false by default. Paper mode only guard.
+6. **MOMENTUM fix** (88cf359): Added MIN_CONFIDENCE=0.70 gate + risk-based sizing cap. ENABLED=false pending backtest.
+
+**What to monitor / watch for:**
+- Re-entry cooldown: `[V2] RISK REJECT ... Re-entry cooldown` in logs
+- Correlation: `[V2] RISK REJECT ... Correlated: avg rho=X.XX` when 2+ positions open
+- Trend maturity: `maturity=XX(-Y)` in signal PASS/REJECT messages
+- Short selling: disabled (SHORTS_ENABLED=false). Enable with config change + restart after backtest.
+- MOMENTUM: disabled (ENABLED=false). Enable after backtest validates PF>1.
+
+---
+
 ## 2026-05-17 — Add SOL, HYPE, SUI, LINK to SCAN_TICKERS — vps-claude
 
 **Commits:** (see below)
