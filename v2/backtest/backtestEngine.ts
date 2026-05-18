@@ -82,7 +82,7 @@ function checkExitOnBar(
     ? (trade.entryPrice - bar.low) / trade.entryPrice
     : (bar.high - trade.entryPrice) / trade.entryPrice;
   if (bestPnl >= 0.015) {
-    const breakEvenStop = isShort ? trade.entryPrice * 0.999 : trade.entryPrice * 1.001;
+    const breakEvenStop = isShort ? trade.entryPrice * 0.993 : trade.entryPrice * 1.007;
     const beShouldUpdate = isShort ? breakEvenStop < currentStop : breakEvenStop > currentStop;
     if (beShouldUpdate) currentStop = breakEvenStop;
   }
@@ -94,9 +94,13 @@ function checkExitOnBar(
     : (trade.peakPrice - trade.entryPrice) / trade.entryPrice;
 
   if (holdBars >= quickKillBars && peakPnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN && trade.atrPercent > 0) {
+    // ATR-scaled quick-kill (matches live exitManager)
+    const qkMult = trade.atrPercent > 1.5 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.5
+                 : trade.atrPercent > 1.0 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.75
+                 : V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
     const tighterStop = isShort
-      ? trade.entryPrice + (trade.entryPrice * trade.atrPercent / 100) * V2_CONFIG.QUICK_KILL_SL_ATR_MULT
-      : trade.entryPrice - (trade.entryPrice * trade.atrPercent / 100) * V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
+      ? trade.entryPrice + (trade.entryPrice * trade.atrPercent / 100) * qkMult
+      : trade.entryPrice - (trade.entryPrice * trade.atrPercent / 100) * qkMult;
     const qkShouldUpdate = isShort ? tighterStop < currentStop : tighterStop > currentStop;
     if (qkShouldUpdate) currentStop = tighterStop;
   }
@@ -299,15 +303,24 @@ function simulateTicker(
 
       if (tg.allow
         && compositeScore >= V2_CONFIG.MIN_COMPOSITE_SCORE - tg.scoreBoost
+        && confidence >= V2_CONFIG.MIN_CONFIDENCE
         && expectedReturn >= V2_CONFIG.MIN_EXPECTED_RETURN
       ) {
+        const entryPrice = currentCandle.close;
+        const atrValue = signals.atr as number;
+        const stopLoss = entryPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
+        const takeProfit = entryPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+
+        // Position sizing with risk-based cap (matches live riskGate)
         const maxPositionUsd = state.cash * V2_CONFIG.BASE_POSITION_PERCENT;
-        const positionSizeUsd = maxPositionUsd * confidence;
+        let positionSizeUsd = maxPositionUsd * confidence;
+        const stopDistPct = Math.abs(entryPrice - stopLoss) / entryPrice;
+        if (stopDistPct > 0 && V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT > 0) {
+          const maxRiskUsd = config.budgetPerTicker * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT;
+          const riskCapSize = maxRiskUsd / stopDistPct;
+          if (positionSizeUsd > riskCapSize) positionSizeUsd = riskCapSize;
+        }
         if (positionSizeUsd >= 10 && positionSizeUsd <= state.cash) {
-          const entryPrice = currentCandle.close;
-          const atrValue = signals.atr as number;
-          const stopLoss = entryPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
-          const takeProfit = entryPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
           const quantity = entryPrice > 0 ? positionSizeUsd / entryPrice : 0;
 
           state.cash -= positionSizeUsd;
