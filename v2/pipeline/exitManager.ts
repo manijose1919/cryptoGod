@@ -169,18 +169,18 @@ export async function checkExits(
     // "win small." Confirmed casualty: AKTUSD #2 on 2026-05-12 lost $1.88
     // hitting the old BE stop after only 12 min held.
     //
-    // Acts as a floor — capital preservation for trades that haven't yet
-    // reached the trailing activation threshold. Below trailing, this is
-    // the only protection; above trailing, it's harmless because trailing
-    // computes a tighter (higher) stop and the `> trade.currentStop` guard
-    // means stops only ever tighten. Decoupled from TRAILING_ACTIVATE_PERCENT
-    // so config tweaks to trailing don't accidentally squeeze the BE window.
-    const rawPnlPercent = pnlPercent; // pnlPercent is already raw (no fee adjustment)
-    if (rawPnlPercent >= 0.008) {
-      // For longs: stop above entry. For shorts: stop below entry.
+    // Break-even stop — ATR-aware, tied to trailing activation.
+    // Trigger: 60% of trailing activation (gives the trade room to develop).
+    // Offset: entry ± 0.5× ATR (enough cushion for noise, above fees).
+    // Old fixed +0.8%/+0.7% was too tight on high-vol assets — created
+    // masses of +0.1% "wins" that exited before trailing could activate.
+    const beTrigger = cfgTrailActivate * 0.6;
+    const atrForBE = (trade.atrPercent ?? 1.0) / 100;
+    const beOffset = atrForBE * 0.5; // stop 0.5× ATR from entry (covers fees + noise)
+    if (pnlPercent >= beTrigger) {
       const breakEvenStop = isShort
-        ? trade.entryPrice * 0.993
-        : trade.entryPrice * 1.007;
+        ? trade.entryPrice * (1 - beOffset)
+        : trade.entryPrice * (1 + beOffset);
       const beShouldUpdate = isShort
         ? breakEvenStop < trade.currentStop
         : breakEvenStop > trade.currentStop;

@@ -81,8 +81,14 @@ function checkExitOnBar(
   const bestPnl = isShort
     ? (trade.entryPrice - bar.low) / trade.entryPrice
     : (bar.high - trade.entryPrice) / trade.entryPrice;
-  if (bestPnl >= 0.015) {
-    const breakEvenStop = isShort ? trade.entryPrice * 0.993 : trade.entryPrice * 1.007;
+  // Break-even stop — ATR-aware, tied to trailing activation (matches live exitManager)
+  const beTrigger = V2_CONFIG.TRAILING_ACTIVATE_PERCENT * 0.6;
+  const atrForBE = (trade.atrPercent || 1.0) / 100;
+  const beOffset = atrForBE * 0.5;
+  if (bestPnl >= beTrigger) {
+    const breakEvenStop = isShort
+      ? trade.entryPrice * (1 - beOffset)
+      : trade.entryPrice * (1 + beOffset);
     const beShouldUpdate = isShort ? breakEvenStop < currentStop : breakEvenStop > currentStop;
     if (beShouldUpdate) currentStop = breakEvenStop;
   }

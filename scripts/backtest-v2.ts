@@ -28,6 +28,7 @@ function parseArgs(): {
   tickers: string[];
   seed: boolean;
   json: boolean;
+  endDate: string | null;
 } {
   const args = process.argv.slice(2);
   const parsed = {
@@ -37,6 +38,7 @@ function parseArgs(): {
     tickers: [...V2_CONFIG.SCAN_TICKERS],
     seed: false,
     json: false,
+    endDate: null as string | null,
   };
 
   for (const arg of args) {
@@ -52,6 +54,8 @@ function parseArgs(): {
         const upper = t.trim().toUpperCase();
         return upper.endsWith('USD') ? upper : `${upper}USD`;
       });
+    } else if (arg.startsWith('--end=')) {
+      parsed.endDate = arg.split('=')[1];
     } else if (arg === '--seed') {
       parsed.seed = true;
     } else if (arg === '--json') {
@@ -102,7 +106,7 @@ async function main(): Promise<void> {
   initializeDatabase();
   initV2Tables();
 
-  const endDate = new Date();
+  const endDate = args.endDate ? new Date(args.endDate + 'T00:00:00Z') : new Date();
   const startDate = new Date(endDate.getTime() - args.days * 24 * 60 * 60 * 1000);
   const intervalMinutes = INTERVAL_MINUTES[args.interval] || 15;
 
