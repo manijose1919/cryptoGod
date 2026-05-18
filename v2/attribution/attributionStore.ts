@@ -386,6 +386,17 @@ export function getClosedTradesByStrategy(strategy: string, limit: number = 100)
   return rows.map(rowToTrade);
 }
 
+let _recentClosedByTickerStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
+export function getRecentClosedByTicker(ticker: string, strategy: string, sinceMs: number): V2Trade[] {
+  if (!_recentClosedByTickerStmt) {
+    _recentClosedByTickerStmt = getDb().prepare(
+      `SELECT * FROM v2_trades WHERE ticker = @ticker AND strategy = @strategy AND status = 'closed' AND exit_time > @sinceMs ORDER BY exit_time DESC LIMIT 5`
+    );
+  }
+  const rows = _recentClosedByTickerStmt.all({ ticker, strategy, sinceMs }) as Record<string, unknown>[];
+  return rows.map(rowToTrade);
+}
+
 export function getTradeById(tradeId: string): V2Trade | null {
   if (!_byIdStmt) {
     _byIdStmt = getDb().prepare(`SELECT * FROM v2_trades WHERE id = @tradeId`);

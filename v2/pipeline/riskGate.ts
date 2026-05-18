@@ -6,6 +6,7 @@
 import type { SignalResult, RiskResult, V2PortfolioState } from './types.ts';
 import { REGIME } from './types.ts';
 import { V2_CONFIG, getExchangeFees } from '../engine/config.ts';
+import { getRecentClosedByTicker } from '../attribution/attributionStore.ts';
 
 // --- Fear & Greed (lazy-loaded from existing service) ---
 
@@ -103,6 +104,17 @@ export function evaluateRisk(
       const remainingSec = Math.ceil(remainingMs / 1000);
       results.push(makeReject(signal, `Circuit breaker cooldown: ${remainingSec}s remaining`));
       continue;
+    }
+
+    // Gate 2.5: Re-entry cooldown per ticker
+    if (V2_CONFIG.REENTRY_COOLDOWN_MS > 0) {
+      const recentClosed = getRecentClosedByTicker(signal.ticker, 'TREND', Date.now() - V2_CONFIG.REENTRY_COOLDOWN_MS);
+      if (recentClosed.length > 0) {
+        const lastExit = recentClosed[0].exitTime!;
+        const remainingMs = V2_CONFIG.REENTRY_COOLDOWN_MS - (Date.now() - lastExit);
+        results.push(makeReject(signal, `Re-entry cooldown: ${signal.ticker} closed ${Math.ceil(remainingMs / 60000)}m ago`));
+        continue;
+      }
     }
 
     // Gate 3: Max open positions per strategy (correlation risk cap)
