@@ -16,7 +16,7 @@ import {
 } from './types.ts';
 import { V2_CONFIG } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
-import { updateTradeStop, markTrailingActivated } from '../attribution/attributionStore.ts';
+import { updateTradeStop, markTrailingActivated, updateTradePeakPrice } from '../attribution/attributionStore.ts';
 
 // H3: ExitMutators allow callers to swap the persistence backend. The default
 // (DB-backed) writes through attributionStore. Dual-engine paper trades live
@@ -90,15 +90,22 @@ export async function checkExits(
     // up to BOT_LOOP_INTERVAL_MS for the next pass. Now: log and continue.
     try {
     const currentPrice = await exchange.getLatestPrice(trade.ticker);
-    const pnlPercent = (currentPrice - trade.entryPrice) / trade.entryPrice;
+    const isShort = trade.side === 'short';
+
+    // Update peak price (highest for longs, lowest for shorts)
+    updateTradePeakPrice(trade.id, currentPrice, trade.side ?? 'long');
+
+    const pnlPercent = isShort
+      ? (trade.entryPrice - currentPrice) / trade.entryPrice
+      : (currentPrice - trade.entryPrice) / trade.entryPrice;
     const holdMs = Date.now() - trade.entryTime;
 
     // --- 1. Stop Loss / Trailing Exit ---
-    // Both fire on `currentPrice <= currentStop`, but classify the exit
-    // reason based on whether the stop was raised above its initial level.
-    // A raised stop means BE-stop or trailing took effect — log as `trailing`
-    // so analytics distinguish protected exits from real losses.
-    if (currentPrice <= trade.currentStop) {
+    // For longs: currentPrice <= stop. For shorts: currentPrice >= stop.
+    const slTriggered = isShort
+      ? currentPrice >= trade.currentStop
+      : currentPrice <= trade.currentStop;
+    if (slTriggered) {
       const stopWasRaised = trade.trailingActivated || trade.currentStop > trade.initialStop;
       const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
       const reasonLabel = stopWasRaised ? 'Trailing/BE stop hit' : 'Stop loss hit';
@@ -120,7 +127,10 @@ export async function checkExits(
     }
 
     // --- 2. Take Profit ---
-    if (currentPrice >= trade.takeProfitTarget) {
+    const tpTriggered = isShort
+      ? currentPrice <= trade.takeProfitTarget
+      : currentPrice >= trade.takeProfitTarget;
+    if (tpTriggered) {
       results.push({
         trade,
         shouldExit: true,
@@ -159,8 +169,14 @@ export async function checkExits(
     // so config tweaks to trailing don't accidentally squeeze the BE window.
     const rawPnlPercent = pnlPercent; // pnlPercent is already raw (no fee adjustment)
     if (rawPnlPercent >= 0.008) {
-      const breakEvenStop = trade.entryPrice * 1.007; // Above entry by enough to net positive after fees+slippage
-      if (breakEvenStop > trade.currentStop) {
+      // For longs: stop above entry. For shorts: stop below entry.
+      const breakEvenStop = isShort
+        ? trade.entryPrice * 0.993
+        : trade.entryPrice * 1.007;
+      const beShouldUpdate = isShort
+        ? breakEvenStop < trade.currentStop
+        : breakEvenStop > trade.currentStop;
+      if (beShouldUpdate) {
         newStop = breakEvenStop;
         mutators.setStop(trade.id, newStop, trade);
       }
@@ -169,23 +185,30 @@ export async function checkExits(
     // --- 2c. Quick-Kill for Dud Trades ---
     // If trade is >45 min old and has never been profitable (+0.3%), tighten SL.
     // "If it was going to work, it would have shown signs by now."
-    const peakPnlPercent = (trade.currentStop > trade.initialStop)
-      ? (trade.currentStop - trade.entryPrice) / trade.entryPrice
-      : pnlPercent;  // approximate: if stop never moved, peak ≈ current
+    const stopMovedFavorably = isShort
+      ? trade.currentStop < trade.initialStop
+      : trade.currentStop > trade.initialStop;
+    const peakPnlPercent = stopMovedFavorably
+      ? Math.abs(trade.currentStop - trade.entryPrice) / trade.entryPrice
+      : pnlPercent;
     if (
       holdMs > V2_CONFIG.QUICK_KILL_AFTER_MS &&
       peakPnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
       pnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
       trade.atrPercent != null && trade.atrPercent > 0
     ) {
-      // Scale quick-kill tightening by volatility: high-vol assets (>1.5% ATR)
-      // get a gentler pull (0.6× instead of 1.2×) to avoid stopping into normal noise.
       const atrPct = trade.atrPercent!;
       const qkMult = atrPct > 1.5 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.5
                     : atrPct > 1.0 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.75
                     : V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
-      const tighterStop = trade.entryPrice - (trade.entryPrice * atrPct / 100) * qkMult;
-      if (tighterStop > trade.currentStop) {
+      // For longs: tighten up. For shorts: tighten down.
+      const tighterStop = isShort
+        ? trade.entryPrice + (trade.entryPrice * atrPct / 100) * qkMult
+        : trade.entryPrice - (trade.entryPrice * atrPct / 100) * qkMult;
+      const qkShouldUpdate = isShort
+        ? tighterStop < trade.currentStop
+        : tighterStop > trade.currentStop;
+      if (qkShouldUpdate) {
         newStop = tighterStop;
         mutators.setStop(trade.id, newStop, trade);
       }
@@ -223,26 +246,37 @@ export async function checkExits(
 
       // Profit-tier tightening: bigger winners get tighter trails
       const tpTarget = trade.takeProfitTarget
-        ? (trade.takeProfitTarget - trade.entryPrice) / trade.entryPrice
+        ? Math.abs(trade.takeProfitTarget - trade.entryPrice) / trade.entryPrice
         : V2_CONFIG.TAKE_PROFIT_ATR_MULT * (trade.atrPercent || 0.01);
       const profitMultiple = tpTarget > 0 ? pnlPercent / tpTarget : 1;
       if (profitMultiple >= 2.0) givebackFraction *= 0.6;
       else if (profitMultiple >= 1.5) givebackFraction *= 0.8;
 
-      const peakGain = currentPrice - trade.entryPrice;
-      const trailingStop = currentPrice - peakGain * givebackFraction;
+      // For longs: trail up from peak. For shorts: trail down from trough.
+      // peakPrice stores the best price (highest for longs, lowest for shorts).
+      const peakGain = isShort
+        ? trade.entryPrice - trade.peakPrice!  // peakPrice = trough for shorts
+        : trade.peakPrice! - trade.entryPrice;
+      const trailingStop = isShort
+        ? trade.peakPrice! + peakGain * givebackFraction  // stop above trough for shorts
+        : trade.peakPrice! - peakGain * givebackFraction;
 
-      // Stops can only tighten (go up for longs) — use the higher of computed vs existing
-      if (trailingStop > trade.currentStop) {
+      // Stops can only tighten: up for longs, down for shorts
+      const trailShouldUpdate = isShort
+        ? trailingStop < trade.currentStop
+        : trailingStop > trade.currentStop;
+      if (trailShouldUpdate) {
         newStop = trailingStop;
         mutators.setStop(trade.id, newStop, trade);
       } else {
-        // DB stop may be higher than what we just computed (market whipped down)
-        newStop = Math.max(newStop, trade.currentStop);
+        newStop = trade.currentStop;
       }
 
-      // Check if trailing stop was hit (price fell through effective stop)
-      if (currentPrice <= newStop) {
+      // Check if trailing stop was hit
+      const trailHit = isShort
+        ? currentPrice >= newStop
+        : currentPrice <= newStop;
+      if (trailHit) {
         results.push({
           trade,
           shouldExit: true,

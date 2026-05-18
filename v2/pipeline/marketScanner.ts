@@ -54,9 +54,11 @@ function getHTFRegime(ticker: string): string | null {
  * is UP or STRONG_UP (pullback-in-uptrend pattern).
  * Returns one ScanResult per ticker (passed or rejected).
  */
-export function scanMarket(tickerCandles: Map<string, Candle[]>): ScanResult[] {
+export function scanMarket(tickerCandles: Map<string, Candle[]>, side: 'long' | 'short' = 'long'): ScanResult[] {
   const results: ScanResult[] = [];
-  const allowedRegimes: ReadonlySet<string> = new Set(V2_CONFIG.ALLOWED_REGIMES);
+  const allowedRegimes: ReadonlySet<string> = new Set(
+    side === 'short' ? V2_CONFIG.SHORT_ALLOWED_REGIMES : V2_CONFIG.ALLOWED_REGIMES
+  );
 
   for (const [ticker, candles] of tickerCandles) {
     // Gate 1: minimum candle count

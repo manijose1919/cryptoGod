@@ -96,14 +96,17 @@ export async function executeTrade(
       return { trade: null, decision: rejectDecision };
     }
     const quantity = risk.positionSizeUsd / price;
-    const stopLoss = price - atr * V2_CONFIG.STOP_LOSS_ATR_MULT;
-    const takeProfit = price + atr * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    const isShort = risk.side === 'short';
+    const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : V2_CONFIG.STOP_LOSS_ATR_MULT;
+    const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    const stopLoss = isShort ? price + atr * slMult : price - atr * slMult;
+    const takeProfit = isShort ? price - atr * tpMult : price + atr * tpMult;
     // H7: exchange-aware maker fee for paper-mode entry estimate
     const fee = price * quantity * getExchangeFees(exchange.getName()).MAKER_PERCENT;
 
     const decision = makeExecuteDecision(
       tradeId,
-      `${V2_CONFIG.MODE} entry at ${price.toFixed(2)}`,
+      `${V2_CONFIG.MODE} ${isShort ? 'SHORT' : ''} entry at ${price.toFixed(2)}`,
       signal.confidence,
       { price, quantity, stopLoss, takeProfit, atr },
     );
@@ -111,7 +114,7 @@ export async function executeTrade(
     const trade: V2Trade = {
       id: tradeId,
       ticker: signal.ticker,
-      side: 'long',
+      side: isShort ? 'short' : 'long',
       status: TRADE_STATUS.open,
       entryPrice: price,
       entryTime: Date.now(),

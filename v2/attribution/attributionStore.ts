@@ -264,14 +264,26 @@ let _updatePeakHistStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null 
  * Used by momentum/breakout/mr exit managers for chandelier and peak-anchored
  * trailing logic. Without persistence, the peak resets to entryPrice each loop.
  */
-export function updateTradePeakPrice(tradeId: string, newPeak: number): void {
-  if (!_updatePeakPriceStmt) {
-    _updatePeakPriceStmt = getDb().prepare(
-      `UPDATE v2_trades SET peak_price = @newPeak
-       WHERE id = @tradeId AND (peak_price IS NULL OR peak_price < @newPeak)`
-    );
+let _updatePeakPriceShortStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
+export function updateTradePeakPrice(tradeId: string, newPeak: number, side: 'long' | 'short' = 'long'): void {
+  if (side === 'short') {
+    // For shorts, peak = lowest price seen (trough tracking)
+    if (!_updatePeakPriceShortStmt) {
+      _updatePeakPriceShortStmt = getDb().prepare(
+        `UPDATE v2_trades SET peak_price = @newPeak
+         WHERE id = @tradeId AND (peak_price IS NULL OR peak_price > @newPeak)`
+      );
+    }
+    _updatePeakPriceShortStmt.run({ tradeId, newPeak });
+  } else {
+    if (!_updatePeakPriceStmt) {
+      _updatePeakPriceStmt = getDb().prepare(
+        `UPDATE v2_trades SET peak_price = @newPeak
+         WHERE id = @tradeId AND (peak_price IS NULL OR peak_price < @newPeak)`
+      );
+    }
+    _updatePeakPriceStmt.run({ tradeId, newPeak });
   }
-  _updatePeakPriceStmt.run({ tradeId, newPeak });
 }
 
 /**
