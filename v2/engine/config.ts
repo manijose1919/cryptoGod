@@ -13,6 +13,8 @@ export const V2_CONFIG = {
   SCAN_TICKERS: [
     'AKTUSD', 'ZECUSD', 'COMPUSD',
     'SOLUSD', 'HYPEUSD', 'SUIUSD', 'LINKUSD',
+    // MOMENTUM tickers (merged 2026-05-18 — momentum signals now routed through main pipeline)
+    'RUNEUSD', 'ENAUSD', 'KASUSD', 'ICPUSD',
     // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
     //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
     //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
@@ -61,7 +63,7 @@ export const V2_CONFIG = {
   TREND_MATURITY_MAX_PENALTY: 15,        // subtract up to 15 from composite score for exhausted trends
 
   // --- Short Selling ---
-  SHORTS_ENABLED: false,                 // paper-test before enabling
+  SHORTS_ENABLED: true,                  // 2026-05-18: enabled for paper testing
   SHORT_ALLOWED_REGIMES: ['STRONG_DOWN', 'DOWN'] as readonly string[],
   SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
   SHORT_STOP_LOSS_ATR_MULT: 2.0,
@@ -132,8 +134,8 @@ export const V2_CONFIG = {
 // ============================================
 
 export const MOMENTUM_CONFIG = {
-  ENABLED: false,   // 2026-05-18: RE-DISABLED pending backtest validation. Confidence gate + risk-based sizing now added. Set true after validating PF>1.
-  MIN_CONFIDENCE: 0.70,  // Added 2026-05-18: was missing, caused 0W/4L live at conf 0.60
+  ENABLED: true,    // 2026-05-18: REBUILT — now routes through main TREND pipeline (same riskGate, exitManager, all guards). No separate engine loop.
+  MIN_CONFIDENCE: 0.70,
 
   // Tickers — chosen via wide-ticker scan in backtest. These 7 produced
   // PF > 1 individually under v2 logic; combined PF was 1.70 (90d).

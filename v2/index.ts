@@ -59,16 +59,12 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
     //   ZECUSD,RUNEUSD,FLOWUSD,ENAUSD,KASUSD,ICPUSD,WIFUSD
     // Default disabled (MOMENTUM_CONFIG.ENABLED=false) — flip to true when
     // ready to ship live. Single-strategy backtest validates before flipping.
+    // MOMENTUM now routes through the main TREND pipeline (Stage 2b in tradeEngine).
+    // No separate engine loop. MOMENTUM_CONFIG.ENABLED gates signal detection in tradeEngine.
     if (MOMENTUM_CONFIG.ENABLED) {
-      try {
-        initMomentumEngine(krakenV2, initialBudget);
-        startMomentumEngine();
-        console.log('[V2] Momentum engine v2 running (4h, z-score spike, 7 tickers)');
-      } catch (err: unknown) {
-        console.warn(`[V2] Momentum engine failed to start: ${(err as Error).message}`);
-      }
+      console.log('[V2] Momentum signals enabled (routed through main pipeline, not separate engine)');
     } else {
-      console.log('[V2] Momentum engine v2 disabled (MOMENTUM_CONFIG.ENABLED=false). Set true to ship live.');
+      console.log('[V2] Momentum signals disabled (MOMENTUM_CONFIG.ENABLED=false)');
     }
 
     // Dual-exchange sniper (kraken + cryptocom, 2026-05-06)
