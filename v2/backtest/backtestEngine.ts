@@ -134,6 +134,15 @@ function checkExitOnBar(
     else if (trade.atrPercent > 1.0) givebackFraction *= 1.1;
     else if (trade.atrPercent < 0.3) givebackFraction *= 0.7;
 
+    // Loose-early / tight-late trailing profile
+    const profitVsActivation = pnlPercentAtClose / V2_CONFIG.TRAILING_ACTIVATE_PERCENT;
+    if (profitVsActivation < 1.5) {
+      givebackFraction *= 1.5;
+    } else if (profitVsActivation < 2.0) {
+      const t = (profitVsActivation - 1.5) / 0.5;
+      givebackFraction *= 1.5 - t * 0.5;
+    }
+
     // Profit-tier tightening
     const tpPercent = (trade.takeProfit - trade.entryPrice) / trade.entryPrice;
     const profitMultiple = tpPercent > 0 ? pnlPercentAtClose / tpPercent : 1;
