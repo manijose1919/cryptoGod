@@ -37,6 +37,28 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-18 — MOMENTUM rebuilt + shorts enabled — vps-claude
+
+**Commits:** `36fc293`
+**Files changed:** `v2/engine/tradeEngine.ts`, `v2/engine/config.ts`, `v2/pipeline/executor.ts`, `v2/index.ts`, `v2/backtest/backtestEngine.ts`
+**Stats baseline reset:** no
+
+**What changed:**
+1. **MOMENTUM rebuilt from ground up.** No longer runs a separate engine loop — momentum z-score spike detection now runs as Stage 2b in the main tradeEngine pipeline. Gets all guards for free: cooldown, correlation, maturity, risk-based sizing, improved exitManager. The old separate momentumEngine/momentumExitManager are no longer started.
+2. **SHORTS_ENABLED = true.** Paper mode only (guarded in executor). Bot can now enter short positions in DOWN/STRONG_DOWN regimes.
+3. **SCAN_TICKERS expanded:** Added RUNE, ENA, KAS, ICP (momentum tickers) to the main scan.
+4. **Backtest supports MOMENTUM entries** — tries momentum z-score detection when TREND entry doesn't fire.
+
+**What to monitor / watch for:**
+- `[V2] MOM signal:` log messages when momentum fires
+- `[V2] SHORT opened:` log messages when shorts fire
+- MOMENTUM trades tagged as strategy='MOMENTUM' in DB
+- Short trades have side='short' — exitManager handles inverted SL/TP/trailing
+- If momentum produces too many low-quality entries, raise MIN_CONFIDENCE from 0.70 to 0.75
+- Rollback: set MOMENTUM_CONFIG.ENABLED=false and SHORTS_ENABLED=false
+
+---
+
 ## 2026-05-18 — 6-feature enhancement sweep — vps-claude
 
 **Commits:** `d7c4bd1`, `83ec8ed`, `de864c3`, `046d9f2`, `b556f68`, `88cf359`
