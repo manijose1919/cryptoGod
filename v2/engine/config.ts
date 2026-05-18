@@ -52,6 +52,10 @@ export const V2_CONFIG = {
   // --- Re-entry Cooldown ---
   REENTRY_COOLDOWN_MS: 8 * 60 * 60 * 1000,  // 8h (2 candles) — prevents churn on same ticker after exit
 
+  // --- Correlation Check ---
+  CORRELATION_MAX_AVG: 0.70,           // reject if avg correlation with open positions > this
+  CORRELATION_LOOKBACK_BARS: 20,       // 20 × 4h = ~3.3 days of return data
+
   // --- Risk ---
   MAX_DAILY_LOSS_PERCENT: 0.03,
   CIRCUIT_BREAKER_COOLDOWN_MS: 15 * 60 * 1000, // 15 minutes

@@ -31,6 +31,29 @@ export interface RegimeResult {
   atrPercent: number;
 }
 
+// --- Correlation Helpers ---
+
+export function closesToReturns(closes: number[]): number[] {
+  const returns: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    returns.push(closes[i - 1] !== 0 ? (closes[i] - closes[i - 1]) / closes[i - 1] : 0);
+  }
+  return returns;
+}
+
+export function pearsonCorrelation(x: number[], y: number[]): number {
+  const n = Math.min(x.length, y.length);
+  if (n < 5) return 0;
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+  for (let i = 0; i < n; i++) {
+    sumX += x[i]; sumY += y[i];
+    sumXY += x[i] * y[i];
+    sumX2 += x[i] * x[i]; sumY2 += y[i] * y[i];
+  }
+  const denom = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+  return denom === 0 ? 0 : (n * sumXY - sumX * sumY) / denom;
+}
+
 // --- Core Indicators ---
 
 /**
