@@ -29,6 +29,7 @@ export interface RegimeResult {
   regime: Regime;
   trendStrength: number;
   atrPercent: number;
+  trendMaturity: number;  // 0-100: 0=fresh trend, 100=exhausted
 }
 
 // --- Correlation Helpers ---
@@ -273,6 +274,7 @@ export function detectRegime(candles: Candle[]): RegimeResult {
     regime: REGIME.SIDEWAYS,
     trendStrength: 0,
     atrPercent: 0,
+    trendMaturity: 0,
   };
 
   if (candles.length < 50) return defaultResult;
@@ -325,7 +327,42 @@ export function detectRegime(candles: Candle[]): RegimeResult {
 
   trendStrength = Math.max(0, Math.min(100, trendStrength));
 
-  return { regime, trendStrength, atrPercent };
+  // Trend maturity: how extended/exhausted is the current trend?
+  let trendMaturity = 0;
+  const isUpward = regime === REGIME.STRONG_UP || regime === REGIME.UP;
+  const isDownward = regime === REGIME.STRONG_DOWN || regime === REGIME.DOWN;
+
+  if (isUpward || isDownward) {
+    // Factor 1: Consecutive bars in same direction (0-40 pts)
+    let consecutiveBars = 0;
+    for (let i = closes.length - 1; i >= 1; i--) {
+      const above = closes[i] > ema20[i];
+      if ((isUpward && above) || (isDownward && !above)) consecutiveBars++;
+      else break;
+    }
+    trendMaturity += Math.min(40, consecutiveBars * 4);
+
+    // Factor 2: RSI extremeness (0-30 pts)
+    if (isUpward) {
+      if (lastRsi > 75) trendMaturity += 30;
+      else if (lastRsi > 70) trendMaturity += 20;
+      else if (lastRsi > 65) trendMaturity += 10;
+    } else {
+      if (lastRsi < 25) trendMaturity += 30;
+      else if (lastRsi < 30) trendMaturity += 20;
+      else if (lastRsi < 35) trendMaturity += 10;
+    }
+
+    // Factor 3: Price distance from EMA50 (0-30 pts)
+    const priceVsEma50 = lastEma50 !== 0 ? Math.abs((currentPrice - lastEma50) / lastEma50) * 100 : 0;
+    if (priceVsEma50 > 5.0) trendMaturity += 30;
+    else if (priceVsEma50 > 3.0) trendMaturity += 20;
+    else if (priceVsEma50 > 1.5) trendMaturity += 10;
+  }
+
+  trendMaturity = Math.min(100, trendMaturity);
+
+  return { regime, trendStrength, atrPercent, trendMaturity };
 }
 
 // --- Full Signal Computation ---

@@ -56,6 +56,10 @@ export const V2_CONFIG = {
   CORRELATION_MAX_AVG: 0.70,           // reject if avg correlation with open positions > this
   CORRELATION_LOOKBACK_BARS: 20,       // 20 × 4h = ~3.3 days of return data
 
+  // --- Trend Maturity ---
+  TREND_MATURITY_PENALTY_THRESHOLD: 70,  // start penalizing composite score above this maturity
+  TREND_MATURITY_MAX_PENALTY: 15,        // subtract up to 15 from composite score for exhausted trends
+
   // --- Risk ---
   MAX_DAILY_LOSS_PERCENT: 0.03,
   CIRCUIT_BREAKER_COOLDOWN_MS: 15 * 60 * 1000, // 15 minutes
