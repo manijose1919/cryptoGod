@@ -400,7 +400,7 @@ async function runLoop(): Promise<void> {
     // ==============================
     const portfolio = loadPortfolio(budget, 'TREND');
     const cbState = getCircuitBreakerState(portfolio, 'TREND');
-    const riskResults = evaluateRisk(passedSignals, portfolio, cbState, exchange?.getName() ?? 'kraken');
+    const riskResults = evaluateRisk(passedSignals, portfolio, cbState, exchange?.getName() ?? 'kraken', tickerCandles);
     const approved = getApproved(riskResults);
     const riskRejections = riskResults.length - approved.length;
     stats.rejectedByRisk += riskRejections;

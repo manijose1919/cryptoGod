@@ -5,8 +5,10 @@
 
 import type { SignalResult, RiskResult, V2PortfolioState } from './types.ts';
 import { REGIME } from './types.ts';
+import type { Candle } from './types.ts';
 import { V2_CONFIG, getExchangeFees } from '../engine/config.ts';
 import { getRecentClosedByTicker } from '../attribution/attributionStore.ts';
+import { closesToReturns, pearsonCorrelation } from '../indicators/indicators.ts';
 
 // --- Fear & Greed (lazy-loaded from existing service) ---
 
@@ -73,6 +75,7 @@ export function evaluateRisk(
   portfolio: V2PortfolioState,
   circuitBreaker: CircuitBreakerState,
   exchangeName: string = 'kraken',
+  tickerCandles?: Map<string, Candle[]>,
 ): RiskResult[] {
   const results: RiskResult[] = [];
   const now = Date.now();
@@ -127,6 +130,36 @@ export function evaluateRisk(
     if (portfolio.openPositions.has(signal.ticker)) {
       results.push(makeReject(signal, `Already holding ${signal.ticker}`));
       continue;
+    }
+
+    // Gate 4.5: Portfolio correlation check
+    if (tickerCandles && portfolio.openPositions.size >= 1) {
+      const lookback = V2_CONFIG.CORRELATION_LOOKBACK_BARS + 1;
+      const candidateCandles = tickerCandles.get(signal.ticker);
+      if (candidateCandles && candidateCandles.length >= lookback) {
+        const candidateReturns = closesToReturns(
+          candidateCandles.slice(-lookback).map(c => c.close)
+        );
+        let totalCorr = 0;
+        let corrCount = 0;
+        for (const [openTicker] of portfolio.openPositions) {
+          const openCandles = tickerCandles.get(openTicker);
+          if (!openCandles || openCandles.length < lookback) continue;
+          const openReturns = closesToReturns(
+            openCandles.slice(-lookback).map(c => c.close)
+          );
+          const corr = pearsonCorrelation(candidateReturns, openReturns);
+          totalCorr += corr;
+          corrCount++;
+        }
+        if (corrCount > 0) {
+          const avgCorr = totalCorr / corrCount;
+          if (avgCorr > V2_CONFIG.CORRELATION_MAX_AVG) {
+            results.push(makeReject(signal, `Correlated: avg rho=${avgCorr.toFixed(2)} > ${V2_CONFIG.CORRELATION_MAX_AVG} vs ${corrCount} open`));
+            continue;
+          }
+        }
+      }
     }
 
     // Compute position sizing
