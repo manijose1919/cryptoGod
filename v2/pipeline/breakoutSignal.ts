@@ -27,14 +27,22 @@ export function detectBreakoutEntry(
   if (atrPct < BREAKOUT_CONFIG.MIN_ATR_PERCENT) return null;
   if (volRatio < BREAKOUT_CONFIG.VOLUME_MULTIPLIER) return null;
 
-  const lookbackCandles = candles.slice(-BREAKOUT_CONFIG.LOOKBACK_BARS - 1, -1);
+  // Lookback: find the N-bar high EXCLUDING current and prior bar
+  // We need the current bar to be the FIRST close above the level — if the
+  // prior bar also closed above, this isn't a fresh breakout, it's continuation.
+  const lookbackCandles = candles.slice(-BREAKOUT_CONFIG.LOOKBACK_BARS - 2, -2);
   const nBarHigh = Math.max(...lookbackCandles.map(c => c.high));
+  const priorBar = candles[candles.length - 2];
 
+  // Current bar must close above N-bar high
   if (price <= nBarHigh) return null;
+  // Prior bar must NOT have closed above — ensures this is a fresh breakout, not continuation
+  if (priorBar && priorBar.close > nBarHigh) return null;
 
   const atrDollar = price * atrPct / 100;
   const breakoutStrength = (price - nBarHigh) / atrDollar;
-  const confidence = Math.min(0.9, 0.5 + breakoutStrength * 0.15 + (volRatio - 1) * 0.1);
+  // Cap confidence lower — breakouts are inherently uncertain
+  const confidence = Math.min(0.80, 0.5 + breakoutStrength * 0.10 + (volRatio - 1) * 0.05);
 
   return {
     ticker,
