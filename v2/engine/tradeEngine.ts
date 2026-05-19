@@ -360,8 +360,9 @@ async function runLoop(): Promise<void> {
     // ==============================
     // Stage 3: Risk Gate
     // ==============================
-    const portfolio = loadPortfolio(budget, 'TREND');
-    const cbState = getCircuitBreakerState(portfolio, 'TREND');
+    // Load ALL open positions (not just TREND) so riskGate sees MOMENTUM/BREAKOUT/SCALP too
+    const portfolio = loadPortfolio(budget);
+    const cbState = getCircuitBreakerState(portfolio);
     const riskResults = evaluateRisk(passedSignals, portfolio, cbState, exchange?.getName() ?? 'kraken', tickerCandles);
     const approved = getApproved(riskResults);
     const riskRejections = riskResults.length - approved.length;
