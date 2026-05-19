@@ -56,14 +56,9 @@ function checkExitOnBar(
   let trailingActivated = trade.trailingActivated;
   const isShort = trade.side === 'short';
 
-  // Update peak price (highest for longs, lowest for shorts)
-  if (isShort) {
-    if (bar.low < trade.peakPrice) trade.peakPrice = bar.low;
-  } else {
-    if (bar.high > trade.peakPrice) trade.peakPrice = bar.high;
-  }
-
   // --- 1. Stop Loss / 2. Take Profit ---
+  // Check BEFORE updating peak — avoids look-ahead bias where we'd
+  // see the bar's high, update peak/BE, then check the same bar's low.
   const slHit = isShort ? bar.high >= currentStop : bar.low <= currentStop;
   const tpHit = isShort ? bar.low <= trade.takeProfit : bar.high >= trade.takeProfit;
 
@@ -77,10 +72,19 @@ function checkExitOnBar(
     return { shouldExit: true, exitPrice: trade.takeProfit, exitReason: EXIT_REASON.take_profit, newStop: currentStop, trailingActivated };
   }
 
+  // Update peak price AFTER SL/TP checks — prevents look-ahead bias.
+  // Peak from this bar informs NEXT bar's trailing/BE, not this bar's.
+  if (isShort) {
+    if (bar.low < trade.peakPrice) trade.peakPrice = bar.low;
+  } else {
+    if (bar.high > trade.peakPrice) trade.peakPrice = bar.high;
+  }
+
   // --- 3. Break-Even Stop ---
+  // Use bar.close (known at bar end) not bar.high (intra-bar look-ahead)
   const bestPnl = isShort
-    ? (trade.entryPrice - bar.low) / trade.entryPrice
-    : (bar.high - trade.entryPrice) / trade.entryPrice;
+    ? (trade.entryPrice - bar.close) / trade.entryPrice
+    : (bar.close - trade.entryPrice) / trade.entryPrice;
   // Break-even stop — ATR-aware, tied to trailing activation (matches live exitManager)
   const beTrigger = V2_CONFIG.TRAILING_ACTIVATE_PERCENT * 0.6;
   const atrForBE = (trade.atrPercent || 1.0) / 100;
@@ -220,8 +224,8 @@ function simulateTicker(
       trade.trailingActivated = exitResult.trailingActivated;
 
       if (exitResult.shouldExit) {
-        // Close trade
-        const exitPrice = exitResult.exitPrice;
+        // Close trade — apply 0.1% adverse slippage on exit
+        const exitPrice = exitResult.exitPrice * (trade.side === 'short' ? 1.001 : 0.999);
         const pnlGross = trade.side === 'short'
           ? (trade.entryPrice - exitPrice) * trade.quantity
           : (exitPrice - trade.entryPrice) * trade.quantity;
@@ -312,7 +316,8 @@ function simulateTicker(
         && confidence >= V2_CONFIG.MIN_CONFIDENCE
         && expectedReturn >= V2_CONFIG.MIN_EXPECTED_RETURN
       ) {
-        const entryPrice = currentCandle.close;
+        // Slippage: 0.1% adverse on entry (buy higher than close)
+        const entryPrice = currentCandle.close * 1.001;
         const atrValue = signals.atr as number;
         const stopLoss = entryPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
         const takeProfit = entryPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
@@ -350,7 +355,7 @@ function simulateTicker(
     if (!trendEntry && MOMENTUM_CONFIG.ENABLED) {
       const momSignal = detectMomentumEntry(window, ticker);
       if (momSignal && momSignal.confidence >= MOMENTUM_CONFIG.MIN_CONFIDENCE) {
-        const momPrice = currentCandle.close;
+        const momPrice = currentCandle.close * 1.001; // slippage
         const momAtr = momSignal.signals.atr as number;
         const momAtrPct = momSignal.signals.atr_percent as number;
         const momSwingLow = momSignal.signals.mom_swing_low as number | undefined;
@@ -360,6 +365,13 @@ function simulateTicker(
         }
         const momTp = momPrice + momAtr * 3.0;
         let momPosSize = state.cash * V2_CONFIG.BASE_POSITION_PERCENT * momSignal.confidence;
+        // Risk-based cap (same as TREND — was missing)
+        const momStopDist = (momPrice - momSl) / momPrice;
+        if (momStopDist > 0 && V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT > 0) {
+          const momMaxRisk = config.budgetPerTicker * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT;
+          const momRiskCap = momMaxRisk / momStopDist;
+          if (momPosSize > momRiskCap) momPosSize = momRiskCap;
+        }
         if (momPosSize >= 10 && momPosSize <= state.cash) {
           const momQty = momPrice > 0 ? momPosSize / momPrice : 0;
           state.cash -= momPosSize;
