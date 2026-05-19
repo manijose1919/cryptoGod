@@ -13,10 +13,9 @@ export const V2_CONFIG = {
   SCAN_TICKERS: [
     'AKTUSD', 'ZECUSD', 'COMPUSD',
     'HYPEUSD', 'SUIUSD',
-    // MOMENTUM tickers (merged 2026-05-18 — momentum signals now routed through main pipeline)
     'RUNEUSD', 'ENAUSD',
-    // Removed: LINKUSD (26.7% WR), KASUSD (25% WR), SOLUSD (29-32% WR), ICPUSD (43% WR but volatile losses)
-    // Kept: 7 tickers that are net-positive or near-breakeven across 90d+180d backtests
+    // 2026-05-19: Added top 3 from backtest sweep — all PF>2.4, WR>73%
+    'FETUSD', 'PENGUUSD', 'RENDERUSD',
     // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
     //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
     //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
