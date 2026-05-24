@@ -133,8 +133,7 @@ export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
   TREND:           ['1h', '4h'],
   MOMENTUM:        ['1h', '4h'],
   BREAKOUT:        ['15m', '1h'],
-  MEAN_REVERSION:  ['5m', '15m'],
-  SCALP:           ['1m', '5m'],
+  // MEAN_REVERSION and SCALP disabled — live data: 0% and 22% WR respectively
 };
 
 // Per-strategy exit parameters
@@ -361,7 +360,7 @@ export const MR_CONFIG = {
   MAX_POSITION_PERCENT: 0.20,
   MAX_OPEN_POSITIONS: 3,
 
-  STOP_LOSS_ATR_MULT: 1.5,
+  STOP_LOSS_ATR_MULT: 2.0,
   TIME_KILL_BARS: 4,            // 4 × 15m = 1 hour
   TIME_KILL_MIN_MOVE: 0.003,
   QUICK_KILL_AFTER_BARS: 2,     // 2 × 15m = 30 min
