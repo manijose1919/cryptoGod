@@ -80,25 +80,10 @@ export function runAllStrategies(
       }
     }
 
-    // --- MEAN_REVERSION (5m, 15m) ---
-    if (STRATEGY_TIMEFRAMES.MEAN_REVERSION.includes(tf)) {
-      for (const [ticker, candles] of tfCandles) {
-        const mrSignal = detectMeanReversionEntry(candles, ticker);
-        if (mrSignal && mrSignal.confidence >= 0.60) {
-          results.push({ ...mrSignal, _strategy: 'MEAN_REVERSION', _timeframe: tf });
-        }
-      }
-    }
-
-    // --- SCALP (1m, 5m) ---
-    if (STRATEGY_TIMEFRAMES.SCALP.includes(tf)) {
-      for (const [ticker, candles] of tfCandles) {
-        const scalpSignal = detectScalpEntry(candles, ticker);
-        if (scalpSignal && scalpSignal.confidence >= 0.50) {
-          results.push({ ...scalpSignal, _strategy: 'SCALP', _timeframe: tf });
-        }
-      }
-    }
+    // --- MEAN_REVERSION — DISABLED (live: 0% WR, 0/4 wins, -$13) ---
+    // --- SCALP — DISABLED (live: 22% WR, 4/18 wins, -$24) ---
+    // Both strategies lose money in live execution despite backtest promise.
+    // Re-enable only after fundamental rework of entry logic.
 
     // --- SHORTS (any TF where TREND runs) ---
     if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live' && STRATEGY_TIMEFRAMES.TREND.includes(tf)) {
