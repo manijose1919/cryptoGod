@@ -418,3 +418,60 @@ export const DUAL_ENGINE_CONFIG = {
   /** Both run in paper mode during competition */
   MODE: 'paper' as const,
 } as const;
+
+// ============================================
+// Pairs Trading (cross-asset cointegration)
+// Deployment plan: docs/plans/2026-05-26-pairs-deployment-plan.md
+// Backtest validation: v2/backtest/canonical (commit 37709b1)
+//   FIL/ICP walk-forward: IS +2.79% → OOS +11.28% (fragility 4.05)
+// ============================================
+export type PairsMode = 'off' | 'paper' | 'live';
+
+export const PAIRS_CONFIG = {
+  /**
+   * 'off'   — engine doesn't run
+   * 'paper' — engine fires signals, logs decisions, simulated fills only
+   * 'live'  — submits real margin orders (NOT IMPLEMENTED THIS SESSION;
+   *           paper-only for now)
+   */
+  MODE: (process.env.PAIRS_MODE ?? 'off') as PairsMode,
+
+  // Symbols. Keep generic 'A/B' naming so swapping pairs is a single config edit.
+  SYMBOL_A: 'FILUSD',
+  SYMBOL_B: 'ICPUSD',
+
+  // Cadence + windows.
+  LOOP_INTERVAL_MS: 60_000,           // every 60s
+  CANDLE_INTERVAL: '1h' as const,
+  ROLLING_WINDOW_BARS: 720,            // 30 days on 1h — matches backtest
+  REESTIMATE_BETA_EVERY_BARS: 120,     // 5 days on 1h
+  WARMUP_BARS: 720,                    // = ROLLING_WINDOW (Kraken returns 720 on this interval)
+
+  // Signal thresholds (matches backtest 'tight' variant — the best-WF cell).
+  ENTRY_Z: 1.5,
+  EXIT_Z: 0.3,
+  STOP_Z: 4.0,
+  MAX_HOLD_BARS: 200,
+  ALLOW_SHORT_SPREAD: true,           // both directions of spread divergence
+
+  // Sizing.
+  TOTAL_NOTIONAL_USD: 1000,            // total exposure cap (sum of both legs)
+  LEG_NOTIONAL_USD: 500,               // per-leg notional (equal-$ hedge)
+  MIN_LEG_NOTIONAL_USD: 50,            // refuse trades below this
+
+  // Fees (Kraken; per leg per side).
+  FEE_PER_LEG_TAKER: 0.0026,
+  FEE_PER_LEG_MAKER: -0.0005,          // negative = rebate at tier 2
+
+  // Slippage assumption for paper-mode fills (per leg per side).
+  SLIPPAGE_PER_SIDE: 0.0005,
+
+  // Cointegration gate. Refuse new entries if rolling ADF t-stat is weaker
+  // than this threshold (less negative = weaker cointegration).
+  REQUIRE_ADF_T_BELOW: -2.86,          // 5% critical value
+
+  // Kill switches.
+  MAX_DRAWDOWN_PCT_PER_TRADE: 0.03,    // 3% drawdown on the allocation
+  CONSECUTIVE_LOSS_PAUSE_THRESHOLD: 3,
+  PAUSE_DURATION_HOURS: 168,           // 7 days
+} as const;
