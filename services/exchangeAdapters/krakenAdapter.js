@@ -792,6 +792,98 @@ export class KrakenAdapter extends BaseExchangeAdapter {
     }
 
     /**
+     * MARGIN order placement — adds Kraken `leverage` parameter so the order
+     * trades on margin instead of spot. Required for pairs trading where the
+     * short leg cannot exist on a spot account.
+     *
+     * For pairs trading we always use leverage=2 (the minimum Kraken offers
+     * on most pairs) since the goal is to enable shorting, not to lever up.
+     *
+     * @param {string} ticker - e.g. 'FILUSD'
+     * @param {'buy'|'sell'} side - buy = long margin position; sell = short
+     * @param {number} price - limit price
+     * @param {number} volume - base-currency quantity
+     * @param {number} leverage - 2..10 depending on pair (see AssetPairs)
+     * @param {string} sessionId
+     * @param {{postOnly?: boolean, reduceOnly?: boolean}} [opts]
+     */
+    async placeMarginLimit(ticker, side, price, volume, leverage, sessionId, opts = {}) {
+        const pair = toKrakenPair(ticker);
+        const params = {
+            pair,
+            type: side,
+            ordertype: 'limit',
+            price: price.toFixed(8),
+            volume: volume.toFixed(8),
+            leverage: String(leverage),
+        };
+        if (opts.postOnly) params.oflags = 'post';
+        if (opts.reduceOnly) params.reduce_only = 'true';
+        const result = await krakenPrivateRequest('AddOrder', params, sessionId);
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side,
+            price,
+            volume: parseFloat(volume.toFixed(8)),
+            leverage,
+            status: 'open',
+            postOnly: !!opts.postOnly,
+            reduceOnly: !!opts.reduceOnly,
+            raw: result,
+        };
+    }
+
+    /**
+     * Market-close a margin position. Used when we need to flatten fast
+     * (kill-switch, leg-abort). reduceOnly=true ensures we don't accidentally
+     * open a new position in the opposite direction.
+     *
+     * Side semantics (margin):
+     *   - To close LONG margin: side='sell' with reduceOnly
+     *   - To close SHORT margin: side='buy' with reduceOnly
+     */
+    async placeMarginMarket(ticker, side, volume, leverage, sessionId) {
+        const pair = toKrakenPair(ticker);
+        const result = await krakenPrivateRequest('AddOrder', {
+            pair,
+            type: side,
+            ordertype: 'market',
+            volume: volume.toFixed(8),
+            leverage: String(leverage),
+            reduce_only: 'true',
+        }, sessionId);
+        return {
+            orderId: result.txid?.[0] || '',
+            ticker,
+            side,
+            volume: parseFloat(volume.toFixed(8)),
+            leverage,
+            status: 'submitted',
+            raw: result,
+        };
+    }
+
+    /**
+     * Get open margin positions. Used by pairsMonitor to detect any drift
+     * between bot-tracked state and exchange-tracked state.
+     */
+    async getOpenMarginPositions(sessionId) {
+        const result = await krakenPrivateRequest('OpenPositions', {}, sessionId);
+        return result || {};
+    }
+
+    /**
+     * Get account margin level (Kraken returns %). < 100% triggers liquidation
+     * warnings; < 50% triggers liquidation.
+     */
+    async getMarginLevel(sessionId) {
+        const result = await krakenPrivateRequest('TradeBalance', { asset: 'ZUSD' }, sessionId);
+        // result.ml is margin level percent, as a string
+        return result.ml ? parseFloat(result.ml) : null;
+    }
+
+    /**
      * Place a bracket order — entry + automatic stop-loss in one API call.
      * Uses Kraken's close[ordertype] and close[price] conditional parameters.
      * The close order is placed automatically when the entry fills.
