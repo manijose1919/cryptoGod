@@ -1,6 +1,10 @@
-// Thin wrapper that funnels pairs-engine lifecycle events through the
-// existing telegramService. Degrades gracefully if Telegram isn't
-// configured — every call is fire-and-forget; no errors propagate.
+// Thin wrapper that funnels pairs-engine lifecycle events through:
+//   1. SQLite (v2_pairs_alerts) so the dashboard can show them
+//   2. Telegram (if configured)
+// Degrades gracefully on either side — every call is fire-and-forget; no
+// errors propagate.
+
+import { recordPairsAlert } from './schema.ts';
 
 let _tg: any = null;
 async function getTelegram(): Promise<any> {
@@ -44,6 +48,7 @@ async function send(text: string): Promise<void> {
 }
 
 export function alertEntry(side: 'long_spread' | 'short_spread', z: number, beta: number, mode: 'paper' | 'live'): void {
+  recordPairsAlert({ severity: 'info', kind: 'entry', message: `${side} entry @ z=${z.toFixed(2)} β=${beta.toFixed(3)} (${mode})`, data: { side, z, beta, mode } });
   void send(
     `🟢 ENTRY ${side}\n` +
     `Mode: ${mode}\n` +
@@ -54,6 +59,7 @@ export function alertEntry(side: 'long_spread' | 'short_spread', z: number, beta
 
 export function alertExit(side: 'long_spread' | 'short_spread', reason: string, pnlNet: number, holdBars: number, mode: 'paper' | 'live'): void {
   const emoji = pnlNet >= 0 ? '✅' : '❌';
+  recordPairsAlert({ severity: 'info', kind: 'exit', message: `${side} exit reason=${reason} pnl=$${pnlNet.toFixed(2)} hold=${holdBars}bars (${mode})`, data: { side, reason, pnlNet, holdBars, mode } });
   void send(
     `${emoji} EXIT ${side}\n` +
     `Mode: ${mode}\n` +
@@ -64,6 +70,7 @@ export function alertExit(side: 'long_spread' | 'short_spread', reason: string, 
 }
 
 export function alertDrawdownKill(unrealizedPct: number, mode: 'paper' | 'live'): void {
+  recordPairsAlert({ severity: 'crit', kind: 'drawdown_kill', message: `drawdown kill at ${(unrealizedPct * 100).toFixed(2)}% (${mode})`, data: { unrealizedPct, mode } });
   void send(
     `🚨 PAIRS DRAWDOWN KILL\n` +
     `Mode: ${mode}\n` +
@@ -73,6 +80,7 @@ export function alertDrawdownKill(unrealizedPct: number, mode: 'paper' | 'live')
 }
 
 export function alertPause(consecutiveLosses: number, untilTs: number): void {
+  recordPairsAlert({ severity: 'warn', kind: 'pause', message: `auto-pause after ${consecutiveLosses} losses, until ${new Date(untilTs).toISOString()}`, data: { consecutiveLosses, untilTs } });
   void send(
     `⏸️ PAIRS AUTO-PAUSE\n` +
     `Consecutive losses: ${consecutiveLosses}\n` +
@@ -81,6 +89,7 @@ export function alertPause(consecutiveLosses: number, untilTs: number): void {
 }
 
 export function alertAdfDegrade(adfTStat: number): void {
+  recordPairsAlert({ severity: 'warn', kind: 'adf_degrade', message: `ADF weakening: t=${adfTStat.toFixed(2)}`, data: { adfTStat } });
   void send(
     `📉 PAIRS COINTEGRATION WEAKENING\n` +
     `ADF t-stat: ${adfTStat.toFixed(2)}\n` +
@@ -89,6 +98,7 @@ export function alertAdfDegrade(adfTStat: number): void {
 }
 
 export function alertMarginLow(marginLevel: number, critical: boolean): void {
+  recordPairsAlert({ severity: critical ? 'crit' : 'warn', kind: critical ? 'margin_critical' : 'margin_low', message: `margin level ${marginLevel}%`, data: { marginLevel } });
   void send(
     `${critical ? '🚨' : '⚠️'} PAIRS MARGIN ${critical ? 'CRITICAL' : 'LOW'}\n` +
     `Margin level: ${marginLevel}%\n` +
@@ -97,6 +107,7 @@ export function alertMarginLow(marginLevel: number, critical: boolean): void {
 }
 
 export function alertStateDrift(message: string): void {
+  recordPairsAlert({ severity: 'warn', kind: 'state_drift', message, data: undefined });
   void send(
     `🔄 PAIRS STATE DRIFT\n${message}\n` +
     `Engine and exchange disagree on open positions. Manual review recommended.`,
@@ -104,6 +115,7 @@ export function alertStateDrift(message: string): void {
 }
 
 export function alertExecutorPartialFill(legA: string, legB: string, legAFilled: boolean): void {
+  recordPairsAlert({ severity: 'crit', kind: 'partial_fill', message: `partial fill: ${legAFilled ? legA : legB} filled, ${legAFilled ? legB : legA} did not — emergency close triggered`, data: { legA, legB, legAFilled } });
   void send(
     `🚨 PAIRS PARTIAL FILL\n` +
     `${legAFilled ? legA : legB} filled, ${legAFilled ? legB : legA} did not.\n` +
