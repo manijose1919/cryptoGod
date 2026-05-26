@@ -40,7 +40,17 @@ When you identify clear improvements, implement them:
 - **Always push to both remotes: `git push origin master && git push vps master`**
 - After code changes, restart: `sudo pm2 restart canuck-node`
 
-### 5. Report Generation
+### 5a. Pairs Trading Monitoring (NEW — 2026-05-26)
+Pairs engine is deployed in PAPER MODE (FILUSD/ICPUSD). Every monitoring cycle:
+- Check `[PAIRS]` log lines: engine should produce one per minute. If silent for > 5 min, investigate.
+- Query `v2_pairs_state` for the latest cointegration snapshot. ADF t-stat MUST stay < -2.86. Alert if t > -2.0.
+- Query `v2_pairs_alerts WHERE severity IN ('warn','crit') AND created_at > NOW()-1h` for new alerts.
+- Query `v2_pairs_trades WHERE status='open'` — verify there's exactly 0 or 1 open paper trade.
+- Maintain `data/reports/pairs-status.md` — refresh every cycle. Use the template + the `scripts/generate-pairs-report.sh` helper.
+- See `docs/runbooks/pairs-runbook.md` for failure-mode response procedures.
+- **NEVER** set `PAIRS_MODE=live` or `PAIRS_LIVE_CONFIRMED=yes` without explicit human sign-off. Phase A = 30 days paper.
+
+### 5b. Report Generation
 Maintain an up-to-date report at `data/reports/latest-report.md` that includes:
 
 #### Trading Performance
