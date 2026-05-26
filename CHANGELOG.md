@@ -37,6 +37,68 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-26 13:40 UTC — Historical dedup of v2_trades + baseline reset — local-claude
+
+**Commits:** none (data-only operation on VPS sqlite, no code change)
+**Files changed:** `data/trading.db` (on VPS) — backed up to `data/trading.db.bak-20260526-133821` (2.8 GB)
+**Stats baseline reset:** YES — new baseline `1779802737790` = 2026-05-26 13:38:57 UTC (old baseline was `1778081226430` = 2026-05-06 15:27 UTC)
+
+### What changed
+Marked 78 duplicate rows in `v2_trades` as `status='duplicate'` (previously `'closed'`). For each `(strategy, ticker, entry_price, exit_price)` cluster on BREAKOUT/MOMENTUM/SCALP with 59s avg gap, kept the row with the earliest `entry_time` and marked the rest as duplicate. TREND/SNIPER/MR untouched (no bug on those paths).
+
+| Strategy | Rows marked |
+|---|---:|
+| BREAKOUT | 13 |
+| MOMENTUM | 29 |
+| SCALP | 36 |
+| **Total** | **78** |
+
+Then reset `stats_baseline_time` so post-baseline reports filter to post-fix trading only.
+
+### What the dedup revealed (all-time, deduplicated)
+| Strategy | Trades | Wins | WR | Net | Avg/trade |
+|---|---:|---:|---:|---:|---:|
+| BREAKOUT | 10 | 6 | 60.0% | +$54.47 | +$5.45 |
+| TREND | 160 | 76 | 47.5% | +$8.43 | +$0.05 |
+| SNIPER_KRAKEN | 7 | 3 | 42.9% | +$2.98 | +$0.43 |
+| MOMENTUM | 13 | 2 | 15.4% | -$2.39 | -$0.18 |
+| MEAN_REVERSION | 8 | 0 | 0% | -$16.16 | -$2.02 |
+| SCALP | 50 | 9 | 18.0% | -$37.23 | -$0.75 |
+
+The earlier "post-baseline +$175, MOMENTUM +$64" was inflated by the dup bug. **MOMENTUM's apparent profit was almost entirely the ZECUSD 16-row cluster** at +$10.99 × 16 = ~+$176 of phantom PnL. Real MOMENTUM = 15% WR, slightly negative — same shape as MEAN_REVERSION/SCALP (already disabled). **Only BREAKOUT shows a clean positive signal** (60% WR, +$5.45/trade). **TREND is barely break-even** post-baseline (averaged +$0.05/trade across 160 trades) — its earlier headline numbers also benefited from one dup cluster being filtered out.
+
+### Implications for next tuning sprint
+1. **MOMENTUM is a candidate for disable** — its post-dedup numbers look like SCALP/MR (15% WR, negative). The 88cf359 confidence gate + sizing cap hasn't been enough. Consider disabling or doing another optimization sweep before live-running.
+2. **TREND edge is thinner than it looked** — 160 trades at +$0.05/trade is barely above noise. Worth re-running a backtest against the deduped live data to see if the live-vs-backtest gap is real.
+3. **BREAKOUT is the only clear earner** — small sample (10) but 60% WR is encouraging. Worth a separate post-mortem on the 6 winners to identify the pattern.
+
+### How dedup was performed
+```sql
+BEGIN;
+UPDATE v2_trades SET status = 'duplicate'
+WHERE id IN (
+  SELECT id FROM v2_trades AS t
+  WHERE status = 'closed' AND exit_price IS NOT NULL
+    AND strategy IN ('BREAKOUT','MOMENTUM','SCALP')
+    AND entry_time > (
+      SELECT MIN(entry_time) FROM v2_trades
+      WHERE strategy = t.strategy AND ticker = t.ticker
+        AND entry_price = t.entry_price AND exit_price = t.exit_price
+        AND status IN ('closed','duplicate')
+    )
+);
+COMMIT;
+```
+
+### Rollback
+Restore from `data/trading.db.bak-20260526-133821` (2.8 GB backup taken pre-dedup). To revert the baseline only without dedup rollback: `INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', '1778081226430');`
+
+### What to monitor
+- Reports filtering by post-baseline should now show only post-fix trades — should start at near-zero and accumulate from 2026-05-26 13:38:57 UTC forward.
+- Engine code treats `status` as 'open' / 'closed' (and now 'duplicate'). Verify no queries assume status IN ('open','closed') only and silently drop these (intended) or include them (bug). Quick check: `grep -r "status.*=.*'closed'" v2/` to see if anything counts on dedupd rows.
+
+---
+
 ## 2026-05-26 13:30 UTC — Fix: V2 loop crash (`passedScan is not defined`) + restore per-candle entry guard — local-claude
 
 **Commits:** (this commit; restores 7b0fc2e from yesterday's session that was dropped by a reset+pull)
