@@ -123,6 +123,60 @@ export function withFullEnhancement(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Per-strategy enhancement profile.
+// Phase 1 sweep showed blanket "all-on" hurts strategies with their own
+// filters (DCA cratered −18%, MACD also worsened). Each strategy now declares
+// which wrappers it should get.
+// ---------------------------------------------------------------------------
+export interface EnhancementProfile {
+  confirmation: boolean;
+  htf: boolean;
+  volume: boolean;
+  volumeMultiplier: number;
+}
+
+export const PROFILES: Record<string, EnhancementProfile> = {
+  // Trend-followers: all 3 (already-noisy 1h signals benefit from confirmation).
+  MA_CROSS:    { confirmation: true,  htf: true,  volume: true,  volumeMultiplier: 1.2 },
+  MACD:        { confirmation: false, htf: true,  volume: false, volumeMultiplier: 1.0 },
+  // ↑ MACD has internal zero-cross + acceleration + signal-line filters. Adding
+  //   confirmation + volume gates kills its trade rate. Keep only HTF (cheap).
+
+  // Breakouts: confirmation + volume (volume is already partly in the entry).
+  DONCHIAN_BREAKOUT: { confirmation: true, htf: true, volume: false, volumeMultiplier: 1.0 },
+  // ↑ Donchian entry already requires volZ > 1. Don't double-filter.
+
+  // Mean-reverters: all 3 — these strategies bleed in trends without HTF gate.
+  RSI_REVERSAL:  { confirmation: true, htf: true, volume: true, volumeMultiplier: 1.2 },
+  BOLLINGER_MR:  { confirmation: true, htf: true, volume: true, volumeMultiplier: 1.2 },
+  VOLUME_PROFILE:{ confirmation: true, htf: true, volume: true, volumeMultiplier: 1.2 },
+  CANDLESTICK:   { confirmation: false, htf: true, volume: true, volumeMultiplier: 1.5 },
+  // ↑ Candlestick patterns are already "confirmation" themselves; adding
+  //   confirmation candle would defer entry by 2 bars and miss most setups.
+
+  // VWAP: time-based mean revert; confirmation doesn't fit (we want to enter
+  // on the extreme, not after it). HTF + volume gate are useful.
+  VWAP: { confirmation: false, htf: true, volume: true, volumeMultiplier: 1.3 },
+
+  // GRID: range-strategy. HTF up-trend is fine (grids in uptrend just lean
+  // long), but confirmation/volume gates would block the grid's normal cycle.
+  GRID: { confirmation: false, htf: true, volume: false, volumeMultiplier: 1.0 },
+
+  // DCA: SKIP ALL FILTERS. Its whole purpose is buying on schedule regardless
+  // of conditions. Phase 1 showed DCA dropped from +22% to +3.8% under blanket
+  // enhancement — a regression we now fix.
+  DCA: { confirmation: false, htf: false, volume: false, volumeMultiplier: 1.0 },
+};
+
+export function withProfile(base: CanonicalStrategy, profile: EnhancementProfile): CanonicalStrategy {
+  let s = base;
+  if (profile.confirmation) s = withConfirmation(s);
+  if (profile.htf) s = withHtfFilter(s);
+  if (profile.volume) s = withVolumeGate(s, profile.volumeMultiplier);
+  return s;
+}
+
 // Helpers from indicators are deliberately exposed to satisfy unused-imports.
 export const _utils = { ema, sma } as const;
 // Silence type-only import lint when used elsewhere.

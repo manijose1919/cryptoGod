@@ -17,6 +17,13 @@ import { loadAllCandles } from '../candleCache.ts';
 // @ts-expect-error JS module without types
 import { initializeDatabase } from '../../../services/database.js';
 import { runBacktest } from './runner.ts';
+import { runMultiBacktest } from './multiRunner.ts';
+import { runWalkForward, type WalkForwardResult } from './walkForward.ts';
+
+// Strategies that benefit from a multi-position runner. Currently just Grid.
+const MULTI_POSITION_STRATEGIES: Record<string, number> = {
+  GRID: 5,   // 5 simultaneous grid slots
+};
 import { CANDIDATE_UNIVERSE } from './universe.ts';
 import {
   profileTicker, rankTickers,
@@ -24,7 +31,7 @@ import {
 } from './tickerFitness.ts';
 import { PARAM_GRID } from './sweepParams.ts';
 import { gateStrategy, DEFAULT_ALLOWED_REGIMES, regimeDistribution } from './regimeGate.ts';
-import { withFullEnhancement } from './enhancements.ts';
+import { withFullEnhancement, withProfile, PROFILES } from './enhancements.ts';
 import type { RunResult } from './types.ts';
 import { DEFAULT_EXIT_PROFILE, ENHANCED_EXIT_PROFILE, FEE_ROUND_TRIP as FEE_BY_MODE } from './types.ts';
 
@@ -60,13 +67,20 @@ function buildStrategy(
   base: import('./types.ts').CanonicalStrategy,
   allowedRegimes: import('./regimeGate.ts').Regime[],
   mode: Mode,
+  strategyKey: string,
 ): import('./types.ts').CanonicalStrategy {
   switch (mode) {
     case 'raw': return base;
     case 'gated': return gateStrategy(base, allowedRegimes);
     case 'enhanced':
-    case 'enhanced-maker':
-      return withFullEnhancement(gateStrategy(base, allowedRegimes));
+    case 'enhanced-maker': {
+      // Use per-strategy profile if defined, otherwise default to full
+      // enhancement. PROFILES skips wrappers for strategies (DCA, MACD, etc.)
+      // that have their own filtering.
+      const profile = PROFILES[strategyKey];
+      const gated = gateStrategy(base, allowedRegimes);
+      return profile ? withProfile(gated, profile) : withFullEnhancement(gated);
+    }
   }
 }
 
@@ -139,18 +153,22 @@ async function main(): Promise<void> {
         for (const variant of variants) {
           for (const mode of ['raw', 'gated', 'enhanced', 'enhanced-maker'] as const) {
             const baseStrategy = variant.build();
-            const strategy = buildStrategy(baseStrategy, allowedRegimes, mode);
+            const strategy = buildStrategy(baseStrategy, allowedRegimes, mode, key);
             const useEnhancedExit = (mode === 'enhanced' || mode === 'enhanced-maker');
             const feeRT = (mode === 'enhanced-maker')
               ? FEE_BY_MODE.maker
               : FEE_BY_MODE.taker;
-            const result = runBacktest({
+            const maxConcurrent = MULTI_POSITION_STRATEGIES[key];
+            const runCfg = {
               strategy, ticker, candles,
               startBar, endBar,
               budget: BUDGET, positionPercent: POSITION_PCT,
               feeRoundTrip: feeRT, slippagePerSide: SLIPPAGE_PER_SIDE,
               exitProfile: useEnhancedExit ? ENHANCED_EXIT_PROFILE : DEFAULT_EXIT_PROFILE,
-            });
+            };
+            const result = maxConcurrent
+              ? runMultiBacktest({ ...runCfg, maxConcurrent })
+              : runBacktest(runCfg);
             result.windowDays = days;
             rows.push({
               strategy: key, ticker, paramLabel: variant.label,
@@ -163,6 +181,33 @@ async function main(): Promise<void> {
     }
   }
   console.log(`  Completed ${totalRuns} backtests\n`);
+
+  // --- Walk-forward validation on top candidates ---
+  // For each (strategy × top-ticker × window), pick best IS params and check
+  // OOS performance. Skips strategies that produce <3 IS trades.
+  console.log('Walk-forward validation (60/40 IS/OOS split)...');
+  const walkResults: WalkForwardResult[] = [];
+  for (const key of ALL_STRATEGY_KEYS) {
+    const ranking = rankings[key];
+    for (const { ticker } of ranking.ranked) {
+      const candles = candleMap.get(ticker);
+      if (!candles) continue;
+      for (const days of WINDOWS_DAYS) {
+        const wf = runWalkForward({
+          strategy: key, ticker, candles,
+          windowEndBar: candles.length,
+          windowDays: days,
+          budget: BUDGET, positionPercent: POSITION_PCT,
+          slippagePerSide: SLIPPAGE_PER_SIDE,
+          isFraction: 0.6,
+          minTradesInSample: 3,
+        });
+        if (wf) walkResults.push(wf);
+      }
+    }
+  }
+  console.log(`  Walk-forward complete: ${walkResults.length} results\n`);
+
 
   // --- Write outputs ---
   const outDir = join('v2', 'backtest', 'canonical', 'results');
@@ -197,7 +242,7 @@ async function main(): Promise<void> {
   writeFileSync(join(outDir, `sweep-${stamp}.json`), JSON.stringify(jsonPayload, null, 2));
   writeFileSync(join(outDir, 'sweep-latest.json'), JSON.stringify(jsonPayload, null, 2));
 
-  const md = renderReport(profiles, rankings, rows, candleMap, endDate);
+  const md = renderReport(profiles, rankings, rows, candleMap, endDate, walkResults);
   writeFileSync(join(outDir, `sweep-${stamp}.md`), md);
   writeFileSync(join(outDir, 'sweep-latest.md'), md);
 
@@ -210,6 +255,7 @@ function renderReport(
   rows: SweepRow[],
   candleMap: Map<string, import('../../pipeline/types.ts').Candle[]>,
   endDate: Date,
+  walkResults: WalkForwardResult[],
 ): string {
   const out: string[] = [];
   out.push('# Full Strategy Sweep — Results');
@@ -373,8 +419,52 @@ function renderReport(
   }
   out.push('');
 
-  // --- Section 7: methodology notes ---
-  out.push('## 7. Methodology notes');
+  // --- Section 7: walk-forward validation ---
+  out.push('## 7. Walk-forward validation (60% IS / 40% OOS split)');
+  out.push('');
+  out.push('For each (strategy × top-ticker × window), the best param+mode combo is selected on the first 60% of the window (in-sample), then re-tested on the last 40% (out-of-sample). Large gap from IS to OOS = overfitting risk. Sign flip (IS+ → OOS−) = catastrophic. Skipped runs had <3 IS trades.');
+  out.push('');
+  out.push('Top OOS results (≥ 3 OOS trades), sorted by OOS Net %:');
+  out.push('');
+  const wfTop = walkResults
+    .filter(w => w.oosResult.totalTrades >= 3)
+    .sort((a, b) => b.oosResult.totalPnlPercent - a.oosResult.totalPnlPercent)
+    .slice(0, 25);
+  if (wfTop.length === 0) {
+    out.push('_No walk-forward results survived the 3-trade OOS minimum._');
+  } else {
+    out.push('| Strategy | Ticker | Window | Best params/mode | IS Net % | OOS Net % | Fragility | IS trades | OOS trades |');
+    out.push('|---|---|---:|---|---:|---:|---:|---:|---:|');
+    for (const w of wfTop) {
+      out.push(
+        `| ${w.strategy} | ${w.ticker} | ${w.windowDays}d | ${w.bestParamLabel}/${w.bestMode} | ` +
+        `${w.isResult.totalPnlPercent.toFixed(2)} | ${w.oosResult.totalPnlPercent.toFixed(2)} | ` +
+        `${formatFragility(w.fragility)} | ${w.isResult.totalTrades} | ${w.oosResult.totalTrades} |`,
+      );
+    }
+  }
+  out.push('');
+  out.push('Worst IS→OOS collapses (sorted by fragility, most negative first):');
+  out.push('');
+  const wfCollapses = walkResults
+    .filter(w => w.isResult.totalPnlPercent > 1 && w.oosResult.totalTrades >= 1)
+    .sort((a, b) => a.fragility - b.fragility)
+    .slice(0, 10);
+  if (wfCollapses.length > 0) {
+    out.push('| Strategy | Ticker | Window | Best params/mode | IS Net % | OOS Net % | Fragility |');
+    out.push('|---|---|---:|---|---:|---:|---:|');
+    for (const w of wfCollapses) {
+      out.push(
+        `| ${w.strategy} | ${w.ticker} | ${w.windowDays}d | ${w.bestParamLabel}/${w.bestMode} | ` +
+        `${w.isResult.totalPnlPercent.toFixed(2)} | ${w.oosResult.totalPnlPercent.toFixed(2)} | ` +
+        `${formatFragility(w.fragility)} |`,
+      );
+    }
+  }
+  out.push('');
+
+  // --- Section 8: methodology notes ---
+  out.push('## 8. Methodology notes');
   out.push('');
   out.push('- **Ticker selection is closed-form, not backtest-driven.** Picking optimal tickers from backtest results would be circular (overfitting to history). Instead, each ticker is scored by structural properties (Hurst exponent, ATR%, drift, vol-of-volume, range-bound score) against each strategy\'s theoretical requirements.');
   out.push('- **Single-position long-only.** The runner holds at most one position at a time per (strategy × ticker × params). Live deployment would parallelize.');
@@ -390,6 +480,11 @@ function renderReport(
 function formatPF(pf: number): string {
   if (!Number.isFinite(pf)) return 'inf';
   return pf.toFixed(2);
+}
+function formatFragility(f: number): string {
+  if (f === 0) return '—';
+  if (f === -1) return 'sign-flip';
+  return f.toFixed(2);
 }
 function formatMoney(v: number): string {
   if (v >= 1e9) return `${(v / 1e9).toFixed(1)}B`;

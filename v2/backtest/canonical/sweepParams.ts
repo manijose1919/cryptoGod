@@ -11,6 +11,10 @@ import {
   makeDca, makeGrid, makeVwap, makeVolumeProfile, makeCandlestick,
   DCA_DEFAULTS, GRID_DEFAULTS, VWAP_DEFAULTS, VP_DEFAULTS, CANDLESTICK_DEFAULTS,
 } from './moreStrategies.ts';
+import {
+  makeMacdDivergence, makeDonchianPullback,
+  MACD_DIV_DEFAULTS, DONCHIAN_PB_DEFAULTS,
+} from './advancedStrategies.ts';
 import type { StrategyFitnessKey } from './tickerFitness.ts';
 
 export interface ParamVariant {
@@ -46,14 +50,18 @@ export const PARAM_GRID: Record<StrategyFitnessKey, ParamVariant[]> = {
     { label: 'default(12/26/9)', build: () => makeMacd(MACD_DEFAULTS) },
     { label: 'macdAboveZero', build: () => makeMacd({ ...MACD_DEFAULTS, requireMacdAboveZero: true }) },
     { label: 'wideStop(2.5atr)', build: () => makeMacd({ ...MACD_DEFAULTS, atrStopMult: 2.5 }) },
-    { label: 'tightDecay(0.3)', build: () => makeMacd({ ...MACD_DEFAULTS, histDecayPct: 0.3 }) },
+    // Phase 2: real divergence detection (replaces zero-cross only)
+    { label: 'divergence', build: () => makeMacdDivergence(MACD_DIV_DEFAULTS) },
+    { label: 'divergence-loose', build: () => makeMacdDivergence({ ...MACD_DIV_DEFAULTS, requireHistNegative: false }) },
   ],
 
   DONCHIAN_BREAKOUT: [
     { label: 'default(20)', build: () => makeDonchianBreakout(DONCHIAN_DEFAULTS) },
     { label: 'long(30)', build: () => makeDonchianBreakout({ ...DONCHIAN_DEFAULTS, lookback: 30 }) },
-    { label: 'long(50)', build: () => makeDonchianBreakout({ ...DONCHIAN_DEFAULTS, lookback: 50 }) },
     { label: 'highVol(z2)', build: () => makeDonchianBreakout({ ...DONCHIAN_DEFAULTS, volZThreshold: 2.0 }) },
+    // Phase 2: pullback entry variants
+    { label: 'pullback(20)', build: () => makeDonchianPullback(DONCHIAN_PB_DEFAULTS) },
+    { label: 'pullback(30)', build: () => makeDonchianPullback({ ...DONCHIAN_PB_DEFAULTS, lookback: 30, maxWaitBars: 12 }) },
   ],
 
   DCA: [
