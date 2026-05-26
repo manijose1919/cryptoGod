@@ -19,6 +19,7 @@ import { initializeDatabase } from '../../../services/database.js';
 import { runBacktest } from './runner.ts';
 import { runMultiBacktest } from './multiRunner.ts';
 import { runWalkForward, type WalkForwardResult } from './walkForward.ts';
+import { runPairsSweep, renderPairsReportSection, type PairsSweepOutput } from './pairs/pairsSweep.ts';
 
 // Strategies that benefit from a multi-position runner. Currently just Grid.
 const MULTI_POSITION_STRATEGIES: Record<string, number> = {
@@ -208,6 +209,9 @@ async function main(): Promise<void> {
   }
   console.log(`  Walk-forward complete: ${walkResults.length} results\n`);
 
+  // --- Pairs sweep (separate orchestrator, its own report section) ---
+  const pairsOutput = runPairsSweep(candleMap, WINDOWS_DAYS, endDate, { topPairs: 8 });
+
 
   // --- Write outputs ---
   const outDir = join('v2', 'backtest', 'canonical', 'results');
@@ -242,7 +246,7 @@ async function main(): Promise<void> {
   writeFileSync(join(outDir, `sweep-${stamp}.json`), JSON.stringify(jsonPayload, null, 2));
   writeFileSync(join(outDir, 'sweep-latest.json'), JSON.stringify(jsonPayload, null, 2));
 
-  const md = renderReport(profiles, rankings, rows, candleMap, endDate, walkResults);
+  const md = renderReport(profiles, rankings, rows, candleMap, endDate, walkResults, pairsOutput);
   writeFileSync(join(outDir, `sweep-${stamp}.md`), md);
   writeFileSync(join(outDir, 'sweep-latest.md'), md);
 
@@ -256,6 +260,7 @@ function renderReport(
   candleMap: Map<string, import('../../pipeline/types.ts').Candle[]>,
   endDate: Date,
   walkResults: WalkForwardResult[],
+  pairsOutput: PairsSweepOutput,
 ): string {
   const out: string[] = [];
   out.push('# Full Strategy Sweep — Results');
@@ -463,8 +468,11 @@ function renderReport(
   }
   out.push('');
 
-  // --- Section 8: methodology notes ---
-  out.push('## 8. Methodology notes');
+  // --- Section 8: pairs trading ---
+  renderPairsReportSection(out, pairsOutput);
+
+  // --- Section 9 (was 8): methodology notes ---
+  out.push('## 10. Methodology notes');
   out.push('');
   out.push('- **Ticker selection is closed-form, not backtest-driven.** Picking optimal tickers from backtest results would be circular (overfitting to history). Instead, each ticker is scored by structural properties (Hurst exponent, ATR%, drift, vol-of-volume, range-bound score) against each strategy\'s theoretical requirements.');
   out.push('- **Single-position long-only.** The runner holds at most one position at a time per (strategy × ticker × params). Live deployment would parallelize.');
