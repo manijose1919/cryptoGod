@@ -1,0 +1,214 @@
+# Full Strategy Sweep — Results
+Generated: 2026-05-26T14:23:47.041Z
+
+- Universe: 25 tickers
+- Strategies: 10 (DCA, Grid, VWAP, Vol Profile, Candlestick added; Pairs and Chart Patterns deferred)
+- Per-strategy top-N tickers: 4
+- Windows: 30d, 60d, 90d
+- Interval: 1h
+- Fees: 0.52% round-trip; slippage 0.05%/side
+
+## 1. Ticker characteristics (90d)
+
+| Ticker | Bars | Hurst | RealVol % | ATR % | Drift % | VolStdRatio | RangeBound | TrendScore |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| FETUSD | 2160 | 0.538 | 94.4 | 1.46 | 51.0 | 1.10 | 0.00 | 0.076 |
+| ICPUSD | 2160 | 0.555 | 88.7 | 1.19 | 19.6 | 1.30 | 0.00 | 0.072 |
+| NEARUSD | 2160 | 0.557 | 86.5 | 1.25 | 158.4 | 1.53 | 0.00 | 0.113 |
+| INJUSD | 2160 | 0.581 | 86.3 | 1.19 | 83.7 | 1.48 | 0.00 | 0.162 |
+| FILUSD | 2160 | 0.557 | 81.0 | 1.08 | -2.2 | 1.72 | 0.00 | 0.009 |
+| COMPUSD | 2160 | 0.570 | 76.4 | 1.00 | 3.3 | 1.83 | 0.00 | 0.015 |
+| ALGOUSD | 2160 | 0.573 | 75.4 | 1.12 | 23.9 | 1.44 | 0.00 | 0.117 |
+| RUNEUSD | 2160 | 0.578 | 75.2 | 0.84 | 8.6 | 3.08 | 0.00 | 0.044 |
+| AAVEUSD | 2160 | 0.574 | 73.4 | 1.07 | -27.2 | 1.48 | 0.00 | 0.134 |
+| DOTUSD | 2160 | 0.566 | 68.7 | 1.02 | -15.0 | 1.38 | 0.00 | 0.066 |
+| UNIUSD | 2160 | 0.575 | 66.5 | 0.96 | -14.6 | 1.45 | 0.00 | 0.073 |
+| DOGEUSD | 2160 | 0.570 | 60.6 | 0.91 | 1.1 | 0.96 | 0.00 | 0.005 |
+| AVAXUSD | 2160 | 0.562 | 59.6 | 0.85 | -0.8 | 1.04 | 0.00 | 0.003 |
+| ADAUSD | 2160 | 0.564 | 58.6 | 0.90 | -15.3 | 0.95 | 0.00 | 0.065 |
+| SOLUSD | 2160 | 0.568 | 56.8 | 0.86 | -0.7 | 1.00 | 0.00 | 0.003 |
+| LINKUSD | 2160 | 0.583 | 56.8 | 0.86 | 3.9 | 0.91 | 0.00 | 0.021 |
+| ATOMUSD | 2160 | 0.559 | 56.5 | 0.84 | 8.9 | 1.10 | 0.00 | 0.035 |
+| SHIBUSD | 2160 | 0.548 | 56.4 | 0.82 | -10.4 | 0.98 | 0.00 | 0.033 |
+| ETHUSD | 2160 | 0.591 | 54.4 | 0.81 | 5.5 | 1.10 | 0.00 | 0.033 |
+| HBARUSD | 2160 | 0.547 | 51.3 | 0.78 | -12.5 | 0.83 | 0.00 | 0.039 |
+| XRPUSD | 2160 | 0.567 | 49.5 | 0.75 | -6.0 | 0.99 | 0.00 | 0.027 |
+| BCHUSD | 2160 | 0.580 | 49.0 | 0.64 | -32.0 | 1.78 | 0.00 | 0.161 |
+| MKRUSD | 2160 | 0.511 | 47.6 | 0.03 | 28.6 | 16.79 | 0.00 | 0.021 |
+| LTCUSD | 2160 | 0.550 | 42.6 | 0.64 | -8.5 | 0.65 | 0.00 | 0.028 |
+| BTCUSD | 2160 | 0.580 | 41.4 | 0.62 | 14.4 | 1.11 | 0.00 | 0.077 |
+
+## 2. Optimal tickers per strategy (by fitness — closed-form, NOT backtest)
+
+Tickers selected by matching their structural properties (Hurst, vol, drift) to each strategy's theoretical requirements.
+This avoids overfitting that would result from picking by backtest results.
+
+### MA_CROSS
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | INJUSD | 0.162 | 0.581 | 1.19 | 83.7 | 0.00 | 106.1K |
+| 2 | BCHUSD | 0.161 | 0.580 | 0.64 | -32.0 | 0.00 | 236.3K |
+| 3 | AAVEUSD | 0.134 | 0.574 | 1.07 | -27.2 | 0.00 | 234.1K |
+| 4 | ALGOUSD | 0.117 | 0.573 | 1.12 | 23.9 | 0.00 | 128.6K |
+
+### RSI_REVERSAL
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | FILUSD | 0.762 | 0.557 | 1.08 | -2.2 | 0.00 | 72.6K |
+| 2 | ICPUSD | 0.718 | 0.555 | 1.19 | 19.6 | 0.00 | 156.9K |
+| 3 | COMPUSD | 0.712 | 0.570 | 1.00 | 3.3 | 0.00 | 27.9K |
+| 4 | AVAXUSD | 0.703 | 0.562 | 0.85 | -0.8 | 0.00 | 365.3K |
+
+### BOLLINGER_MR
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | FILUSD | 0.762 | 0.557 | 1.08 | -2.2 | 0.00 | 72.6K |
+| 2 | ICPUSD | 0.718 | 0.555 | 1.19 | 19.6 | 0.00 | 156.9K |
+| 3 | COMPUSD | 0.712 | 0.570 | 1.00 | 3.3 | 0.00 | 27.9K |
+| 4 | AVAXUSD | 0.703 | 0.562 | 0.85 | -0.8 | 0.00 | 365.3K |
+
+### MACD
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | INJUSD | 0.241 | 0.581 | 1.19 | 83.7 | 0.00 | 106.1K |
+| 2 | AAVEUSD | 0.180 | 0.574 | 1.07 | -27.2 | 0.00 | 234.1K |
+| 3 | NEARUSD | 0.170 | 0.557 | 1.25 | 158.4 | 0.00 | 381.7K |
+| 4 | ALGOUSD | 0.164 | 0.573 | 1.12 | 23.9 | 0.00 | 128.6K |
+
+### DONCHIAN_BREAKOUT
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | RUNEUSD | 2.583 | 0.578 | 0.84 | 8.6 | 0.00 | 3.8K |
+| 2 | COMPUSD | 1.830 | 0.570 | 1.00 | 3.3 | 0.00 | 27.9K |
+| 3 | FILUSD | 1.723 | 0.557 | 1.08 | -2.2 | 0.00 | 72.6K |
+| 4 | NEARUSD | 1.525 | 0.557 | 1.25 | 158.4 | 0.00 | 381.7K |
+
+### DCA
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | NEARUSD | 3.426 | 0.557 | 1.25 | 158.4 | 0.00 | 381.7K |
+| 2 | INJUSD | 1.804 | 0.581 | 1.19 | 83.7 | 0.00 | 106.1K |
+| 3 | FETUSD | 1.203 | 0.538 | 1.46 | 51.0 | 0.00 | 196.3K |
+| 4 | ALGOUSD | 0.451 | 0.573 | 1.12 | 23.9 | 0.00 | 128.6K |
+
+### GRID
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | FILUSD | 1.324 | 0.557 | 1.08 | -2.2 | 0.00 | 72.6K |
+| 2 | ICPUSD | 1.291 | 0.555 | 1.19 | 19.6 | 0.00 | 156.9K |
+| 3 | COMPUSD | 1.237 | 0.570 | 1.00 | 3.3 | 0.00 | 27.9K |
+| 4 | FETUSD | 1.187 | 0.538 | 1.46 | 51.0 | 0.00 | 196.3K |
+
+### VWAP
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | BTCUSD | 0.670 | 0.580 | 0.62 | 14.4 | 0.00 | 49.3M |
+| 2 | ETHUSD | 0.488 | 0.591 | 0.81 | 5.5 | 0.00 | 22.1M |
+| 3 | XRPUSD | 0.397 | 0.567 | 0.75 | -6.0 | 0.00 | 7.1M |
+| 4 | SOLUSD | 0.346 | 0.568 | 0.86 | -0.7 | 0.00 | 5.3M |
+
+### VOLUME_PROFILE
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | RUNEUSD | 0.538 | 0.578 | 0.84 | 8.6 | 0.00 | 3.8K |
+| 2 | FILUSD | 0.352 | 0.557 | 1.08 | -2.2 | 0.00 | 72.6K |
+| 3 | COMPUSD | 0.339 | 0.570 | 1.00 | 3.3 | 0.00 | 27.9K |
+| 4 | NEARUSD | 0.312 | 0.557 | 1.25 | 158.4 | 0.00 | 381.7K |
+
+### CANDLESTICK
+| Rank | Ticker | Fitness | Hurst | ATR % | Drift % | RangeBound | Liquidity ($/bar) |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 1 | BTCUSD | 3.110 | 0.580 | 0.62 | 14.4 | 0.00 | 49.3M |
+| 2 | ETHUSD | 2.295 | 0.591 | 0.81 | 5.5 | 0.00 | 22.1M |
+| 3 | XRPUSD | 1.571 | 0.567 | 0.75 | -6.0 | 0.00 | 7.1M |
+| 4 | SOLUSD | 1.310 | 0.568 | 0.86 | -0.7 | 0.00 | 5.3M |
+
+## 3. Regime distribution (sanity check on the test windows)
+
+Each window's regime mix on BTCUSD — gives context for why gated/raw results differ.
+
+| Window | % UP | % DOWN | % RANGE |
+|---|---:|---:|---:|
+| 30d | 29 | 21 | 50 |
+| 60d | 38 | 18 | 44 |
+| 90d | 37 | 19 | 44 |
+
+## 4. Top profitable backtest cells (any window)
+
+Filtered to runs with ≥ 5 trades. Sorted by Net %.
+
+| Strategy | Ticker | Params | Window | Gating | Trades | WR % | PF | Net % | DD % |
+|---|---|---|---:|---|---:|---:|---:|---:|---:|
+| DCA | NEARUSD | daily | 90d | raw | 11 | 100.0 | inf | 61.66 | 0.0 |
+| DCA | NEARUSD | daily | 90d | gated | 11 | 100.0 | inf | 61.66 | 0.0 |
+| DCA | NEARUSD | daily | 60d | raw | 10 | 100.0 | inf | 54.42 | 0.0 |
+| DCA | NEARUSD | daily | 60d | gated | 10 | 100.0 | inf | 54.42 | 0.0 |
+| DCA | NEARUSD | tightTP(5%) | 90d | raw | 16 | 100.0 | inf | 41.37 | 0.0 |
+| DCA | NEARUSD | tightTP(5%) | 90d | gated | 16 | 100.0 | inf | 41.37 | 0.0 |
+| DCA | NEARUSD | daily | 30d | raw | 8 | 100.0 | inf | 40.91 | 0.0 |
+| DCA | NEARUSD | daily | 30d | gated | 8 | 100.0 | inf | 40.91 | 0.0 |
+| DCA | NEARUSD | tightTP(5%) | 60d | raw | 15 | 100.0 | inf | 38.35 | 0.0 |
+| DCA | NEARUSD | tightTP(5%) | 60d | gated | 15 | 100.0 | inf | 38.35 | 0.0 |
+| DCA | INJUSD | tightTP(5%) | 60d | raw | 13 | 100.0 | inf | 32.49 | 0.0 |
+| DCA | INJUSD | tightTP(5%) | 60d | gated | 13 | 100.0 | inf | 32.49 | 0.0 |
+| MACD | NEARUSD | macdAboveZero | 30d | raw | 9 | 66.7 | 9.74 | 32.26 | 3.3 |
+| DCA | INJUSD | daily | 60d | raw | 6 | 100.0 | inf | 31.62 | 0.0 |
+| DCA | INJUSD | daily | 60d | gated | 6 | 100.0 | inf | 31.62 | 0.0 |
+| DCA | INJUSD | daily | 90d | raw | 6 | 100.0 | inf | 31.62 | 0.0 |
+| DCA | INJUSD | daily | 90d | gated | 6 | 100.0 | inf | 31.62 | 0.0 |
+| DCA | FETUSD | tightTP(5%) | 90d | raw | 13 | 92.3 | 446.07 | 29.58 | 0.1 |
+| DCA | FETUSD | tightTP(5%) | 90d | gated | 13 | 92.3 | 446.07 | 29.58 | 0.1 |
+| DCA | NEARUSD | tightTP(5%) | 30d | raw | 11 | 100.0 | inf | 26.88 | 0.0 |
+| DCA | NEARUSD | tightTP(5%) | 30d | gated | 11 | 100.0 | inf | 26.88 | 0.0 |
+| DCA | INJUSD | tightTP(5%) | 90d | raw | 11 | 100.0 | inf | 26.88 | 0.0 |
+| DCA | INJUSD | tightTP(5%) | 90d | gated | 11 | 100.0 | inf | 26.88 | 0.0 |
+| MACD | NEARUSD | macdAboveZero | 60d | raw | 20 | 45.0 | 3.48 | 26.28 | 7.0 |
+| DCA | FETUSD | daily | 90d | raw | 6 | 83.3 | 47.75 | 25.19 | 0.4 |
+| DCA | FETUSD | daily | 90d | gated | 6 | 83.3 | 47.75 | 25.19 | 0.4 |
+| MACD | NEARUSD | macdAboveZero | 90d | raw | 29 | 41.4 | 2.67 | 23.70 | 7.3 |
+| MACD | NEARUSD | macdAboveZero | 30d | gated | 7 | 57.1 | 7.21 | 20.95 | 3.3 |
+| MACD | NEARUSD | default(12/26/9) | 30d | gated | 8 | 50.0 | 5.55 | 19.75 | 4.3 |
+| MACD | NEARUSD | tightDecay(0.3) | 30d | gated | 8 | 50.0 | 5.55 | 19.75 | 4.3 |
+
+## 5. Gated vs Raw — does the regime filter help?
+
+Per-strategy comparison: average Net % across all (ticker × params × window) cells with gating on vs off. Positive delta = gate helps.
+
+| Strategy | Raw avg Net % | Gated avg Net % | Δ (gain from gate) | Raw avg trades | Gated avg trades |
+|---|---:|---:|---:|---:|---:|
+| MA_CROSS | -1.05 | -0.24 | 0.81 | 1.4 | 0.3 |
+| RSI_REVERSAL | -7.93 | -5.19 | 2.73 | 21.9 | 12.2 |
+| BOLLINGER_MR | -8.36 | -4.18 | 4.18 | 23.5 | 11.8 |
+| MACD | 0.80 | 3.14 | 2.34 | 43.5 | 12.8 |
+| DONCHIAN_BREAKOUT | -5.41 | -5.28 | 0.13 | 25.1 | 22.4 |
+| DCA | 22.46 | 22.46 | 0.00 | 5.8 | 5.8 |
+| GRID | -12.07 | -6.91 | 5.16 | 22.1 | 13.9 |
+| VWAP | -29.39 | -24.33 | 5.05 | 127.0 | 96.7 |
+| VOLUME_PROFILE | -21.92 | -14.22 | 7.70 | 64.4 | 32.0 |
+| CANDLESTICK | -14.91 | -11.64 | 3.26 | 53.1 | 40.1 |
+
+## 6. Per-strategy best & roll-up
+
+Best cell = best Net % across (ticker × params × window × gating) with ≥ 5 trades.
+
+| Strategy | Best Cell | Net % | PF | Trades | WR % | Total runs | Profitable runs (%) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| MA_CROSS | AAVEUSD/looseGap/90d/raw | -2.02 | 0.59 | 7 | 14.3 | 96 | 0% |
+| RSI_REVERSAL | AVAXUSD/tight(25)/60d/raw | 3.15 | 2.61 | 5 | 60.0 | 96 | 5% |
+| BOLLINGER_MR | ICPUSD/default(20,2)/90d/gated | 1.27 | 1.13 | 22 | 59.1 | 96 | 6% |
+| MACD | NEARUSD/macdAboveZero/30d/raw | 32.26 | 9.74 | 9 | 66.7 | 96 | 46% |
+| DONCHIAN_BREAKOUT | RUNEUSD/long(30)/30d/raw | 5.19 | 2.95 | 11 | 63.6 | 96 | 28% |
+| DCA | NEARUSD/daily/90d/raw | 61.66 | inf | 11 | 100.0 | 72 | 44% |
+| GRID | FETUSD/wide(3%)/60d/gated | 6.59 | 1.91 | 11 | 81.8 | 72 | 6% |
+| VWAP | ETHUSD/tight(-2σ)/30d/gated | -4.39 | 0.17 | 15 | 6.7 | 72 | 0% |
+| VOLUME_PROFILE | RUNEUSD/tight(48,30,80%)/30d/gated | 1.77 | 1.35 | 7 | 28.6 | 72 | 3% |
+| CANDLESTICK | SOLUSD/tighter(1%)/30d/gated | -0.66 | 0.64 | 7 | 71.4 | 72 | 0% |
+
+## 7. Methodology notes
+
+- **Ticker selection is closed-form, not backtest-driven.** Picking optimal tickers from backtest results would be circular (overfitting to history). Instead, each ticker is scored by structural properties (Hurst exponent, ATR%, drift, vol-of-volume, range-bound score) against each strategy's theoretical requirements.
+- **Single-position long-only.** The runner holds at most one position at a time per (strategy × ticker × params). Live deployment would parallelize.
+- **Next-bar fill, no lookahead.** Signal closes on bar `i`, fill on bar `i+1` open. Mirrors live execution.
+- **Fees and slippage applied per side.** Kraken taker round-trip (0.52%) plus 5 bps slippage per side. Maker-rebate scenarios would shift many strategies positive.
+- **Stop-first intrabar resolution.** When both stop and target are touched within the same bar, the stop is assumed first (conservative).
+- **Skipped:** Pairs Trading (#11 — needs cointegration logic), Chart Patterns (#20 — needs swing detection). These have meaningfully different structure and deserve their own sessions.

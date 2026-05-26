@@ -1,214 +1,260 @@
-// The 5 canonical strategies, implemented pure-textbook per the strategy
-// blueprint. No regime gates, composite scoring, or portfolio-level guards —
-// these are deliberately stripped down so each strategy's raw edge is
-// measured. Live trading would layer on additional filters.
+// The 5 base strategies, now parameterized. Each is a factory that takes a
+// params object and returns a CanonicalStrategy. This lets the sweep engine
+// iterate parameter combinations without copy-pasting strategy code.
 //
-// Convention: each evaluateEntry inspects the *closed* bar at index i and
-// emits an entry decision (with stop/target) to be executed at the OPEN of
-// bar i+1. The runner handles the next-bar fill to avoid lookahead.
+// Defaults are chosen to match the original canonical implementation so the
+// pre-sweep baseline is recoverable.
 
 import type { CanonicalStrategy, EntryDecision, StrategyContext } from './types.ts';
-import { ema, rsi, sma, stdev, atr, macd, donchianHigh, donchianLow, volumeZ } from './indicators.ts';
+import { ema, rsi, sma, stdev, atr, macd, donchianHigh, volumeZ } from './indicators.ts';
 
 const NO_ENTRY: EntryDecision = { enter: false, stop: 0, target: 0, reason: '' };
 
 // ---------------------------------------------------------------------------
-// 1. MA Crossover (Blueprint #4): EMA(12) crosses above EMA(26) on close.
-//    Filter: |fast - slow| / price > 0.3% to avoid pinwheel whipsaws.
-//    Stop:   entry - 1.5 × ATR(14). No fixed TP — trail with EMA(26).
+// 1. MA Crossover
 // ---------------------------------------------------------------------------
-export const maCrossover: CanonicalStrategy = {
-  name: 'MA_CROSS',
-  warmupBars: 30,
-  evaluateEntry(ctx: StrategyContext): EntryDecision {
-    const { candles, i } = ctx;
-    if (i < 30) return NO_ENTRY;
-    const closes = candles.slice(0, i + 1).map(c => c.close);
-    const ef = ema(closes, 12);
-    const es = ema(closes, 26);
-    const a = atr(candles.slice(0, i + 1), 14);
-    const price = candles[i].close;
-    const crossedUp = ef[i - 1] <= es[i - 1] && ef[i] > es[i];
-    const gapPct = Math.abs(ef[i] - es[i]) / price;
-    if (!crossedUp || gapPct < 0.003) return NO_ENTRY;
-    const atrAbs = a[i];
-    if (!Number.isFinite(atrAbs) || atrAbs <= 0) return NO_ENTRY;
-    return {
-      enter: true,
-      stop: price - 1.5 * atrAbs,
-      target: 0,
-      reason: `cross_up gap=${(gapPct * 100).toFixed(2)}%`,
-    };
-  },
-  updateStop(ctx, _entryPrice, currentStop, _peak) {
-    // Trail with EMA(26) below; ratchet up only.
-    const closes = ctx.candles.slice(0, ctx.i + 1).map(c => c.close);
-    const es = ema(closes, 26);
-    const candidate = es[ctx.i];
-    return Number.isFinite(candidate) && candidate > currentStop ? candidate : currentStop;
-  },
+export interface MACrossParams {
+  fastPeriod: number;       // default 12
+  slowPeriod: number;       // default 26
+  minGapPct: number;        // default 0.003 (0.3%)
+  atrStopMult: number;      // default 1.5
+  atrPeriod: number;        // default 14
+  trailWithSlow: boolean;   // default true
+}
+
+export const MA_CROSS_DEFAULTS: MACrossParams = {
+  fastPeriod: 12, slowPeriod: 26, minGapPct: 0.003,
+  atrStopMult: 1.5, atrPeriod: 14, trailWithSlow: true,
 };
 
-// ---------------------------------------------------------------------------
-// 2. RSI Reversal (Blueprint #6) — RANGE-regime variant only.
-//    Entry: RSI(14) crosses UP through 30 AND price is within range.
-//    Range proxy: |close - SMA(50)| / SMA(50) < 5% AND ATR%(14) > 0.5%.
-//    Stop:  swing low of last 5 bars - 0.5 × ATR. Target: SMA(50).
-// ---------------------------------------------------------------------------
-export const rsiReversal: CanonicalStrategy = {
-  name: 'RSI_REVERSAL',
-  warmupBars: 55,
-  evaluateEntry(ctx): EntryDecision {
-    const { candles, i } = ctx;
-    if (i < 55) return NO_ENTRY;
-    const closes = candles.slice(0, i + 1).map(c => c.close);
-    const r = rsi(closes, 14);
-    const s50 = sma(closes, 50);
-    const a = atr(candles.slice(0, i + 1), 14);
-    const price = candles[i].close;
-    const crossedUp = r[i - 1] <= 30 && r[i] > 30;
-    if (!crossedUp) return NO_ENTRY;
-    const distToMean = Math.abs(price - s50[i]) / s50[i];
-    const atrPct = a[i] / price;
-    if (distToMean > 0.05) return NO_ENTRY;     // not in range
-    if (atrPct < 0.005) return NO_ENTRY;        // too quiet, no edge
-    let swingLow = Infinity;
-    for (let k = i - 4; k <= i; k++) if (candles[k].low < swingLow) swingLow = candles[k].low;
-    const stop = swingLow - 0.5 * a[i];
-    const target = s50[i];
-    if (target <= price) return NO_ENTRY;       // require room to target
-    return {
-      enter: true,
-      stop,
-      target,
-      reason: `rsi_up r=${r[i].toFixed(1)} distMA=${(distToMean * 100).toFixed(1)}%`,
-    };
-  },
-  // No trailing — mean-reversion exits at target or stop.
-};
+export function makeMaCrossover(p: MACrossParams = MA_CROSS_DEFAULTS): CanonicalStrategy {
+  return {
+    name: 'MA_CROSS',
+    warmupBars: p.slowPeriod + 5,
+    evaluateEntry(ctx: StrategyContext): EntryDecision {
+      const { candles, i } = ctx;
+      if (i < p.slowPeriod + 5) return NO_ENTRY;
+      const closes = candles.slice(0, i + 1).map(c => c.close);
+      const ef = ema(closes, p.fastPeriod);
+      const es = ema(closes, p.slowPeriod);
+      const a = atr(candles.slice(0, i + 1), p.atrPeriod);
+      const price = candles[i].close;
+      const crossedUp = ef[i - 1] <= es[i - 1] && ef[i] > es[i];
+      const gapPct = Math.abs(ef[i] - es[i]) / price;
+      if (!crossedUp || gapPct < p.minGapPct) return NO_ENTRY;
+      const atrAbs = a[i];
+      if (!Number.isFinite(atrAbs) || atrAbs <= 0) return NO_ENTRY;
+      return {
+        enter: true,
+        stop: price - p.atrStopMult * atrAbs,
+        target: 0,
+        reason: `cross gap=${(gapPct * 100).toFixed(2)}%`,
+      };
+    },
+    updateStop: p.trailWithSlow
+      ? (ctx, _entry, currentStop) => {
+          const closes = ctx.candles.slice(0, ctx.i + 1).map(c => c.close);
+          const es = ema(closes, p.slowPeriod);
+          const candidate = es[ctx.i];
+          return Number.isFinite(candidate) && candidate > currentStop ? candidate : currentStop;
+        }
+      : undefined,
+  };
+}
 
 // ---------------------------------------------------------------------------
-// 3. Bollinger Mean Reversion (Blueprint #7).
-//    Entry: prior close < lower band AND current close > prior close (turn-up).
-//    Squeeze veto: bandwidth at 20th percentile of last 50 bars → skip.
-//    Stop:  lower_band[i] - 1σ. Target: mid band (SMA-20).
+// 2. RSI Reversal
 // ---------------------------------------------------------------------------
-export const bollingerMR: CanonicalStrategy = {
-  name: 'BOLLINGER_MR',
-  warmupBars: 80,
-  evaluateEntry(ctx): EntryDecision {
-    const { candles, i } = ctx;
-    if (i < 80) return NO_ENTRY;
-    const closes = candles.slice(0, i + 1).map(c => c.close);
-    const mid = sma(closes, 20);
-    const sd = stdev(closes, 20);
-    const upper = mid.map((m, k) => m + 2 * sd[k]);
-    const lower = mid.map((m, k) => m - 2 * sd[k]);
-    const bw: number[] = [];
-    for (let k = i - 49; k <= i; k++) {
-      if (k >= 0 && Number.isFinite(mid[k]) && mid[k] > 0) {
-        bw.push((upper[k] - lower[k]) / mid[k]);
+export interface RsiReversalParams {
+  rsiPeriod: number;         // 14
+  oversoldThreshold: number; // 30
+  smaTargetPeriod: number;   // 50 — used as both range-proxy MA and TP target
+  maxDistPctFromMa: number;  // 0.05 — within 5% of MA50 = "in range"
+  minAtrPctForEntry: number; // 0.005 — 0.5% ATR%; below this, no edge
+  swingLowLookback: number;  // 5
+  swingLowAtrPad: number;    // 0.5
+}
+
+export const RSI_REVERSAL_DEFAULTS: RsiReversalParams = {
+  rsiPeriod: 14, oversoldThreshold: 30, smaTargetPeriod: 50,
+  maxDistPctFromMa: 0.05, minAtrPctForEntry: 0.005,
+  swingLowLookback: 5, swingLowAtrPad: 0.5,
+};
+
+export function makeRsiReversal(p: RsiReversalParams = RSI_REVERSAL_DEFAULTS): CanonicalStrategy {
+  return {
+    name: 'RSI_REVERSAL',
+    warmupBars: p.smaTargetPeriod + 5,
+    evaluateEntry(ctx): EntryDecision {
+      const { candles, i } = ctx;
+      if (i < p.smaTargetPeriod + 5) return NO_ENTRY;
+      const closes = candles.slice(0, i + 1).map(c => c.close);
+      const r = rsi(closes, p.rsiPeriod);
+      const s50 = sma(closes, p.smaTargetPeriod);
+      const a = atr(candles.slice(0, i + 1), 14);
+      const price = candles[i].close;
+      const crossedUp = r[i - 1] <= p.oversoldThreshold && r[i] > p.oversoldThreshold;
+      if (!crossedUp) return NO_ENTRY;
+      const distToMean = Math.abs(price - s50[i]) / s50[i];
+      const atrPct = a[i] / price;
+      if (distToMean > p.maxDistPctFromMa) return NO_ENTRY;
+      if (atrPct < p.minAtrPctForEntry) return NO_ENTRY;
+      let swingLow = Infinity;
+      for (let k = i - p.swingLowLookback + 1; k <= i; k++) {
+        if (candles[k].low < swingLow) swingLow = candles[k].low;
       }
-    }
-    if (bw.length < 30) return NO_ENTRY;
-    const sorted = [...bw].sort((a, b) => a - b);
-    const p20 = sorted[Math.floor(0.2 * sorted.length)];
-    const bwNow = (upper[i] - lower[i]) / mid[i];
-    if (bwNow < p20) return NO_ENTRY;           // squeeze veto — breakout, not reversion
-    const closeWasBelow = candles[i - 1].close < lower[i - 1];
-    const turnedUp = candles[i].close > candles[i - 1].close;
-    if (!closeWasBelow || !turnedUp) return NO_ENTRY;
-    const stop = lower[i] - sd[i];
-    const target = mid[i];
-    if (target <= candles[i].close) return NO_ENTRY;
-    return {
-      enter: true,
-      stop,
-      target,
-      reason: `bb_lower_recover sd=${sd[i].toFixed(2)}`,
-    };
-  },
-};
+      const stop = swingLow - p.swingLowAtrPad * a[i];
+      const target = s50[i];
+      if (target <= price) return NO_ENTRY;
+      return { enter: true, stop, target, reason: `rsi=${r[i].toFixed(1)}` };
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
-// 4. MACD Zero-Cross + Histogram Acceleration (Blueprint #8 — simplified).
-//    Pure divergence detection is hard/noisy; this is the deterministic core:
-//    Entry: histogram crosses 0 from below AND macd line > signal line AND
-//           hist[i] - hist[i-1] > 0 (acceleration).
-//    Stop:  entry - 1.5 × ATR(14). No fixed TP — trail via histogram decay
-//    (exit when hist falls back below 50% of peak since entry).
+// 3. Bollinger MR
 // ---------------------------------------------------------------------------
-export const macdStrategy: CanonicalStrategy = {
-  name: 'MACD',
-  warmupBars: 40,
-  evaluateEntry(ctx): EntryDecision {
-    const { candles, i } = ctx;
-    if (i < 40) return NO_ENTRY;
-    const closes = candles.slice(0, i + 1).map(c => c.close);
-    const m = macd(closes, 12, 26, 9);
-    const a = atr(candles.slice(0, i + 1), 14);
-    const histPrev = m.hist[i - 1], histNow = m.hist[i];
-    const crossedZero = histPrev <= 0 && histNow > 0;
-    const accel = histNow - histPrev > 0;
-    const macdAboveSignal = m.macd[i] > m.signal[i];
-    if (!crossedZero || !accel || !macdAboveSignal) return NO_ENTRY;
-    const atrAbs = a[i];
-    if (!Number.isFinite(atrAbs) || atrAbs <= 0) return NO_ENTRY;
-    const price = candles[i].close;
-    return {
-      enter: true,
-      stop: price - 1.5 * atrAbs,
-      target: 0,
-      reason: `macd_zero_cross hist=${histNow.toFixed(3)}`,
-    };
-  },
-  // MACD strategy doesn't trail via price; it relies on the runner's
-  // peak-histogram tracker. We expose peak tracking via the runner instead.
+export interface BollingerMRParams {
+  smaPeriod: number;    // 20
+  stdevMult: number;    // 2
+  squeezeLookback: number;     // 50
+  squeezePercentile: number;   // 0.2 — skip if bandwidth in bottom 20%
+  stopSdPad: number;    // 1 (extra σ below lower band)
+}
+
+export const BOLLINGER_MR_DEFAULTS: BollingerMRParams = {
+  smaPeriod: 20, stdevMult: 2, squeezeLookback: 50,
+  squeezePercentile: 0.2, stopSdPad: 1,
 };
 
+export function makeBollingerMR(p: BollingerMRParams = BOLLINGER_MR_DEFAULTS): CanonicalStrategy {
+  return {
+    name: 'BOLLINGER_MR',
+    warmupBars: p.smaPeriod + p.squeezeLookback + 5,
+    evaluateEntry(ctx): EntryDecision {
+      const { candles, i } = ctx;
+      if (i < p.smaPeriod + p.squeezeLookback + 5) return NO_ENTRY;
+      const closes = candles.slice(0, i + 1).map(c => c.close);
+      const mid = sma(closes, p.smaPeriod);
+      const sd = stdev(closes, p.smaPeriod);
+      const upper = mid.map((m, k) => m + p.stdevMult * sd[k]);
+      const lower = mid.map((m, k) => m - p.stdevMult * sd[k]);
+      const bw: number[] = [];
+      for (let k = i - p.squeezeLookback + 1; k <= i; k++) {
+        if (k >= 0 && Number.isFinite(mid[k]) && mid[k] > 0) {
+          bw.push((upper[k] - lower[k]) / mid[k]);
+        }
+      }
+      if (bw.length < p.squeezeLookback * 0.6) return NO_ENTRY;
+      const sorted = [...bw].sort((a, b) => a - b);
+      const cutoff = sorted[Math.floor(p.squeezePercentile * sorted.length)];
+      const bwNow = (upper[i] - lower[i]) / mid[i];
+      if (bwNow < cutoff) return NO_ENTRY;
+      const closeWasBelow = candles[i - 1].close < lower[i - 1];
+      const turnedUp = candles[i].close > candles[i - 1].close;
+      if (!closeWasBelow || !turnedUp) return NO_ENTRY;
+      const stop = lower[i] - p.stopSdPad * sd[i];
+      const target = mid[i];
+      if (target <= candles[i].close) return NO_ENTRY;
+      return { enter: true, stop, target, reason: `bb_recover sd=${sd[i].toFixed(2)}` };
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
-// 5. Donchian Breakout (Blueprint #10).
-//    Entry: close > prior 20-bar high AND volume z-score > 1.0.
-//    Stop:  break-bar low - 0.25 × ATR. Trail: chandelier (peak − 2 × ATR).
-//    No fixed TP — runs trend until trail hits.
+// 4. MACD
 // ---------------------------------------------------------------------------
-export const donchianBreakout: CanonicalStrategy = {
-  name: 'DONCHIAN_BREAKOUT',
-  warmupBars: 30,
-  evaluateEntry(ctx): EntryDecision {
-    const { candles, i } = ctx;
-    if (i < 25) return NO_ENTRY;
-    const high20 = donchianHigh(candles, i, 20);
-    if (!Number.isFinite(high20)) return NO_ENTRY;
-    const close = candles[i].close;
-    if (close <= high20) return NO_ENTRY;
-    const vz = volumeZ(candles, i, 20);
-    if (vz < 1.0) return NO_ENTRY;
-    const a = atr(candles.slice(0, i + 1), 14);
-    const atrAbs = a[i];
-    if (!Number.isFinite(atrAbs) || atrAbs <= 0) return NO_ENTRY;
-    const stop = candles[i].low - 0.25 * atrAbs;
-    return {
-      enter: true,
-      stop,
-      target: 0,
-      reason: `donchian_break vz=${vz.toFixed(2)}`,
-    };
-  },
-  updateStop(ctx, _entryPrice, currentStop, peak) {
-    // Chandelier: peak − 2 × ATR, ratchet up only.
-    const a = atr(ctx.candles.slice(0, ctx.i + 1), 14);
-    const atrAbs = a[ctx.i];
-    if (!Number.isFinite(atrAbs) || atrAbs <= 0) return currentStop;
-    const candidate = peak - 2 * atrAbs;
-    return candidate > currentStop ? candidate : currentStop;
-  },
+export interface MacdParams {
+  fastPeriod: number;        // 12
+  slowPeriod: number;        // 26
+  signalPeriod: number;      // 9
+  requireMacdAboveZero: boolean; // default false — extra filter
+  atrStopMult: number;       // 1.5
+  histDecayPct: number;      // 0.5 — exit when hist < 50% of peak
+}
+
+export const MACD_DEFAULTS: MacdParams = {
+  fastPeriod: 12, slowPeriod: 26, signalPeriod: 9,
+  requireMacdAboveZero: false, atrStopMult: 1.5, histDecayPct: 0.5,
 };
 
-export const ALL_STRATEGIES: CanonicalStrategy[] = [
-  maCrossover,
-  rsiReversal,
-  bollingerMR,
-  macdStrategy,
-  donchianBreakout,
+export function makeMacd(p: MacdParams = MACD_DEFAULTS): CanonicalStrategy {
+  return {
+    name: 'MACD',
+    warmupBars: p.slowPeriod + p.signalPeriod + 5,
+    evaluateEntry(ctx): EntryDecision {
+      const { candles, i } = ctx;
+      if (i < p.slowPeriod + p.signalPeriod + 5) return NO_ENTRY;
+      const closes = candles.slice(0, i + 1).map(c => c.close);
+      const m = macd(closes, p.fastPeriod, p.slowPeriod, p.signalPeriod);
+      const a = atr(candles.slice(0, i + 1), 14);
+      const histPrev = m.hist[i - 1], histNow = m.hist[i];
+      const crossedZero = histPrev <= 0 && histNow > 0;
+      const accel = histNow - histPrev > 0;
+      const macdAboveSignal = m.macd[i] > m.signal[i];
+      const macdGate = p.requireMacdAboveZero ? m.macd[i] > 0 : true;
+      if (!crossedZero || !accel || !macdAboveSignal || !macdGate) return NO_ENTRY;
+      const atrAbs = a[i];
+      if (!Number.isFinite(atrAbs) || atrAbs <= 0) return NO_ENTRY;
+      const price = candles[i].close;
+      return {
+        enter: true,
+        stop: price - p.atrStopMult * atrAbs,
+        target: 0,
+        reason: `macd_cross hist=${histNow.toFixed(3)}`,
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 5. Donchian Breakout
+// ---------------------------------------------------------------------------
+export interface DonchianParams {
+  lookback: number;        // 20
+  volZThreshold: number;   // 1.0
+  stopAtrPad: number;      // 0.25
+  trailAtrMult: number;    // 2.0
+}
+
+export const DONCHIAN_DEFAULTS: DonchianParams = {
+  lookback: 20, volZThreshold: 1.0, stopAtrPad: 0.25, trailAtrMult: 2.0,
+};
+
+export function makeDonchianBreakout(p: DonchianParams = DONCHIAN_DEFAULTS): CanonicalStrategy {
+  return {
+    name: 'DONCHIAN_BREAKOUT',
+    warmupBars: p.lookback + 10,
+    evaluateEntry(ctx): EntryDecision {
+      const { candles, i } = ctx;
+      if (i < p.lookback + 5) return NO_ENTRY;
+      const high = donchianHigh(candles, i, p.lookback);
+      if (!Number.isFinite(high)) return NO_ENTRY;
+      const close = candles[i].close;
+      if (close <= high) return NO_ENTRY;
+      const vz = volumeZ(candles, i, p.lookback);
+      if (vz < p.volZThreshold) return NO_ENTRY;
+      const a = atr(candles.slice(0, i + 1), 14);
+      const atrAbs = a[i];
+      if (!Number.isFinite(atrAbs) || atrAbs <= 0) return NO_ENTRY;
+      const stop = candles[i].low - p.stopAtrPad * atrAbs;
+      return { enter: true, stop, target: 0, reason: `donchian vz=${vz.toFixed(2)}` };
+    },
+    updateStop(ctx, _entry, currentStop, peak) {
+      const a = atr(ctx.candles.slice(0, ctx.i + 1), 14);
+      const atrAbs = a[ctx.i];
+      if (!Number.isFinite(atrAbs) || atrAbs <= 0) return currentStop;
+      const candidate = peak - p.trailAtrMult * atrAbs;
+      return candidate > currentStop ? candidate : currentStop;
+    },
+  };
+}
+
+// Default-built strategies for the no-sweep run.
+export const ALL_DEFAULT_STRATEGIES: CanonicalStrategy[] = [
+  makeMaCrossover(),
+  makeRsiReversal(),
+  makeBollingerMR(),
+  makeMacd(),
+  makeDonchianBreakout(),
 ];
