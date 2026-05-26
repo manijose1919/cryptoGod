@@ -24,7 +24,9 @@ import {
 } from './tickerFitness.ts';
 import { PARAM_GRID } from './sweepParams.ts';
 import { gateStrategy, DEFAULT_ALLOWED_REGIMES, regimeDistribution } from './regimeGate.ts';
+import { withFullEnhancement } from './enhancements.ts';
 import type { RunResult } from './types.ts';
+import { DEFAULT_EXIT_PROFILE, ENHANCED_EXIT_PROFILE, FEE_ROUND_TRIP as FEE_BY_MODE } from './types.ts';
 
 // -----------------------------------------------------------------------------
 // Config
@@ -43,13 +45,29 @@ const ALL_STRATEGY_KEYS: StrategyFitnessKey[] = [
   'DCA', 'GRID', 'VWAP', 'VOLUME_PROFILE', 'CANDLESTICK',
 ];
 
+type Mode = 'raw' | 'gated' | 'enhanced' | 'enhanced-maker';
+
 interface SweepRow {
   strategy: StrategyFitnessKey;
   ticker: string;
   paramLabel: string;
   windowDays: number;
-  gating: 'raw' | 'gated';
+  gating: Mode;
   result: RunResult;
+}
+
+function buildStrategy(
+  base: import('./types.ts').CanonicalStrategy,
+  allowedRegimes: import('./regimeGate.ts').Regime[],
+  mode: Mode,
+): import('./types.ts').CanonicalStrategy {
+  switch (mode) {
+    case 'raw': return base;
+    case 'gated': return gateStrategy(base, allowedRegimes);
+    case 'enhanced':
+    case 'enhanced-maker':
+      return withFullEnhancement(gateStrategy(base, allowedRegimes));
+  }
 }
 
 async function main(): Promise<void> {
@@ -119,21 +137,24 @@ async function main(): Promise<void> {
         const endBar = candles.length;
 
         for (const variant of variants) {
-          for (const gating of ['raw', 'gated'] as const) {
+          for (const mode of ['raw', 'gated', 'enhanced', 'enhanced-maker'] as const) {
             const baseStrategy = variant.build();
-            const strategy = gating === 'gated'
-              ? gateStrategy(baseStrategy, allowedRegimes)
-              : baseStrategy;
+            const strategy = buildStrategy(baseStrategy, allowedRegimes, mode);
+            const useEnhancedExit = (mode === 'enhanced' || mode === 'enhanced-maker');
+            const feeRT = (mode === 'enhanced-maker')
+              ? FEE_BY_MODE.maker
+              : FEE_BY_MODE.taker;
             const result = runBacktest({
               strategy, ticker, candles,
               startBar, endBar,
               budget: BUDGET, positionPercent: POSITION_PCT,
-              feeRoundTrip: FEE_ROUND_TRIP, slippagePerSide: SLIPPAGE_PER_SIDE,
+              feeRoundTrip: feeRT, slippagePerSide: SLIPPAGE_PER_SIDE,
+              exitProfile: useEnhancedExit ? ENHANCED_EXIT_PROFILE : DEFAULT_EXIT_PROFILE,
             });
             result.windowDays = days;
             rows.push({
               strategy: key, ticker, paramLabel: variant.label,
-              windowDays: days, gating, result,
+              windowDays: days, gating: mode, result,
             });
             totalRuns++;
           }
@@ -280,24 +301,49 @@ function renderReport(
   }
   out.push('');
 
-  // --- Section 5: gated vs raw delta per strategy ---
-  out.push('## 5. Gated vs Raw — does the regime filter help?');
+  // --- Section 5: per-strategy avg Net % across all 4 modes ---
+  out.push('## 5. Per-strategy avg Net % by mode (does each layer help?)');
   out.push('');
-  out.push('Per-strategy comparison: average Net % across all (ticker × params × window) cells with gating on vs off. Positive delta = gate helps.');
+  out.push('Mean Net % across all (ticker × params × window) cells, broken out by mode.');
+  out.push('- **raw**: base strategy, default exits, taker fees');
+  out.push('- **gated**: + regime filter (UP/RANGE only as applicable)');
+  out.push('- **enhanced**: + confirmation candle + 4h HTF filter + volume gate + BE@1.5R + chandelier@2.5R, taker fees');
+  out.push('- **enhanced-maker**: enhanced, but with maker rebates (−0.10% round-trip) instead of taker (+0.52%)');
   out.push('');
-  out.push('| Strategy | Raw avg Net % | Gated avg Net % | Δ (gain from gate) | Raw avg trades | Gated avg trades |');
-  out.push('|---|---:|---:|---:|---:|---:|');
+  out.push('| Strategy | raw | gated | enhanced | enh-maker | Δ enh−raw | Δ maker−enh |');
+  out.push('|---|---:|---:|---:|---:|---:|---:|');
+  const modes: Mode[] = ['raw', 'gated', 'enhanced', 'enhanced-maker'];
   for (const key of ALL_STRATEGY_KEYS) {
     const ofStrat = rows.filter(r => r.strategy === key);
-    const raw = ofStrat.filter(r => r.gating === 'raw');
-    const gated = ofStrat.filter(r => r.gating === 'gated');
-    const rawAvg = raw.length > 0 ? raw.reduce((s, r) => s + r.result.totalPnlPercent, 0) / raw.length : 0;
-    const gatedAvg = gated.length > 0 ? gated.reduce((s, r) => s + r.result.totalPnlPercent, 0) / gated.length : 0;
-    const rawTrades = raw.length > 0 ? raw.reduce((s, r) => s + r.result.totalTrades, 0) / raw.length : 0;
-    const gatedTrades = gated.length > 0 ? gated.reduce((s, r) => s + r.result.totalTrades, 0) / gated.length : 0;
+    const avgByMode: Record<string, number> = {};
+    const tradesByMode: Record<string, number> = {};
+    for (const m of modes) {
+      const sub = ofStrat.filter(r => r.gating === m);
+      avgByMode[m] = sub.length > 0 ? sub.reduce((s, r) => s + r.result.totalPnlPercent, 0) / sub.length : 0;
+      tradesByMode[m] = sub.length > 0 ? sub.reduce((s, r) => s + r.result.totalTrades, 0) / sub.length : 0;
+    }
     out.push(
-      `| ${key} | ${rawAvg.toFixed(2)} | ${gatedAvg.toFixed(2)} | ${(gatedAvg - rawAvg).toFixed(2)} | ` +
-      `${rawTrades.toFixed(1)} | ${gatedTrades.toFixed(1)} |`,
+      `| ${key} | ${avgByMode.raw.toFixed(2)} | ${avgByMode.gated.toFixed(2)} | ` +
+      `${avgByMode.enhanced.toFixed(2)} | ${avgByMode['enhanced-maker'].toFixed(2)} | ` +
+      `${(avgByMode.enhanced - avgByMode.raw).toFixed(2)} | ` +
+      `${(avgByMode['enhanced-maker'] - avgByMode.enhanced).toFixed(2)} |`,
+    );
+  }
+  out.push('');
+  out.push('Avg trades per (ticker × params × window) by mode:');
+  out.push('');
+  out.push('| Strategy | raw trades | gated trades | enhanced trades | enh-maker trades |');
+  out.push('|---|---:|---:|---:|---:|');
+  for (const key of ALL_STRATEGY_KEYS) {
+    const ofStrat = rows.filter(r => r.strategy === key);
+    const trades: Record<string, number> = {};
+    for (const m of modes) {
+      const sub = ofStrat.filter(r => r.gating === m);
+      trades[m] = sub.length > 0 ? sub.reduce((s, r) => s + r.result.totalTrades, 0) / sub.length : 0;
+    }
+    out.push(
+      `| ${key} | ${trades.raw.toFixed(1)} | ${trades.gated.toFixed(1)} | ` +
+      `${trades.enhanced.toFixed(1)} | ${trades['enhanced-maker'].toFixed(1)} |`,
     );
   }
   out.push('');

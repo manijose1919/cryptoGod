@@ -51,6 +51,36 @@ export interface CanonicalTrade {
   holdBars: number;
 }
 
+export interface ExitProfile {
+  // After unrealized PnL hits this multiple of initial-risk (R), move stop to
+  // break-even (entry × 1.001 to cover one taker fee). 0 = disable.
+  breakEvenAtR: number;
+  // After PnL hits this R multiple, start chandelier trailing.
+  // Stop = max(currentStop, peak - chandelierAtrMult × ATR(14)). 0 = disable.
+  chandelierAtR: number;
+  chandelierAtrMult: number;
+}
+
+export const DEFAULT_EXIT_PROFILE: ExitProfile = {
+  breakEvenAtR: 0,         // off by default (preserves original canonical runner)
+  chandelierAtR: 0,        // off by default
+  chandelierAtrMult: 2.0,
+};
+
+export const ENHANCED_EXIT_PROFILE: ExitProfile = {
+  breakEvenAtR: 1.5,       // move to BE after 1.5R unrealized
+  chandelierAtR: 2.5,      // switch to chandelier after 2.5R
+  chandelierAtrMult: 2.0,
+};
+
+export type FeeMode = 'taker' | 'maker';
+
+// Round-trip fees by mode. Kraken taker = 2 × 0.26%; maker = 2 × -0.05% (rebate).
+export const FEE_ROUND_TRIP: Record<FeeMode, number> = {
+  taker: 0.0052,
+  maker: -0.0010,
+};
+
 export interface RunConfig {
   strategy: CanonicalStrategy;
   ticker: string;
@@ -61,6 +91,7 @@ export interface RunConfig {
   positionPercent: number; // fraction of equity per trade
   feeRoundTrip: number;    // e.g., 0.0052 Kraken taker
   slippagePerSide: number; // e.g., 0.0005 (5 bps)
+  exitProfile?: ExitProfile;
 }
 
 export interface RunResult {
