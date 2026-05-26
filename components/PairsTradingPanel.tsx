@@ -30,6 +30,15 @@ interface PairsStatus {
   consecutiveLosses: number;
   pausedUntilTs: number;
   cointegration: CointegrationState | null;
+  symbolA?: string;
+  symbolB?: string;
+  markA?: number | null;
+  markB?: number | null;
+  unrealizedPnlGross?: number | null;
+  unrealizedPnlNet?: number | null;
+  unrealizedPctOfNotional?: number | null;
+  openTradeId?: string | null;
+  openTradeSide?: 'long_spread' | 'short_spread' | null;
 }
 
 interface PairsTrade {
@@ -75,6 +84,15 @@ interface PnlSummary {
     avg_pnl: number;
     total_fees: number;
   }>;
+}
+
+interface PairsAlert {
+  id: number;
+  created_at: number;
+  severity: 'info' | 'warn' | 'crit';
+  kind: string;
+  message: string;
+  data_json: string | null;
 }
 
 // ---- Z-Score Gauge (Bloomberg-style horizontal bar) ----
@@ -166,22 +184,28 @@ export default function PairsTradingPanel(): React.ReactElement {
   const [trades, setTrades] = useState<PairsTrade[]>([]);
   const [state, setState] = useState<StateSnapshot[]>([]);
   const [pnl, setPnl] = useState<PnlSummary | null>(null);
+  const [alerts, setAlerts] = useState<PairsAlert[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [closeResult, setCloseResult] = useState<string | null>(null);
 
   useEffect(() => {
     const load = async (): Promise<void> => {
       try {
-        const [s, t, st, p] = await Promise.all([
+        const [s, t, st, p, a] = await Promise.all([
           fetch('/api/v2/pairs/status').then(r => r.ok ? r.json() : null),
           fetch('/api/v2/pairs/trades?limit=50').then(r => r.ok ? r.json() : null),
           fetch('/api/v2/pairs/state?limit=100').then(r => r.ok ? r.json() : null),
           fetch('/api/v2/pairs/pnl').then(r => r.ok ? r.json() : null),
+          fetch('/api/v2/pairs/alerts?limit=20').then(r => r.ok ? r.json() : null),
         ]);
         if (s) setStatus(s);
         if (t?.trades) setTrades(t.trades);
         if (st?.snapshots) setState(st.snapshots);
         if (p) setPnl(p);
+        if (a?.alerts) setAlerts(a.alerts);
         setLastUpdated(new Date());
         setError(null);
       } catch (e) {
@@ -204,13 +228,28 @@ export default function PairsTradingPanel(): React.ReactElement {
     return sorted.map(t => { acc += t.pnl_net ?? 0; return acc; });
   }, [closedTrades]);
 
-  // Unrealized PnL on open trade (rough; uses entry prices + state mark)
-  const unrealizedPnl = useMemo<number | null>(() => {
-    if (!openTrade || state.length === 0) return null;
-    // We don't yet store mark prices in state snapshots — show null for now.
-    // A future endpoint /pairs/mark could compute this server-side.
-    return null;
-  }, [openTrade, state]);
+  // Unrealized PnL: server computes it; client just reads from status.
+  const unrealizedPnl = status?.unrealizedPnlNet ?? null;
+  const unrealizedPct = status?.unrealizedPctOfNotional ?? null;
+
+  const doForceClose = async (): Promise<void> => {
+    setClosing(true);
+    setCloseResult(null);
+    try {
+      const res = await fetch('/api/v2/pairs/force-close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'yes', reason: 'manual_force_close_ui' }),
+      });
+      const data = await res.json();
+      setCloseResult(data.closed ? `Closed trade ${data.tradeId?.slice(0, 8)}…` : `Failed: ${data.message ?? data.error ?? 'unknown'}`);
+      setShowCloseConfirm(false);
+    } catch (e) {
+      setCloseResult(`Error: ${(e as Error).message}`);
+    } finally {
+      setClosing(false);
+    }
+  };
 
   if (error) {
     return (
@@ -346,39 +385,107 @@ export default function PairsTradingPanel(): React.ReactElement {
 
       {/* ═══ OPEN TRADE ═══ */}
       {openTrade ? (
-        <div className="glass-card" style={{ padding: '14px', borderLeft: '3px solid var(--green, #10b981)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <div className="glass-card" style={{
+          padding: '14px',
+          borderLeft: `3px solid ${unrealizedPnl !== null && unrealizedPnl < 0 ? 'var(--red, #ef4444)' : 'var(--green, #10b981)'}`,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h4 style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-header)', margin: 0 }}>
               OPEN TRADE — {openTrade.side.toUpperCase().replace('_', ' ')}
             </h4>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-              Entered {new Date(openTrade.entry_time).toLocaleString()}
-            </span>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                Entered {new Date(openTrade.entry_time).toLocaleString()}
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowCloseConfirm(true)}
+                style={{
+                  fontSize: '10px', fontWeight: 700,
+                  color: 'var(--red, #ef4444)',
+                  background: 'transparent',
+                  border: '1px solid var(--red, #ef4444)',
+                  borderRadius: '3px',
+                  padding: '4px 10px',
+                  cursor: 'pointer',
+                  textTransform: 'uppercase', letterSpacing: '0.5px',
+                }}
+              >
+                Force Close
+              </button>
+            </div>
           </div>
+          {closeResult && (
+            <p style={{
+              fontSize: '10px',
+              color: closeResult.startsWith('Closed') ? 'var(--green, #10b981)' : 'var(--red, #ef4444)',
+              margin: '8px 0 0 0',
+            }}>
+              {closeResult}
+            </p>
+          )}
+
+          {/* Big unrealized PnL banner */}
+          {unrealizedPnl !== null && (
+            <div style={{
+              marginTop: '12px',
+              padding: '10px 14px',
+              background: unrealizedPnl >= 0 ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+              borderRadius: '4px',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+            }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Unrealized P&L (mark-to-market)
+              </span>
+              <span style={{ display: 'flex', gap: '14px', alignItems: 'baseline' }}>
+                <span style={{
+                  fontSize: '22px', fontWeight: 700,
+                  color: unrealizedPnl >= 0 ? 'var(--green, #10b981)' : 'var(--red, #ef4444)',
+                }}>
+                  {unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}
+                </span>
+                {unrealizedPct !== null && (
+                  <span style={{
+                    fontSize: '12px',
+                    color: unrealizedPnl >= 0 ? 'var(--green, #10b981)' : 'var(--red, #ef4444)',
+                  }}>
+                    ({unrealizedPct >= 0 ? '+' : ''}{(unrealizedPct * 100).toFixed(2)}%)
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '10px' }}>
             <div>
               <p style={{ fontSize: '10px', color: 'var(--text-muted)', margin: 0 }}>{openTrade.sym_a}</p>
               <p style={{ fontSize: '13px', margin: '2px 0' }}>
                 {openTrade.side === 'long_spread' ? 'LONG' : 'SHORT'} {openTrade.qty_a.toFixed(4)} @ ${openTrade.entry_price_a.toFixed(4)}
               </p>
+              {status?.markA !== null && status?.markA !== undefined && (
+                <p style={{ fontSize: '10px', color: 'var(--text-muted)', margin: 0 }}>
+                  Mark: ${status.markA.toFixed(4)} ({((status.markA - openTrade.entry_price_a) / openTrade.entry_price_a * 100).toFixed(2)}%)
+                </p>
+              )}
             </div>
             <div>
               <p style={{ fontSize: '10px', color: 'var(--text-muted)', margin: 0 }}>{openTrade.sym_b}</p>
               <p style={{ fontSize: '13px', margin: '2px 0' }}>
                 {openTrade.side === 'long_spread' ? 'SHORT' : 'LONG'} {openTrade.qty_b.toFixed(4)} @ ${openTrade.entry_price_b.toFixed(4)}
               </p>
+              {status?.markB !== null && status?.markB !== undefined && (
+                <p style={{ fontSize: '10px', color: 'var(--text-muted)', margin: 0 }}>
+                  Mark: ${status.markB.toFixed(4)} ({((status.markB - openTrade.entry_price_b) / openTrade.entry_price_b * 100).toFixed(2)}%)
+                </p>
+              )}
             </div>
           </div>
-          <div style={{ marginTop: '10px', display: 'flex', gap: '20px', fontSize: '10px', color: 'var(--text-muted)' }}>
+          <div style={{ marginTop: '10px', display: 'flex', gap: '20px', fontSize: '10px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
             <span>Entry z: {openTrade.entry_z.toFixed(2)}</span>
             <span>β: {openTrade.beta.toFixed(3)}</span>
             <span>Notional: ${openTrade.total_notional_usd.toFixed(0)}</span>
             <span>Mode: {openTrade.mode}</span>
-            {unrealizedPnl !== null && (
-              <span style={{ color: unrealizedPnl >= 0 ? 'var(--green, #10b981)' : 'var(--red, #ef4444)' }}>
-                Unrealized: ${unrealizedPnl.toFixed(2)}
-              </span>
-            )}
+            <span>Trade ID: {openTrade.id.slice(0, 8)}…</span>
           </div>
         </div>
       ) : (
@@ -415,6 +522,56 @@ export default function PairsTradingPanel(): React.ReactElement {
                 </p>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* ═══ RECENT ALERTS ═══ */}
+      <div className="glass-card" style={{ padding: '14px' }}>
+        <h4 style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-header)', marginBottom: '10px' }}>
+          RECENT ALERTS ({alerts.length})
+        </h4>
+        {alerts.length === 0 ? (
+          <p style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            No alerts yet. (Engine entry/exit/pause/drawdown/ADF events will show here when they fire.)
+          </p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '320px', overflowY: 'auto' }}>
+            {alerts.map(a => {
+              const sevColor = a.severity === 'crit' ? 'var(--red, #ef4444)'
+                : a.severity === 'warn' ? 'var(--yellow, #eab308)'
+                : 'var(--text-muted)';
+              const sevSymbol = a.severity === 'crit' ? '🚨'
+                : a.severity === 'warn' ? '⚠️'
+                : '·';
+              return (
+                <div key={a.id} style={{
+                  display: 'flex', gap: '10px', alignItems: 'baseline',
+                  padding: '6px 10px',
+                  background: a.severity === 'crit' ? 'rgba(239, 68, 68, 0.06)'
+                    : a.severity === 'warn' ? 'rgba(234, 179, 8, 0.06)'
+                    : 'transparent',
+                  borderLeft: `2px solid ${sevColor}`,
+                  borderRadius: '2px',
+                }}>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', minWidth: '90px' }}>
+                    {new Date(a.created_at).toLocaleTimeString()}
+                  </span>
+                  <span style={{ fontSize: '10px', color: sevColor, minWidth: '20px' }}>
+                    {sevSymbol}
+                  </span>
+                  <span style={{
+                    fontSize: '10px', fontWeight: 700, color: sevColor,
+                    minWidth: '90px', textTransform: 'uppercase', letterSpacing: '0.5px',
+                  }}>
+                    {a.kind}
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-primary)', flex: 1 }}>
+                    {a.message}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -464,6 +621,71 @@ export default function PairsTradingPanel(): React.ReactElement {
           </div>
         )}
       </div>
+
+      {/* ═══ FORCE-CLOSE CONFIRMATION MODAL ═══ */}
+      {showCloseConfirm && openTrade && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+          }}
+          onClick={() => !closing && setShowCloseConfirm(false)}
+        >
+          <div
+            className="glass-card"
+            style={{ padding: '24px', maxWidth: '420px', width: '90%' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-header)', margin: 0 }}>
+              Force-close open pair?
+            </h3>
+            <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px', lineHeight: 1.6 }}>
+              This will immediately exit the {openTrade.side.replace('_', ' ')} position on {openTrade.sym_a} + {openTrade.sym_b}
+              {openTrade.mode === 'live' ? ' on Kraken (real money — market-close both legs reduce-only)' : ' in paper-mode'}.
+            </p>
+            {unrealizedPnl !== null && (
+              <p style={{
+                fontSize: '12px', marginTop: '12px',
+                color: unrealizedPnl >= 0 ? 'var(--green, #10b981)' : 'var(--red, #ef4444)',
+              }}>
+                Realized at current mark: ${unrealizedPnl.toFixed(2)}
+                {unrealizedPct !== null && ` (${(unrealizedPct * 100).toFixed(2)}%)`}
+              </p>
+            )}
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '20px' }}>
+              <button
+                type="button"
+                disabled={closing}
+                onClick={() => setShowCloseConfirm(false)}
+                style={{
+                  fontSize: '11px', padding: '8px 16px', borderRadius: '3px',
+                  background: 'transparent',
+                  border: '1px solid var(--border, #444)',
+                  color: 'var(--text-primary)', cursor: closing ? 'not-allowed' : 'pointer',
+                  opacity: closing ? 0.5 : 1,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={closing}
+                onClick={doForceClose}
+                style={{
+                  fontSize: '11px', fontWeight: 700, padding: '8px 16px', borderRadius: '3px',
+                  background: 'var(--red, #ef4444)', border: 'none',
+                  color: 'white', cursor: closing ? 'not-allowed' : 'pointer',
+                  opacity: closing ? 0.5 : 1,
+                }}
+              >
+                {closing ? 'Closing…' : 'Force Close Now'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

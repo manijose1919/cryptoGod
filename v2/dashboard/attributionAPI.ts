@@ -15,7 +15,7 @@ import { getBearishStatus, stopBearishServices, startBearishServices, initBearis
 import { getSniperStatus, getKrakenSniperStatus, getCryptocomSniperStatus } from '../engine/sniperEngine.ts';
 import { initKrakenAdapter, krakenV2 } from '../exchange/krakenAdapter.ts';
 import { initCryptoComAdapter, cryptoComV2 } from '../exchange/cryptoComV2Adapter.ts';
-import { getPairsStatus } from '../pairs/pairsEngine.ts';
+import { getPairsStatus, forceClosePairsTrade } from '../pairs/pairsEngine.ts';
 // @ts-expect-error JS module without types
 import { getDb } from '../../services/database.js';
 
@@ -338,6 +338,38 @@ v2Router.get('/pairs/pnl', (_req: Request, res: Response) => {
       GROUP BY mode
     `).all();
     res.json({ summary: rows });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Force-close any currently open pairs trade. Confirmed via explicit body
+// flag to prevent accidental fetches from triggering a real close.
+v2Router.post('/pairs/force-close', async (req: Request, res: Response) => {
+  try {
+    if (req.body?.confirm !== 'yes') {
+      res.status(400).json({ error: 'confirmation required: body must include { "confirm": "yes" }' });
+      return;
+    }
+    const reason = String(req.body?.reason ?? 'manual_force_close').slice(0, 100);
+    const result = await forceClosePairsTrade(reason);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Recent alerts (entry/exit/pause/drawdown/adf/margin/drift). Default 50.
+v2Router.get('/pairs/alerts', (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10), 500);
+    const rows = getDb().prepare(
+      `SELECT id, created_at, severity, kind, message, data_json
+       FROM v2_pairs_alerts
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    ).all(limit);
+    res.json({ count: rows.length, alerts: rows });
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }

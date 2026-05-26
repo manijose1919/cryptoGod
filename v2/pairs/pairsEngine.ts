@@ -659,11 +659,86 @@ export function startPairsEngine(): void {
   console.log(`[PAIRS] engine started (interval=${PAIRS_CONFIG.LOOP_INTERVAL_MS}ms)`);
 }
 
+/**
+ * Force-close the currently open trade, if any. Dispatches to live or paper
+ * exit based on _effectiveMode. Safe to call when no trade is open (no-op).
+ * Returns an outcome object so the dashboard can show success/failure.
+ */
+export async function forceClosePairsTrade(reason: string = 'manual_force_close'): Promise<{
+  closed: boolean;
+  tradeId: string | null;
+  message: string;
+}> {
+  if (!openTrade) {
+    return { closed: false, tradeId: null, message: 'no open trade' };
+  }
+  const tradeId = openTrade.id;
+  const lastA = candleCache.a[candleCache.a.length - 1];
+  const lastB = candleCache.b[candleCache.b.length - 1];
+  const currentZ = cointState && lastA && lastB
+    ? ((Math.log(lastA.close) - cointState.alpha - cointState.beta * Math.log(lastB.close)) - cointState.spreadMean) / cointState.spreadStd
+    : 0;
+  const lastBar = candleCache.a.length - 1;
+  try {
+    if (_effectiveMode === 'live') {
+      await liveExecuteExit(reason, currentZ, lastBar);
+    } else {
+      if (!lastA || !lastB) {
+        return { closed: false, tradeId, message: 'no candle data to compute paper exit' };
+      }
+      paperExecuteExit(reason, currentZ, lastA.close, lastB.close, lastA.time, lastBar);
+    }
+    return { closed: openTrade === null, tradeId, message: openTrade === null ? 'closed' : 'exit submitted but trade still tracked (live exit reconciliation pending)' };
+  } catch (err) {
+    return { closed: false, tradeId, message: `force-close error: ${(err as Error).message}` };
+  }
+}
+
 export function stopPairsEngine(): void {
   if (loopTimer) { clearInterval(loopTimer); loopTimer = null; }
   stopMonitor();
   isRunning = false;
   console.log('[PAIRS] engine stopped');
+}
+
+// Compute mark-to-market unrealized PnL on the open trade using last-known
+// close prices in the candle cache. Mirrors the exit-side math in
+// paperExecuteExit / liveExecuteExit minus the slippage haircut (since we
+// haven't actually crossed the spread to exit).
+function computeMarkAndUnrealized(): {
+  markA: number | null;
+  markB: number | null;
+  unrealizedPnlGross: number | null;
+  unrealizedPnlNet: number | null;
+  unrealizedPctOfNotional: number | null;
+} {
+  const lastA = candleCache.a[candleCache.a.length - 1];
+  const lastB = candleCache.b[candleCache.b.length - 1];
+  const markA = lastA?.close ?? null;
+  const markB = lastB?.close ?? null;
+  if (!openTrade || markA === null || markB === null) {
+    return { markA, markB, unrealizedPnlGross: null, unrealizedPnlNet: null, unrealizedPctOfNotional: null };
+  }
+  const isLong = openTrade.side === 'long_spread';
+  const pnlA = isLong
+    ? (markA - openTrade.entryPriceA) * openTrade.qtyA
+    : (openTrade.entryPriceA - markA) * openTrade.qtyA;
+  const pnlB = isLong
+    ? (openTrade.entryPriceB - markB) * openTrade.qtyB
+    : (markB - openTrade.entryPriceB) * openTrade.qtyB;
+  const gross = pnlA + pnlB;
+  // Estimate round-trip fees assuming we'd exit at mark prices. Both legs.
+  const notionalA = openTrade.qtyA * openTrade.entryPriceA;
+  const notionalB = openTrade.qtyB * openTrade.entryPriceB;
+  const fees = (notionalA + notionalB) * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
+  const net = gross - fees;
+  const totalNotional = notionalA + notionalB;
+  return {
+    markA, markB,
+    unrealizedPnlGross: gross,
+    unrealizedPnlNet: net,
+    unrealizedPctOfNotional: totalNotional > 0 ? net / totalNotional : null,
+  };
 }
 
 export function getPairsStatus(): {
@@ -677,7 +752,17 @@ export function getPairsStatus(): {
   consecutiveLosses: number;
   pausedUntilTs: number;
   cointegration: PairsLiveState | null;
+  symbolA: string;
+  symbolB: string;
+  markA: number | null;
+  markB: number | null;
+  unrealizedPnlGross: number | null;
+  unrealizedPnlNet: number | null;
+  unrealizedPctOfNotional: number | null;
+  openTradeId: string | null;
+  openTradeSide: 'long_spread' | 'short_spread' | null;
 } {
+  const mark = computeMarkAndUnrealized();
   return {
     mode: PAIRS_CONFIG.MODE,
     isRunning,
@@ -689,5 +774,14 @@ export function getPairsStatus(): {
     consecutiveLosses: stats.consecutiveLosses,
     pausedUntilTs: stats.pausedUntilTs,
     cointegration: cointState,
+    symbolA: PAIRS_CONFIG.SYMBOL_A,
+    symbolB: PAIRS_CONFIG.SYMBOL_B,
+    markA: mark.markA,
+    markB: mark.markB,
+    unrealizedPnlGross: mark.unrealizedPnlGross,
+    unrealizedPnlNet: mark.unrealizedPnlNet,
+    unrealizedPctOfNotional: mark.unrealizedPctOfNotional,
+    openTradeId: openTrade?.id ?? null,
+    openTradeSide: openTrade?.side ?? null,
   };
 }

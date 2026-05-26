@@ -64,7 +64,37 @@ export function initPairsTables(): void {
       in_position     INTEGER NOT NULL DEFAULT 0,
       mode            TEXT NOT NULL
     );
+
+    -- Alert log. Mirrors what's sent to Telegram so the dashboard can show
+    -- recent events even when Telegram isn't configured.
+    CREATE TABLE IF NOT EXISTS v2_pairs_alerts (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at      INTEGER NOT NULL,
+      severity        TEXT NOT NULL,    -- 'info' | 'warn' | 'crit'
+      kind            TEXT NOT NULL,    -- 'entry' | 'exit' | 'pause' | 'drawdown_kill' | 'adf_degrade' | 'margin_low' | 'margin_critical' | 'state_drift' | 'partial_fill'
+      message         TEXT NOT NULL,
+      data_json       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pairs_alerts_created_at ON v2_pairs_alerts(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pairs_alerts_kind ON v2_pairs_alerts(kind);
   `);
+}
+
+export function recordPairsAlert(a: {
+  severity: 'info' | 'warn' | 'crit';
+  kind: string;
+  message: string;
+  data?: unknown;
+}): void {
+  try {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO v2_pairs_alerts (created_at, severity, kind, message, data_json)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(Date.now(), a.severity, a.kind, a.message, a.data ? JSON.stringify(a.data) : null);
+  } catch {
+    /* alerts must never crash the engine */
+  }
 }
 
 export interface PairsTradeRow {
