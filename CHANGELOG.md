@@ -37,6 +37,68 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-26 13:30 UTC — Fix: V2 loop crash (`passedScan is not defined`) + restore per-candle entry guard — local-claude
+
+**Commits:** (this commit; restores 7b0fc2e from yesterday's session that was dropped by a reset+pull)
+**Files changed:** `v2/engine/tradeEngine.ts`, `v2/engine/breakoutEngine.ts`, `v2/engine/momentumEngine.ts`, `v2/engine/meanReversionEngine.ts`
+**Stats baseline reset:** NO (bug fix restoring intended behavior; per the standing rule, no reset for fixes that restore intent)
+
+### The crash
+Every V2 loop has been throwing `ReferenceError: passedScan is not defined` at `tradeEngine.ts:472` since at least ~05:30 UTC today. PM2 reported `online` (40h uptime) but the trade-loop callback failed every iteration — classic silent-failure-under-PM2 pattern (same shape as the 3-day `2a96f56` brace bug). Three positions opened at 05:05–05:21 UTC (FETUSD long, HYPEUSD short, ZECUSD short) sat with no managed exits running for ~8h before this fix.
+
+### Root cause
+The multi-timeframe rebuild (`2b69581`, 2026-05-18) renamed `passedScan` → `scanResults` in `tradeEngine.runLoop` but missed the diagnostic log line on what is now line 472. That log fires only in the **else** branch where risk rejects all signals — so the bug slept for 8 days. Today's quieter market hit that branch consistently and the crash became continuous.
+
+### The fix
+One-line: `passedScan.length` → `scanResults.filter(r => r.passed).length` (preserves the original semantic — count of tickers that passed the market scan).
+
+### Also restored: per-candle entry guard (originally commit 7b0fc2e, dropped by reset+pull yesterday)
+Yesterday's local session shipped a per-candle entry guard on `breakoutEngine.ts`/`momentumEngine.ts`/`meanReversionEngine.ts` and then accidentally reset it out before pushing. The reflog had the commit dangling; this commit restores it.
+
+#### The dup-trade bug it fixes
+Systemic duplicate rows in `v2_trades` for BREAKOUT, MOMENTUM, SCALP (TREND/SNIPER/MR clean). Pattern: identical `(ticker, entry_price, exit_price)` with avg 59-second gap = `BOT_LOOP_INTERVAL_MS - 1s`. Worst case: MOMENTUM/ZECUSD @ $562.33 → 16 dup rows over 16 min.
+
+| Strategy | Reported rows | Unique trades | Inflation |
+|---|---|---|---|
+| BREAKOUT | 22 | 9 | 2.4× |
+| MOMENTUM | 32 | 5 | 6.4× |
+| SCALP | 86 | 50 | 1.7× |
+| TREND | 32 | 32 | clean |
+
+BREAKOUT's reported +$86.86 net was really ~+$36.93. MOMENTUM's headline numbers were ~6× inflated. SCALP's negative-PnL conclusion is unchanged but per-trade economics differ. TREND Config A live PF=1.64 is real (TREND path doesn't have the bug).
+
+#### Root cause of dup-trade
+Satellite engines record entries at `signal.signals.close_price` (prior candle close) and exit at live price. In paper/shadow mode `insertTrade` simulates an instant fill, so when live price has already moved past TP/SL relative to the prior candle close, the trade opens and closes within the same loop iteration. The existing `if (currentBO.some(t => t.ticker === ticker)) continue` guard doesn't help because the trade has already closed before the guard is evaluated next loop. Result: re-entry every loop until the candle rolls. TREND avoids this because it runs through `tradeEngine.ts:executeTrade()` with Risk + ML gating on 4h candles.
+
+#### The guard (5 LOC per engine)
+Per-engine module-scope `Map<string, number>` of last-traded candle `time` per ticker; refuse new entry until candle.time advances; set after successful `insertTrade`.
+
+### What to monitor (after deploy)
+- **Loop should run clean** — `[V2] Loop #N: ...` lines streaming every 60s, no `passedScan is not defined`.
+- **3 stranded positions** (FETUSD long, HYPEUSD short, ZECUSD short opened 2026-05-26 05:05–05:21 UTC) should resume managed exit handling on first clean loop. Watch for trail/SL/TP/time_kill activity on them.
+- **Dup-trade query after 2-4h** — no new clusters with 59s avg gap:
+  ```sql
+  SELECT strategy, ticker, entry_price,
+         (MAX(entry_time)-MIN(entry_time))/(COUNT(*)-1)/1000 AS avg_gap_sec,
+         COUNT(*) AS rows
+  FROM v2_trades
+  WHERE entry_time >= <deploy_epoch_ms> AND status='closed'
+  GROUP BY strategy, ticker, entry_price, exit_price
+  HAVING COUNT(*) > 1;
+  ```
+- **Side effect**: legitimate same-ticker re-entries on BO/MOM/MR must now wait for next candle bar (1h for BO, 4h for MOM, 5m for MR). Trade-count drops are expected and were artifacts.
+
+### Rollback
+Revert this single commit. Both fixes are self-contained and additive.
+
+### Followups
+- Historical dedup of `v2_trades`: mark dup rows as `status='duplicate'` (separate change).
+- After dedup: reset `stats_baseline_time`.
+- SCALP lives in `services/multiAgentSystem.js` (different code path) and is currently disabled — same dup symptom there if re-enabled.
+- Defensive: consider a watchdog that counts consecutive loop errors and hard-exits so PM2 restarts cleanly (would have caught this in minutes, not hours).
+
+---
+
 ## 2026-05-18 — Multi-timeframe multi-strategy architecture — vps-claude
 
 **Commits:** `2b69581`

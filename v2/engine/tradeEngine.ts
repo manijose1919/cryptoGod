@@ -469,7 +469,7 @@ async function runLoop(): Promise<void> {
           if (!r.passed) console.log(`[V2] RISK REJECT ${r.ticker}: ${r.reason}`);
         }
       }
-      console.log(`[V2] Loop #${stats.loopCount}: risk rejected all ${riskResults.length} signals (${passedScan.length} scanned, ${passedSignals.length} signaled)`);
+      console.log(`[V2] Loop #${stats.loopCount}: risk rejected all ${riskResults.length} signals (${scanResults.filter(r => r.passed).length} scanned, ${passedSignals.length} signaled)`);
     }
 
     // Shorts are now handled by strategyRunner (Stage 1+2) — no separate pipeline needed

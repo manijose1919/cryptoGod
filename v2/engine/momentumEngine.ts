@@ -28,6 +28,8 @@ let exchange: ExchangeAdapter | null = null;
 let budget = 0;
 const stats = { loopCount: 0, tradesOpened: 0, tradesClosed: 0, totalPnl: 0 };
 const candleCache = new Map<string, Candle[]>();
+// Per-candle entry guard — see breakoutEngine.ts for context (dup-row bug 2026-05-25).
+const lastTradedCandleTime = new Map<string, number>();
 
 async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   try {
@@ -99,6 +101,9 @@ async function runLoop(): Promise<void> {
 
       const candles = candleCache.get(ticker);
       if (!candles || candles.length < MOMENTUM_CONFIG.MIN_CANDLES) continue;
+
+      const sigCandleTime = candles[candles.length - 1].time;
+      if ((lastTradedCandleTime.get(ticker) ?? 0) >= sigCandleTime) continue;
 
       const signal = detectMomentumEntry(candles, ticker);
       if (!signal) continue;
@@ -182,6 +187,7 @@ async function runLoop(): Promise<void> {
       };
 
       insertTrade(trade);
+      lastTradedCandleTime.set(ticker, sigCandleTime);
       stats.tradesOpened++;
       console.log(`[MOM] Trade opened: ${ticker} @ $${price.toFixed(4)} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} z=${(signal.signals.mom_z_score as number ?? 0).toFixed(1)} conf=${signal.confidence.toFixed(2)}`);
       break; // only one new entry per loop
