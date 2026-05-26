@@ -26,6 +26,11 @@ let loopInProgress = false;
 let exchange: ExchangeAdapter | null = null;
 let budget = 0;
 const stats = { loopCount: 0, tradesOpened: 0, tradesClosed: 0, totalPnl: 0 };
+// Per-candle entry guard: refuse re-entry on a ticker until its candle rolls.
+// Without this, paper/shadow mode opens + closes the same setup every 60s loop
+// while the live price sits past TP/SL relative to the prior candle close,
+// inflating reported trade counts (see CHANGELOG 2026-05-25 dup-row bug).
+const lastTradedCandleTime = new Map<string, number>();
 
 async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   try {
@@ -71,6 +76,9 @@ async function runLoop(): Promise<void> {
       const candles = await fetchCandles(ticker);
       if (!candles || candles.length < 50) continue;
 
+      const sigCandleTime = candles[candles.length - 1].time;
+      if ((lastTradedCandleTime.get(ticker) ?? 0) >= sigCandleTime) continue;
+
       const signal = detectBreakoutEntry(candles, ticker);
       if (!signal) continue;
 
@@ -103,6 +111,7 @@ async function runLoop(): Promise<void> {
       };
 
       insertTrade(trade);
+      lastTradedCandleTime.set(ticker, sigCandleTime);
       stats.tradesOpened++;
       console.log(`[BO] Trade opened: ${ticker} @ $${price.toFixed(2)} SL=$${sl.toFixed(2)} TP=$${tp.toFixed(2)} conf=${signal.confidence.toFixed(2)}`);
       break;

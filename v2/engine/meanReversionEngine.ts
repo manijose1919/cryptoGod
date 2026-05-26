@@ -24,6 +24,8 @@ const stats = {
   tradesClosed: 0,
   totalPnl: 0,
 };
+// Per-candle entry guard — see breakoutEngine.ts for context (dup-row bug 2026-05-25).
+const lastTradedCandleTime = new Map<string, number>();
 
 async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   try {
@@ -88,6 +90,9 @@ async function runMRLoop(): Promise<void> {
       const candles = await fetchCandles(ticker);
       if (!candles || candles.length < MR_CONFIG.MIN_CANDLES) continue;
 
+      const sigCandleTime = candles[candles.length - 1].time;
+      if ((lastTradedCandleTime.get(ticker) ?? 0) >= sigCandleTime) continue;
+
       const signal = detectMeanReversionEntry(candles, ticker);
       if (!signal) { rejectCount++; continue; }
       signalCount++;
@@ -144,6 +149,7 @@ async function runMRLoop(): Promise<void> {
       };
 
       insertTrade(trade);
+      lastTradedCandleTime.set(ticker, sigCandleTime);
       stats.tradesOpened++;
       console.log(`[MR] Trade opened: ${ticker} @ $${price.toFixed(4)} qty=${qty.toFixed(6)} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} conf=${signal.confidence.toFixed(2)}`);
       break; // one entry per loop to avoid overloading
