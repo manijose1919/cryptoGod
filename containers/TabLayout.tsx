@@ -14,8 +14,9 @@ const TickerTape = lazy(() => import('../components/TickerTape'));
 const MLIntelligenceTab = lazy(() => import('../components/MLIntelligenceTab'));
 const SystemConfigPanel = lazy(() => import('../components/SystemConfigPanel'));
 const V2AttributionTab = lazy(() => import('../components/V2AttributionTab'));
+const PairsTradingPanel = lazy(() => import('../components/PairsTradingPanel'));
 
-export type TabId = 'dashboard' | 'kraken' | 'crypto.com' | 'portfolio' | 'ml' | 'config' | 'v2';
+export type TabId = 'dashboard' | 'kraken' | 'crypto.com' | 'portfolio' | 'ml' | 'config' | 'v2' | 'pairs';
 
 interface TabDef {
   id: TabId;
@@ -32,6 +33,7 @@ const TABS: TabDef[] = [
   { id: 'ml', label: 'ML', key: 'F5', color: '#a78bfa' },
   { id: 'config', label: 'Config', key: 'F6', color: '#f59e0b' },
   { id: 'v2', label: 'V2', key: 'F7', color: '#ec4899' },
+  { id: 'pairs', label: 'Pairs', key: 'F8', color: '#06b6d4' },
 ];
 
 interface Props {
@@ -46,6 +48,7 @@ const SHORTCUTS = [
   { key: 'F5', desc: 'ML Intelligence' },
   { key: 'F6', desc: 'System Config' },
   { key: 'F7', desc: 'V2 Attribution' },
+  { key: 'F8', desc: 'Pairs Trading' },
   { key: '?', desc: 'Show this help' },
 ];
 
@@ -77,7 +80,7 @@ export function TabLayout({ renderDashboard }: Props) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const fKeyMap: Record<string, TabId> = {
         F1: 'dashboard', F2: 'kraken', F3: 'crypto.com',
-        F4: 'portfolio', F5: 'ml', F6: 'config', F7: 'v2',
+        F4: 'portfolio', F5: 'ml', F6: 'config', F7: 'v2', F8: 'pairs',
       };
       if (fKeyMap[e.key]) {
         e.preventDefault();
@@ -213,6 +216,11 @@ export function TabLayout({ renderDashboard }: Props) {
         {activeTab === 'v2' && (
           <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading V2 attribution...</div>}>
             <V2AttributionTab />
+          </Suspense>
+        )}
+        {activeTab === 'pairs' && (
+          <Suspense fallback={<div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Loading pairs trading...</div>}>
+            <PairsTradingPanel />
           </Suspense>
         )}
       </div>
