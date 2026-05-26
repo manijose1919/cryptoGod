@@ -18,8 +18,10 @@ import type {
   RunConfig,
   RunResult,
   StrategyContext,
+  ExitProfile,
 } from './types.ts';
-import { macd } from './indicators.ts';
+import { macd, atr } from './indicators.ts';
+import { DEFAULT_EXIT_PROFILE } from './types.ts';
 
 interface OpenTrade {
   entryBar: number;
@@ -27,14 +29,18 @@ interface OpenTrade {
   entryPrice: number;
   stop: number;
   target: number;
+  initialRisk: number;     // entryPrice - initialStop (used to compute R multiples)
   quantity: number;
   positionSizeUsd: number;
   peakPrice: number;
   peakHistogram: number;
+  beTriggered: boolean;
+  chandelierActive: boolean;
 }
 
 export function runBacktest(cfg: RunConfig): RunResult {
   const { strategy, ticker, candles, startBar, endBar, budget } = cfg;
+  const exit: ExitProfile = cfg.exitProfile ?? DEFAULT_EXIT_PROFILE;
   const trades: CanonicalTrade[] = [];
   let equity = budget;
   let open: OpenTrade | null = null;
@@ -44,6 +50,8 @@ export function runBacktest(cfg: RunConfig): RunResult {
   // Pre-compute MACD hist for the MACD trailing exit (avoid per-bar recompute cost).
   const closesAll = candles.map(c => c.close);
   const macdSeries = strategy.name === 'MACD' ? macd(closesAll, 12, 26, 9).hist : null;
+  // ATR series pre-computed once for chandelier trailing (per-bar recompute cost).
+  const atrSeries = (exit.chandelierAtR > 0) ? atr(candles, 14) : null;
 
   for (let i = i0; i < endBar - 1; i++) {
     const cur = candles[i];
@@ -64,6 +72,27 @@ export function runBacktest(cfg: RunConfig): RunResult {
         const ctx: StrategyContext = { candles, i: i + 1 };
         const newStop = strategy.updateStop(ctx, open.entryPrice, open.stop, open.peakPrice);
         if (newStop > open.stop) open.stop = newStop;
+      }
+
+      // Asymmetric exit profile: BE move + chandelier trail.
+      // Both compare unrealized peak PnL in R-multiples (R = initial risk).
+      if (open.initialRisk > 0) {
+        const peakRMultiple = (open.peakPrice - open.entryPrice) / open.initialRisk;
+        // Break-even: move stop to entry × 1.001 once peak hits N×R.
+        if (exit.breakEvenAtR > 0 && !open.beTriggered && peakRMultiple >= exit.breakEvenAtR) {
+          const beStop = open.entryPrice * 1.001;
+          if (beStop > open.stop) open.stop = beStop;
+          open.beTriggered = true;
+        }
+        // Chandelier trail: peak - N × ATR once peak hits M×R.
+        if (exit.chandelierAtR > 0 && atrSeries && peakRMultiple >= exit.chandelierAtR) {
+          open.chandelierActive = true;
+          const atrAbs = atrSeries[i + 1];
+          if (Number.isFinite(atrAbs) && atrAbs > 0) {
+            const candidate = open.peakPrice - exit.chandelierAtrMult * atrAbs;
+            if (candidate > open.stop) open.stop = candidate;
+          }
+        }
       }
 
       // MACD-specific exit: histogram falls to <50% of peak since entry.
@@ -131,10 +160,13 @@ export function runBacktest(cfg: RunConfig): RunResult {
             entryPrice: fillPrice,
             stop: decision.stop,
             target: decision.target,
+            initialRisk: Math.max(0, fillPrice - decision.stop),
             quantity: qty,
             positionSizeUsd,
             peakPrice: fillPrice,
             peakHistogram: macdSeries && Number.isFinite(macdSeries[i + 1]) ? macdSeries[i + 1] : 0,
+            beTriggered: false,
+            chandelierActive: false,
           };
         }
       }
