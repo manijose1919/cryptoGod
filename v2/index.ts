@@ -12,10 +12,11 @@ import { initMREngine, startMREngine, stopMREngine, getMRStatus } from './engine
 import { initBreakoutEngine, startBreakoutEngine, stopBreakoutEngine, getBreakoutStatus } from './engine/breakoutEngine.ts';
 import { initMomentumEngine, startMomentumEngine, stopMomentumEngine, getMomentumStatus } from './engine/momentumEngine.ts';
 import { buildKrakenSniper, buildCryptocomSniper, stopSniperEngine, getSniperStatus } from './engine/sniperEngine.ts';
+import { initPairsEngine, startPairsEngine, stopPairsEngine, getPairsStatus } from './pairs/pairsEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
-import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG } from './engine/config.ts';
+import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG, PAIRS_CONFIG } from './engine/config.ts';
 
-export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine, getSniperStatus, stopSniperEngine };
+export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine, getSniperStatus, stopSniperEngine, getPairsStatus, stopPairsEngine };
 
 export async function bootV2(initialBudget = 1000): Promise<void> {
   console.log(`[V2] Booting Phoenix V2 in ${V2_CONFIG.MODE} mode...`);
@@ -105,6 +106,21 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       }
     } else {
       console.log('[V2] Sniper master switch off (SNIPER_CONFIG.ENABLED=false).');
+    }
+
+    // Pairs trading engine (cross-asset cointegration, paper-only this session).
+    // Gated by PAIRS_MODE env: 'off' | 'paper'. 'live' is refused for now.
+    // Deployment plan: docs/plans/2026-05-26-pairs-deployment-plan.md
+    if (PAIRS_CONFIG.MODE !== 'off') {
+      try {
+        initPairsEngine();
+        startPairsEngine();
+        console.log(`[V2] Pairs engine running (${PAIRS_CONFIG.MODE} mode, ${PAIRS_CONFIG.SYMBOL_A}/${PAIRS_CONFIG.SYMBOL_B})`);
+      } catch (err: any) {
+        console.warn(`[V2] Pairs engine failed to start: ${err.message}`);
+      }
+    } else {
+      console.log('[V2] Pairs engine disabled (PAIRS_MODE=off).');
     }
   } catch (err: any) {
     console.error(`[V2] Boot failed: ${err.message}`);
