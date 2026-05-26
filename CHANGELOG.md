@@ -37,6 +37,78 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-05-26 18:00 UTC — Pairs trading engine deployed in PAPER MODE — local-claude
+
+**Commits:** merge commit of `feat/canonical-strategy-backtest` (commits `ab1ae8e` through `557afc9`) + ecosystem config update
+**Files changed:** 30+ new files under `v2/pairs/`, `v2/backtest/canonical/`, `components/PairsTradingPanel.tsx`, `containers/TabLayout.tsx`, `services/exchangeAdapters/krakenAdapter.js` (margin order methods added), `ecosystem.config.cjs` (PAIRS_MODE=paper added)
+**Stats baseline reset:** NO (paper-mode trades on a separate strategy; do not affect TREND/MOMENTUM/BREAKOUT baseline)
+
+### What changed
+
+Added cross-asset pairs trading engine. Strategy #11 from the canonical 20-strategy blueprint. Survived walk-forward validation with the strongest fragility ratio in the entire study (FIL/ICP: IS +2.79% → OOS +11.28%, fragility 4.05).
+
+**Engine config (live PAIRS_CONFIG):**
+- Pair: FILUSD / ICPUSD
+- Entry: |z| ≥ 1.5σ; Exit: |z| < 0.3σ; Stop: |z| > 4σ
+- β re-estimate every 120 bars; 720-bar rolling window
+- Notional: $1000 total ($500/leg)
+- Time stop: 200 bars (~8 days on 1h)
+- 3-loss auto-pause; 3% drawdown kill; ADF gate at t > -2.86
+
+**SAFETY INTERLOCK:** Engine mode is gated by `PAIRS_MODE` env var:
+- `off` (default if env unset) — engine doesn't run
+- `paper` — signals fire, all fills simulated, NO orders to Kraken
+- `live` — requires SECOND env var `PAIRS_LIVE_CONFIRMED=yes`. Without that, downgraded to paper.
+
+VPS ecosystem.config.cjs now sets `PAIRS_MODE=paper`. NEVER set `PAIRS_LIVE_CONFIRMED=yes` on VPS without explicit operator sign-off — Phase A protocol calls for 30 days of paper data first.
+
+### Why
+
+Backtest validated FIL/ICP as the highest-confidence edge in the canonical 20-strategy study. Walk-forward survival (OOS > IS) is the rare signature of a genuine structural edge rather than overfitting. Now starting Phase A: 30 days of paper-mode signals to confirm live behavior matches backtest before risking real capital.
+
+Expected paper-mode results (per most recent 30/60/90d backtest using live config — see `v2/backtest/canonical/pairs/results/expected-latest.md`):
+
+| Window | Trades | WR | PF | Net % | Max DD |
+|---|---:|---:|---:|---:|---:|
+| 30d | 7 | 85.7% | 17.27 | +25.06% | 1.54% |
+| 60d | 9 | 66.7% | 6.22 | +21.22% | 4.07% |
+| 90d | 28 | 50.0% | 1.89 | +19.87% | 14.70% |
+
+Expect **1-2 trades per week, $35-$8 per trade net, 5-15% max DD over a month**.
+
+### What to monitor (VPS Claude — every cycle)
+
+1. PM2 process: `canuck-node` should be `online`. Look for `[PAIRS] engine initialized (mode=paper, pair=FILUSD/ICPUSD)` in startup logs.
+2. Loop heartbeat: `[PAIRS] cointegration initialized β=... adf=...` line should appear within 60s of restart, then `[PAIRS] no entry — z=X.XX within ±1.5` or signal logs every loop.
+3. Cointegration health: ADF t-stat should stay below -2.86 in `v2_pairs_state` snapshots. Alert if t > -2.0 (already triggers internal alert).
+4. New paper trades: query `v2_pairs_trades WHERE mode='paper' ORDER BY entry_time DESC LIMIT 5`.
+5. Recent alerts: `v2_pairs_alerts ORDER BY created_at DESC LIMIT 10` — anything `crit` severity needs human review.
+
+### What to write into the rolling status report
+
+Generate/maintain `data/reports/pairs-status.md` on every cycle. Sections:
+- Header (timestamp, mode, loop count, ADF healthy y/n)
+- Cointegration snapshot (β, α, R², ADF, halflife — read from latest `v2_pairs_state` row)
+- Open trade (if any) with unrealized PnL — call `/api/v2/pairs/status` or query DB
+- Paper cumulative PnL over the Phase A window
+- Recent 10 alerts
+- Days remaining in Phase A
+- Phase A success criteria progress (≥3 signals, ≥+1% PnL, etc.)
+
+### Rollback
+
+Set `PAIRS_MODE=off` in ecosystem.config.cjs, push, restart. Or just don't push the new config — the engine is OFF if env var unset. Existing TREND/MOMENTUM/BREAKOUT engines are completely independent.
+
+### Cross-references
+
+- Deployment plan: `docs/plans/2026-05-26-pairs-deployment-plan.md`
+- Operational runbook: `docs/runbooks/pairs-runbook.md`
+- Expected behavior backtest: `v2/backtest/canonical/pairs/results/expected-latest.md`
+- API endpoints: `GET /api/v2/pairs/{status,trades,state,pnl,alerts}`, `POST /api/v2/pairs/force-close`
+- Dashboard: F8 tab on the React UI
+
+---
+
 ## 2026-05-26 13:40 UTC — Historical dedup of v2_trades + baseline reset — local-claude
 
 **Commits:** none (data-only operation on VPS sqlite, no code change)
