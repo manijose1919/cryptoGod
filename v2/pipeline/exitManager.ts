@@ -114,14 +114,17 @@ export async function checkExits(
       ? currentPrice >= trade.currentStop
       : currentPrice <= trade.currentStop;
     if (slTriggered) {
-      const stopWasRaised = trade.trailingActivated || trade.currentStop > trade.initialStop;
+      const stopWasRaised = trade.trailingActivated || (isShort ? trade.currentStop < trade.initialStop : trade.currentStop > trade.initialStop);
       const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
       const reasonLabel = stopWasRaised ? 'Trailing/BE stop hit' : 'Stop loss hit';
+      // In paper mode, use stop price (not current price) to avoid gap-through losses.
+      // Real exchange stop orders fill at the stop level, not the market price after a gap.
+      const exitPrice = V2_CONFIG.MODE !== 'live' ? trade.currentStop : currentPrice;
       results.push({
         trade,
         shouldExit: true,
         exitReason,
-        exitPrice: currentPrice,
+        exitPrice,
         newStop: trade.currentStop,
         trailingJustActivated: false,
         decision: makeDecision(trade.id, 'execute', `${reasonLabel}: ${currentPrice.toFixed(2)} <= ${trade.currentStop.toFixed(2)}`, {
@@ -285,11 +288,13 @@ export async function checkExits(
         ? currentPrice >= newStop
         : currentPrice <= newStop;
       if (trailHit) {
+        // Paper mode: use stop price to avoid gap-through losses
+        const trailExitPrice = V2_CONFIG.MODE !== 'live' ? newStop : currentPrice;
         results.push({
           trade,
           shouldExit: true,
           exitReason: EXIT_REASON.trailing,
-          exitPrice: currentPrice,
+          exitPrice: trailExitPrice,
           newStop,
           trailingJustActivated,
           decision: makeDecision(trade.id, 'execute', `Trailing stop hit: ${currentPrice.toFixed(2)} <= ${newStop.toFixed(2)}`, {
