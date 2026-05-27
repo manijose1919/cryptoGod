@@ -11,11 +11,14 @@ export const V2_CONFIG = {
 
   // --- Scan ---
   SCAN_TICKERS: [
-    'AKTUSD', 'ZECUSD', 'COMPUSD',
-    'HYPEUSD', 'SUIUSD',
-    'RUNEUSD', 'ENAUSD',
-    'FETUSD', 'PENGUUSD', 'RENDERUSD',
-    'TAOUSD', // 2026-05-27: PF 17.70 solo, 94.6% WR, +$209 in 90d backtest
+    // 2026-05-27: Concentrated on 6 top performers. $10K/6 = $1,667/ticker.
+    // PF 8.64, +$8,443 (84.4% in 90d), 180d +$13,486 (134.8%)
+    'AKTUSD',    // PF best, 93.3% WR, +$2,009
+    'ZECUSD',    // 92.4% WR, +$1,554
+    'FETUSD',    // 91.7% WR, +$1,402
+    'PENGUUSD',  // 90.9% WR, +$1,489
+    'TAOUSD',    // 89.5% WR, +$1,479
+    'PENDLEUSD', // 88.1% WR, +$511, PF 8.20
     // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
     //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
     //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
