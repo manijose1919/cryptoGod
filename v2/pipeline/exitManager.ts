@@ -117,8 +117,7 @@ export async function checkExits(
       const stopWasRaised = trade.trailingActivated || (isShort ? trade.currentStop < trade.initialStop : trade.currentStop > trade.initialStop);
       const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
       const reasonLabel = stopWasRaised ? 'Trailing/BE stop hit' : 'Stop loss hit';
-      // In paper mode, use stop price (not current price) to avoid gap-through losses.
-      // Real exchange stop orders fill at the stop level, not the market price after a gap.
+      // Paper mode: use stop price to avoid gap-through losses
       const exitPrice = V2_CONFIG.MODE !== 'live' ? trade.currentStop : currentPrice;
       results.push({
         trade,
@@ -288,7 +287,6 @@ export async function checkExits(
         ? currentPrice >= newStop
         : currentPrice <= newStop;
       if (trailHit) {
-        // Paper mode: use stop price to avoid gap-through losses
         const trailExitPrice = V2_CONFIG.MODE !== 'live' ? newStop : currentPrice;
         results.push({
           trade,
