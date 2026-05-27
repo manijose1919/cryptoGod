@@ -14,8 +14,8 @@ export const V2_CONFIG = {
     'AKTUSD', 'ZECUSD', 'COMPUSD',
     'HYPEUSD', 'SUIUSD',
     'RUNEUSD', 'ENAUSD',
-    // 2026-05-19: Added top 3 from backtest sweep — all PF>2.4, WR>73%
     'FETUSD', 'PENGUUSD', 'RENDERUSD',
+    'TAOUSD', // 2026-05-27: PF 17.70 solo, 94.6% WR, +$209 in 90d backtest
     // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
     //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
     //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
@@ -49,11 +49,11 @@ export const V2_CONFIG = {
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
   BASE_POSITION_PERCENT: 0.40,  // 2026-05-18: 0.25→0.40. Backtest: PF 3.84→6.63, +$414→+$888 on $6K. Safe — max DD stays 0.2%.
-  MAX_RISK_PER_TRADE_PERCENT: 0.02, // 2026-05-18: 0.01→0.02. Doubles position on high-ATR assets while keeping max loss at 2% of equity.
+  MAX_RISK_PER_TRADE_PERCENT: 0.03, // 2026-05-27: 0.02→0.03. Backtest: PF 5.36→6.06, +$1145→+$1429. DD only +$5.
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
 
   // --- Re-entry Cooldown ---
-  REENTRY_COOLDOWN_MS: 8 * 60 * 60 * 1000,  // 8h (2 candles) — prevents churn on same ticker after exit
+  REENTRY_COOLDOWN_MS: 0,  // 2026-05-27: disabled. Backtest: 0h cooldown triples trades (357→1207) while maintaining 88% WR. Intra-bar trailing catches re-entries profitably.
 
   // --- Correlation Check ---
   CORRELATION_MAX_AVG: 0.70,           // reject if avg correlation with open positions > this
