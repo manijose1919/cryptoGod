@@ -43,6 +43,12 @@ interface ExitCheckResult {
   trailingActivated: boolean;
 }
 
+/**
+ * Simulate intra-bar price sequence to match live engine behavior.
+ * Live checks exits every 60s; this simulates 4 price points per bar:
+ * Open → favorable extreme → adverse extreme → Close.
+ * At each step: update peak, check BE/trailing/stops — just like live.
+ */
 function checkExitOnBar(
   trade: BacktestTrade,
   bar: Candle,
@@ -51,60 +57,106 @@ function checkExitOnBar(
 ): ExitCheckResult {
   const holdBars = barIndex - trade.entryBar;
   const holdMs = holdBars * config.intervalMinutes * 60 * 1000;
+  const isShort = trade.side === 'short';
 
   let currentStop = trade.currentStop;
   let trailingActivated = trade.trailingActivated;
-  const isShort = trade.side === 'short';
 
-  // --- 1. Stop Loss / 2. Take Profit ---
-  // Check BEFORE updating peak — avoids look-ahead bias where we'd
-  // see the bar's high, update peak/BE, then check the same bar's low.
-  const slHit = isShort ? bar.high >= currentStop : bar.low <= currentStop;
-  const tpHit = isShort ? bar.low <= trade.takeProfit : bar.high >= trade.takeProfit;
+  // Build intra-bar price sequence: Open → favorable → adverse → Close
+  // Favorable = high for longs, low for shorts (best case first)
+  const priceSequence = isShort
+    ? [bar.open, bar.low, bar.high, bar.close]   // short: low is favorable
+    : [bar.open, bar.high, bar.low, bar.close];   // long: high is favorable
 
-  if (slHit && tpHit) {
-    return { shouldExit: true, exitPrice: currentStop, exitReason: EXIT_REASON.stop_loss, newStop: currentStop, trailingActivated };
-  }
-  if (slHit) {
-    return { shouldExit: true, exitPrice: currentStop, exitReason: EXIT_REASON.stop_loss, newStop: currentStop, trailingActivated };
-  }
-  if (tpHit) {
-    return { shouldExit: true, exitPrice: trade.takeProfit, exitReason: EXIT_REASON.take_profit, newStop: currentStop, trailingActivated };
+  for (const price of priceSequence) {
+    // Update peak price (highest for longs, lowest for shorts)
+    if (isShort) {
+      if (price < trade.peakPrice) trade.peakPrice = price;
+    } else {
+      if (price > trade.peakPrice) trade.peakPrice = price;
+    }
+
+    // Check SL
+    const slHit = isShort ? price >= currentStop : price <= currentStop;
+    if (slHit) {
+      const stopWasRaised = isShort ? currentStop < trade.stopLoss : currentStop > trade.stopLoss;
+      return {
+        shouldExit: true,
+        exitPrice: currentStop,
+        exitReason: stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss,
+        newStop: currentStop,
+        trailingActivated,
+      };
+    }
+
+    // Check TP
+    const tpHit = isShort ? price <= trade.takeProfit : price >= trade.takeProfit;
+    if (tpHit) {
+      return {
+        shouldExit: true,
+        exitPrice: trade.takeProfit,
+        exitReason: EXIT_REASON.take_profit,
+        newStop: currentStop,
+        trailingActivated,
+      };
+    }
+
+    // PnL at this price point
+    const pnl = isShort
+      ? (trade.entryPrice - price) / trade.entryPrice
+      : (price - trade.entryPrice) / trade.entryPrice;
+
+    // Break-even stop
+    const beTrigger = V2_CONFIG.TRAILING_ACTIVATE_PERCENT * 0.6;
+    const atrForBE = (trade.atrPercent || 1.0) / 100;
+    const beOffset = atrForBE * 0.5;
+    if (pnl >= beTrigger) {
+      const beStop = isShort
+        ? trade.entryPrice * (1 - beOffset)
+        : trade.entryPrice * (1 + beOffset);
+      const beShouldUpdate = isShort ? beStop < currentStop : beStop > currentStop;
+      if (beShouldUpdate) currentStop = beStop;
+    }
+
+    // Trailing stop
+    if (pnl >= V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
+      trailingActivated = true;
+
+      let givebackFraction = V2_CONFIG.TRAILING_GIVEBACK_PERCENT;
+      if (trade.atrPercent > 2.0) givebackFraction *= 1.3;
+      else if (trade.atrPercent > 1.0) givebackFraction *= 1.1;
+      else if (trade.atrPercent < 0.3) givebackFraction *= 0.7;
+
+      const profitVsActivation = pnl / V2_CONFIG.TRAILING_ACTIVATE_PERCENT;
+      if (profitVsActivation < 1.5) givebackFraction *= 1.5;
+      else if (profitVsActivation < 2.0) {
+        const t = (profitVsActivation - 1.5) / 0.5;
+        givebackFraction *= 1.5 - t * 0.5;
+      }
+
+      const tpPercent = Math.abs(trade.takeProfit - trade.entryPrice) / trade.entryPrice;
+      const profitMultiple = tpPercent > 0 ? pnl / tpPercent : 1;
+      if (profitMultiple >= 2.0) givebackFraction *= 0.6;
+      else if (profitMultiple >= 1.5) givebackFraction *= 0.8;
+
+      const peakGain = isShort
+        ? trade.entryPrice - trade.peakPrice
+        : trade.peakPrice - trade.entryPrice;
+      const trailingStop = isShort
+        ? trade.peakPrice + peakGain * givebackFraction
+        : trade.peakPrice - peakGain * givebackFraction;
+
+      const trailShouldUpdate = isShort ? trailingStop < currentStop : trailingStop > currentStop;
+      if (trailShouldUpdate) currentStop = trailingStop;
+    }
   }
 
-  // Update peak price AFTER SL/TP checks — prevents look-ahead bias.
-  // Peak from this bar informs NEXT bar's trailing/BE, not this bar's.
-  if (isShort) {
-    if (bar.low < trade.peakPrice) trade.peakPrice = bar.low;
-  } else {
-    if (bar.high > trade.peakPrice) trade.peakPrice = bar.high;
-  }
-
-  // --- 3. Break-Even Stop ---
-  // Use bar.close (known at bar end) not bar.high (intra-bar look-ahead)
-  const bestPnl = isShort
-    ? (trade.entryPrice - bar.close) / trade.entryPrice
-    : (bar.close - trade.entryPrice) / trade.entryPrice;
-  // Break-even stop — ATR-aware, tied to trailing activation (matches live exitManager)
-  const beTrigger = V2_CONFIG.TRAILING_ACTIVATE_PERCENT * 0.6;
-  const atrForBE = (trade.atrPercent || 1.0) / 100;
-  const beOffset = atrForBE * 0.5;
-  if (bestPnl >= beTrigger) {
-    const breakEvenStop = isShort
-      ? trade.entryPrice * (1 - beOffset)
-      : trade.entryPrice * (1 + beOffset);
-    const beShouldUpdate = isShort ? breakEvenStop < currentStop : breakEvenStop > currentStop;
-    if (beShouldUpdate) currentStop = breakEvenStop;
-  }
-
-  // --- 4. Quick-Kill ---
+  // Quick-kill (checked at bar end, not intra-bar)
   const quickKillBars = Math.ceil(V2_CONFIG.QUICK_KILL_AFTER_MS / (config.intervalMinutes * 60 * 1000));
   const peakPnlPercent = isShort
     ? (trade.entryPrice - trade.peakPrice) / trade.entryPrice
     : (trade.peakPrice - trade.entryPrice) / trade.entryPrice;
-
   if (holdBars >= quickKillBars && peakPnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN && trade.atrPercent > 0) {
-    // ATR-scaled quick-kill (matches live exitManager)
     const qkMult = trade.atrPercent > 1.5 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.5
                  : trade.atrPercent > 1.0 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.75
                  : V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
@@ -115,49 +167,11 @@ function checkExitOnBar(
     if (qkShouldUpdate) currentStop = tighterStop;
   }
 
-  // --- 5. Trailing Stop ---
-  const pnlPercentAtClose = isShort
+  // Time kill (checked at bar end)
+  const pnlAtClose = isShort
     ? (trade.entryPrice - bar.close) / trade.entryPrice
     : (bar.close - trade.entryPrice) / trade.entryPrice;
-
-  if (pnlPercentAtClose >= V2_CONFIG.TRAILING_ACTIVATE_PERCENT) {
-    trailingActivated = true;
-
-    let givebackFraction = V2_CONFIG.TRAILING_GIVEBACK_PERCENT;
-    if (trade.atrPercent > 2.0) givebackFraction *= 1.3;
-    else if (trade.atrPercent > 1.0) givebackFraction *= 1.1;
-    else if (trade.atrPercent < 0.3) givebackFraction *= 0.7;
-
-    const profitVsActivation = pnlPercentAtClose / V2_CONFIG.TRAILING_ACTIVATE_PERCENT;
-    if (profitVsActivation < 1.5) givebackFraction *= 1.5;
-    else if (profitVsActivation < 2.0) {
-      const t = (profitVsActivation - 1.5) / 0.5;
-      givebackFraction *= 1.5 - t * 0.5;
-    }
-
-    const tpPercent = Math.abs(trade.takeProfit - trade.entryPrice) / trade.entryPrice;
-    const profitMultiple = tpPercent > 0 ? pnlPercentAtClose / tpPercent : 1;
-    if (profitMultiple >= 2.0) givebackFraction *= 0.6;
-    else if (profitMultiple >= 1.5) givebackFraction *= 0.8;
-
-    const peakGain = isShort
-      ? trade.entryPrice - trade.peakPrice
-      : trade.peakPrice - trade.entryPrice;
-    const trailingStop = isShort
-      ? trade.peakPrice + peakGain * givebackFraction
-      : trade.peakPrice - peakGain * givebackFraction;
-
-    const trailShouldUpdate = isShort ? trailingStop < currentStop : trailingStop > currentStop;
-    if (trailShouldUpdate) currentStop = trailingStop;
-
-    const trailHit = isShort ? bar.high >= currentStop : bar.low <= currentStop;
-    if (trailHit) {
-      return { shouldExit: true, exitPrice: currentStop, exitReason: EXIT_REASON.trailing, newStop: currentStop, trailingActivated };
-    }
-  }
-
-  // --- 6. Time Kill ---
-  if (holdMs > V2_CONFIG.TIME_KILL_MS && Math.abs(pnlPercentAtClose) < V2_CONFIG.TIME_KILL_MIN_MOVE) {
+  if (holdMs > V2_CONFIG.TIME_KILL_MS && Math.abs(pnlAtClose) < V2_CONFIG.TIME_KILL_MIN_MOVE) {
     return {
       shouldExit: true,
       exitPrice: bar.close,
@@ -224,8 +238,8 @@ function simulateTicker(
       trade.trailingActivated = exitResult.trailingActivated;
 
       if (exitResult.shouldExit) {
-        // Close trade — apply 0.1% adverse slippage on exit
-        const exitPrice = exitResult.exitPrice * (trade.side === 'short' ? 1.001 : 0.999);
+        // Exit price from the intra-bar simulation (stop price for SL/trailing, TP for take_profit)
+        const exitPrice = exitResult.exitPrice;
         const pnlGross = trade.side === 'short'
           ? (trade.entryPrice - exitPrice) * trade.quantity
           : (exitPrice - trade.entryPrice) * trade.quantity;
