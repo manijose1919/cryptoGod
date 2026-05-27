@@ -130,9 +130,9 @@ export const V2_CONFIG = {
 
 // Which timeframes each strategy runs on
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
-  TREND:           ['1h', '4h'],
+  TREND:           ['30m', '1h', '4h'],
   MOMENTUM:        ['1h', '4h'],
-  BREAKOUT:        ['15m', '1h'],
+  BREAKOUT:        ['15m', '30m', '1h'],
   // MEAN_REVERSION and SCALP disabled — live data: 0% and 22% WR respectively
 };
 
