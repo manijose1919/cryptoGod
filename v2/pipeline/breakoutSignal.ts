@@ -2,7 +2,7 @@ import type { Candle, SignalResult } from './types.ts';
 import { computeSignals, detectRegime } from '../indicators/indicators.ts';
 
 const BREAKOUT_CONFIG = {
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP', 'SIDEWAYS'],
+  ALLOWED_REGIMES: ['STRONG_UP', 'UP'], // Removed SIDEWAYS — live data: 4 SIDEWAYS entries, 0 wins, -$17.45. False breakouts in chop.
   LOOKBACK_BARS: 30,
   VOLUME_MULTIPLIER: 2.0,
   MIN_ATR_PERCENT: 0.3,
