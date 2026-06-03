@@ -87,7 +87,7 @@ export const V2_CONFIG = {
   CANDLE_INTERVAL: '4h' as string, // Was 15m — backtest: 15m=21%WR/-$1030, 1h=26%WR/-$1669, 4h=27%WR/-$455. 4h gives trends room past 0.52% fees.
 
   // --- Exit Management ---
-  STOP_LOSS_ATR_MULT: 2.0,  // 2026-05-06 Config A: 2.5 → 2.0 — tighter stop in combination with TG 0.03 reduces avg_loss while win profile preserved by trailing
+  STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-03: 2.0→1.5. Live data: SL avg -$11.13 vs trail avg +$2.13 (5.2:1 ratio). Tighter SL cuts loss size ~33%. Backtest: +$6,391→+$7,186, PF 9.07→9.50.
   TAKE_PROFIT_ATR_MULT: 4.0,       // 2026-04-29: 3.5 → 4.0 (R:R 1.4 → 1.6). Avg_win problem: at R:R 1.4 the cohort was avg_win $0.97 vs needed ~$1.10 for 59% WR break-even. Wider TP makes individual TP hits +$2.00 instead of +$1.75. Risk: historical R:R 1.6 cohort underperformed R:R 1.4 (-$10.89 vs -$1.89), but that was without working BE/trailing stops. With current trailing-active@1% catching moderate winners, wider TP may behave differently. Deliberate test under user's risk-on framing 2026-04-29.
   TRAILING_ACTIVATE_PERCENT: 0.01, // 2026-05-18: 0.025→0.015. At 2.5% most trades peaked +1-2% and never trailed. At 1.5% trailing engages on moderate moves — PF 1.67→3.71, time_kill 72→26 trades.
   TRAILING_GIVEBACK_PERCENT: 0.03,  // 2026-05-06 Config A: 0.25 → 0.03 — extreme tight trail. Once activated, surrender only 3% of peak gain. The trailing-exit P&L moved from +$216 (PF 1.43) to +$312 (PF 1.62) on AKT+ZEC+COMP 90d
@@ -155,14 +155,14 @@ export interface StrategyExitConfig {
 
 export const STRATEGY_EXIT_CONFIGS: Record<string, StrategyExitConfig> = {
   TREND: {
-    slAtrMult: 2.0, tpAtrMult: 4.0,
+    slAtrMult: 1.5, tpAtrMult: 4.0,
     trailActivatePercent: 0.025, trailGivebackPercent: 0.03,
     timeKillBars: 2, timeKillMinMove: 0.007,
     quickKillBars: 1, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
     useTrailing: true,
   },
   MOMENTUM: {
-    slAtrMult: 2.0, tpAtrMult: 3.0,
+    slAtrMult: 1.5, tpAtrMult: 3.0,
     trailActivatePercent: 0.025, trailGivebackPercent: 0.05,
     timeKillBars: 4, timeKillMinMove: 0.005,
     quickKillBars: 2, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
