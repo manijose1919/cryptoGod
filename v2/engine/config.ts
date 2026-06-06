@@ -52,7 +52,7 @@ export const V2_CONFIG = {
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
   BASE_POSITION_PERCENT: 0.40,  // 2026-05-18: 0.25→0.40. Backtest: PF 3.84→6.63, +$414→+$888 on $6K. Safe — max DD stays 0.2%.
-  MAX_RISK_PER_TRADE_PERCENT: 0.03, // 2026-05-27: 0.02→0.03. Backtest: PF 5.36→6.06, +$1145→+$1429. DD only +$5.
+  MAX_RISK_PER_TRADE_PERCENT: 0.015, // 2026-06-06: 0.03→0.015. Live: high-ATR trades (FET 4.5%, ZEC 3%) got $400+ positions with $40 max loss. Caps high-ATR smaller while low-ATR unaffected.
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
 
   // --- Re-entry Cooldown ---
