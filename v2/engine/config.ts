@@ -70,7 +70,7 @@ export const V2_CONFIG = {
   SHORTS_ENABLED: true,                  // 2026-05-18: enabled for paper testing
   SHORT_ALLOWED_REGIMES: ['STRONG_DOWN', 'DOWN'] as readonly string[],
   SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
-  SHORT_STOP_LOSS_ATR_MULT: 2.0,
+  SHORT_STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-06: matched to long SL. ZEC short lost -$39.53 at 2.0x ATR (9% stop). At 1.5x would be ~-$28.
   SHORT_TAKE_PROFIT_ATR_MULT: 3.5,
   SHORT_TRAILING_ACTIVATE_PERCENT: 0.01,
   SHORT_TRAILING_GIVEBACK_PERCENT: 0.03,
