@@ -18,6 +18,8 @@ import { initCryptoComAdapter, cryptoComV2 } from '../exchange/cryptoComV2Adapte
 import { getPairsStatus, forceClosePairsTrade } from '../pairs/pairsEngine.ts';
 // @ts-expect-error JS module without types
 import { getDb } from '../../services/database.js';
+// @ts-expect-error JS module without types
+import { requireAdminAuth } from '../../middleware/adminAuth.js';
 
 export const v2Router = Router();
 
@@ -79,7 +81,7 @@ v2Router.get('/signal-scores', (_req: Request, res: Response) => {
 });
 
 // --- POST /recompute-scores ---
-v2Router.post('/recompute-scores', (_req: Request, res: Response) => {
+v2Router.post('/recompute-scores', requireAdminAuth, (_req: Request, res: Response) => {
   try {
     recomputeAllScores();
     const scorecard = getScorecard();
@@ -226,7 +228,7 @@ v2Router.get('/dual/trades/:exchange', (req: Request, res: Response) => {
 });
 
 // --- POST /dual/start --- Start dual engine via API
-v2Router.post('/dual/start', async (_req: Request, res: Response) => {
+v2Router.post('/dual/start', requireAdminAuth, async (_req: Request, res: Response) => {
   try {
     await Promise.all([initKrakenAdapter(), initCryptoComAdapter()]);
     initDualEngine(krakenV2, cryptoComV2);
@@ -238,7 +240,7 @@ v2Router.post('/dual/start', async (_req: Request, res: Response) => {
 });
 
 // --- POST /dual/stop --- Stop dual engine
-v2Router.post('/dual/stop', (_req: Request, res: Response) => {
+v2Router.post('/dual/stop', requireAdminAuth, (_req: Request, res: Response) => {
   try {
     stopDualEngine();
     const status = getDualStatus();
@@ -259,7 +261,7 @@ v2Router.get('/bearish/status', (_req: Request, res: Response) => {
   }
 });
 
-v2Router.post('/bearish/stop', (_req: Request, res: Response) => {
+v2Router.post('/bearish/stop', requireAdminAuth, (_req: Request, res: Response) => {
   try {
     stopBearishServices();
     res.json({ status: 'stopped' });
@@ -268,7 +270,7 @@ v2Router.post('/bearish/stop', (_req: Request, res: Response) => {
   }
 });
 
-v2Router.post('/bearish/start', async (_req: Request, res: Response) => {
+v2Router.post('/bearish/start', requireAdminAuth, async (_req: Request, res: Response) => {
   try {
     await initKrakenAdapter();
     initBearishServices(krakenV2);
@@ -345,7 +347,8 @@ v2Router.get('/pairs/pnl', (_req: Request, res: Response) => {
 
 // Force-close any currently open pairs trade. Confirmed via explicit body
 // flag to prevent accidental fetches from triggering a real close.
-v2Router.post('/pairs/force-close', async (req: Request, res: Response) => {
+// Admin-gated: closes positions (real money in live mode).
+v2Router.post('/pairs/force-close', requireAdminAuth, async (req: Request, res: Response) => {
   try {
     if (req.body?.confirm !== 'yes') {
       res.status(400).json({ error: 'confirmation required: body must include { "confirm": "yes" }' });
