@@ -6,7 +6,7 @@
 import type { SignalResult, RiskResult, V2PortfolioState } from './types.ts';
 import { REGIME } from './types.ts';
 import type { Candle } from './types.ts';
-import { V2_CONFIG, getExchangeFees } from '../engine/config.ts';
+import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, getExchangeFees } from '../engine/config.ts';
 import { getRecentClosedByTicker } from '../attribution/attributionStore.ts';
 import { closesToReturns, pearsonCorrelation } from '../indicators/indicators.ts';
 
@@ -170,8 +170,13 @@ export function evaluateRisk(
       continue;
     }
     const isShort = signal.side === 'short';
-    const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : V2_CONFIG.STOP_LOSS_ATR_MULT;
-    const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    // Per-strategy SL/TP — must match what the executor will actually set.
+    // Using TREND's 4.0× TP here overstated expected return ~33% for
+    // MOMENTUM/BREAKOUT (3.0× TP), letting marginal entries past the fee floor.
+    const strategy = (signal as any)._strategy ?? 'TREND';
+    const exitCfg = STRATEGY_EXIT_CONFIGS[strategy] ?? STRATEGY_EXIT_CONFIGS.TREND;
+    const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : exitCfg.slAtrMult;
+    const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : exitCfg.tpAtrMult;
     const tpPercent = atrPercent * tpMult / 100;
     const slPercent = atrPercent * slMult / 100;
     // Shorts use taker fees both sides on Kraken
