@@ -22,6 +22,9 @@ import {
   closePairsTrade,
   getOpenPairsTrade,
   recordPairsState,
+  recordPairsAlert,
+  getPairsSetting,
+  setPairsSetting,
   type PairsTradeRow,
 } from './schema.ts';
 import {
@@ -72,11 +75,39 @@ interface EngineStats {
   pausedUntilTs: number;
 }
 
+// Milliseconds per candle bar, derived from PAIRS_CONFIG.CANDLE_INTERVAL.
+const INTERVAL_TO_MS: Record<string, number> = {
+  '1m': 60_000, '5m': 300_000, '15m': 900_000,
+  '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000,
+};
+const CANDLE_INTERVAL_MS = INTERVAL_TO_MS[PAIRS_CONFIG.CANDLE_INTERVAL] ?? 3_600_000;
+
+// Settings-table keys for kill-switch state (must survive pm2 restarts).
+const SETTING_CONSECUTIVE_LOSSES = 'pairs_consecutive_losses';
+const SETTING_PAUSED_UNTIL = 'pairs_paused_until';
+
+// Pending next-bar-open fill (paper mode only). A signal fired on a bar's
+// close is queued here and filled at the NEXT bar's open — matching the
+// backtest's lookahead-free fill semantics. Memory-only by design: a restart
+// drops any stale pending signal (the signal re-fires if still valid).
+// stop_z and drawdown_kill exits are exempt (emergency exits fill immediately).
+interface PendingSignal {
+  kind: 'entry' | 'exit';
+  side?: 'long_spread' | 'short_spread';  // entry only
+  reason?: string;                         // exit only
+  signalBarTime: number;                   // time of the bar the signal fired on
+  signalZ: number;
+}
+let pendingSignal: PendingSignal | null = null;
+
 let loopTimer: ReturnType<typeof setInterval> | null = null;
 let loopInProgress = false;
 let isRunning = false;
 let cointState: PairsLiveState | null = null;
 let openTrade: OpenTradeState | null = null;
+// True while we're inside a stale-candle episode — used to alert only once
+// per episode rather than every 60s loop.
+let staleCandleAlerted = false;
 const candleCache = { a: [] as Candle[], b: [] as Candle[] };
 const stats: EngineStats = {
   loopCount: 0,
@@ -123,11 +154,33 @@ function alignByTime(a: Candle[], b: Candle[]): { a: Candle[]; b: Candle[] } {
   return { a: outA, b: outB };
 }
 
+// Persist kill-switch state so a pm2 restart can't erase an active pause or
+// the consecutive-loss counter. Called whenever either value changes.
+function persistKillSwitchState(): void {
+  setPairsSetting(SETTING_CONSECUTIVE_LOSSES, String(stats.consecutiveLosses));
+  setPairsSetting(SETTING_PAUSED_UNTIL, String(stats.pausedUntilTs));
+}
+
+// Restore kill-switch state from the settings table on startup.
+function restoreKillSwitchState(): void {
+  const losses = Number(getPairsSetting(SETTING_CONSECUTIVE_LOSSES));
+  const pausedUntil = Number(getPairsSetting(SETTING_PAUSED_UNTIL));
+  if (Number.isFinite(losses) && losses > 0) stats.consecutiveLosses = losses;
+  if (Number.isFinite(pausedUntil) && pausedUntil > Date.now()) stats.pausedUntilTs = pausedUntil;
+  if (stats.consecutiveLosses > 0 || stats.pausedUntilTs > 0) {
+    console.log(
+      `[PAIRS] restored kill-switch state: consecutiveLosses=${stats.consecutiveLosses}` +
+      (stats.pausedUntilTs > 0 ? ` pausedUntil=${new Date(stats.pausedUntilTs).toISOString()}` : ''),
+    );
+  }
+}
+
 function isPaused(): boolean {
   if (stats.pausedUntilTs === 0) return false;
   if (Date.now() >= stats.pausedUntilTs) {
     stats.pausedUntilTs = 0;
     stats.consecutiveLosses = 0;
+    persistKillSwitchState();
     console.log('[PAIRS] resuming from auto-pause');
     return false;
   }
@@ -137,6 +190,9 @@ function isPaused(): boolean {
 // Restore from DB on startup. If there's an open paper trade for our pair,
 // adopt it as the in-memory open trade so the engine continues managing it.
 function adoptOpenTrade(): void {
+  // Any pending next-bar-open signal from before the restart is stale —
+  // drop it (memory-only state is already gone, this is belt-and-suspenders).
+  pendingSignal = null;
   const row = getOpenPairsTrade(PAIRS_CONFIG.SYMBOL_A, PAIRS_CONFIG.SYMBOL_B);
   if (!row) return;
   if (row.mode !== PAIRS_CONFIG.MODE) {
@@ -156,6 +212,15 @@ function adoptOpenTrade(): void {
     beta: row.beta,
   };
   console.log(`[PAIRS] adopted open trade ${row.id} (${row.side}) entered ${new Date(row.entry_time).toISOString()}`);
+}
+
+// Bars held on the open trade. For trades adopted after a restart, entryBar
+// is 0 (bar index unknown post-restart), so fall back to wall-clock bars
+// derived from entry_time and the candle interval — otherwise the time-stop
+// would never fire on adopted trades.
+function barsHeld(trade: OpenTradeState, currentBar: number): number {
+  if (trade.entryBar > 0) return currentBar - trade.entryBar;
+  return Math.floor((Date.now() - trade.entryTime) / CANDLE_INTERVAL_MS);
 }
 
 // Margin leverage to use for live trades. FIL/ICP both support 2x minimum;
@@ -285,9 +350,11 @@ async function liveExecuteExit(
     pnlB = (exitPriceB - openTrade.entryPriceB) * openTrade.qtyB;
   }
   const pnlGross = pnlA + pnlB;
-  const fees = (openTrade.qtyA * openTrade.entryPriceA + openTrade.qtyB * openTrade.entryPriceB) * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
+  // Round-trip fees: FEE_PER_LEG_TAKER is per leg PER SIDE, and a round trip
+  // is 4 executions (2 legs × entry+exit) — hence the 2× on combined notional.
+  const fees = 2 * (openTrade.qtyA * openTrade.entryPriceA + openTrade.qtyB * openTrade.entryPriceB) * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
   const pnlNet = pnlGross - fees;
-  const holdBars = openTrade.entryBar > 0 ? currentBar - openTrade.entryBar : 0;
+  const holdBars = barsHeld(openTrade, currentBar);
   closePairsTrade(openTrade.id, {
     exit_time: Date.now(),
     exit_price_a: exitPriceA, exit_price_b: exitPriceB,
@@ -309,6 +376,7 @@ async function liveExecuteExit(
   } else {
     stats.consecutiveLosses = 0;
   }
+  persistKillSwitchState();
   console.log(`[PAIRS] LIVE EXIT ${openTrade.side} reason=${reason} pnl_net=$${pnlNet.toFixed(2)}`);
   alertExit(openTrade.side, reason, pnlNet, holdBars, 'live');
   openTrade = null;
@@ -391,11 +459,13 @@ function paperExecuteExit(
   const pnlGross = pnlA + pnlB;
   const notionalA = openTrade.qtyA * openTrade.entryPriceA;
   const notionalB = openTrade.qtyB * openTrade.entryPriceB;
-  // Fees: per leg, per side. In paper-mode we assume taker round-trip
-  // since we can't model maker-rebate certainty without an actual order book.
-  const fees = (notionalA + notionalB) * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
+  // Fees: FEE_PER_LEG_TAKER is per leg PER SIDE; a round trip is 4 executions
+  // (2 legs × entry+exit), so charge 2× the combined notional. We assume
+  // taker round-trip since we can't model maker-rebate certainty without an
+  // actual order book. Slippage is already baked into entry/exit fill prices.
+  const fees = 2 * (notionalA + notionalB) * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
   const pnlNet = pnlGross - fees;
-  const holdBars = openTrade.entryBar > 0 ? currentBar - openTrade.entryBar : 0;
+  const holdBars = barsHeld(openTrade, currentBar);
   closePairsTrade(openTrade.id, {
     exit_time: nextTime,
     exit_price_a: exitPriceA, exit_price_b: exitPriceB,
@@ -422,6 +492,7 @@ function paperExecuteExit(
   } else {
     stats.consecutiveLosses = 0;
   }
+  persistKillSwitchState();
   console.log(
     `[PAIRS] PAPER EXIT ${openTrade.side} reason=${reason} z=${exitZ.toFixed(2)} ` +
     `pnl_net=$${pnlNet.toFixed(2)} (gross=$${pnlGross.toFixed(2)}, fees=$${fees.toFixed(2)}) ` +
@@ -456,6 +527,22 @@ async function runLoop(): Promise<void> {
       console.warn(`[PAIRS] only ${aligned.a.length} aligned bars; need ${PAIRS_CONFIG.WARMUP_BARS}`);
       return;
     }
+    // Freshness gate: refuse to evaluate on stale candles (exchange outage /
+    // API serving old data). A healthy feed's last bar is at most ~1 interval
+    // old (the forming bar); older than 2× the interval means we're stale.
+    const staleness = Date.now() - aligned.a[aligned.a.length - 1].time;
+    if (staleness > 2 * CANDLE_INTERVAL_MS) {
+      if (!staleCandleAlerted) {
+        staleCandleAlerted = true;  // alert once per staleness episode
+        const msg =
+          `stale candles: last aligned bar is ${Math.round(staleness / 60_000)}min old ` +
+          `(> 2× ${PAIRS_CONFIG.CANDLE_INTERVAL} interval); skipping evaluation`;
+        console.warn(`[PAIRS] ${msg}`);
+        recordPairsAlert({ severity: 'warn', kind: 'stale_candles', message: msg, data: { stalenessMs: staleness } });
+      }
+      return;
+    }
+    staleCandleAlerted = false;
     candleCache.a = aligned.a;
     candleCache.b = aligned.b;
 
@@ -499,33 +586,65 @@ async function runLoop(): Promise<void> {
       mode: 'paper',
     });
 
+    // ------- Pending next-bar-open fills (paper mode) -------
+    // Non-emergency signals queue on the bar they fire and fill at the NEXT
+    // bar's open — matching the backtest's lookahead-free fill semantics.
+    // (Live mode never queues; it fills at live prices when the signal fires.)
+    if (pendingSignal && aligned.a[lastBar].time > pendingSignal.signalBarTime) {
+      const fillA = aligned.a[lastBar];
+      const fillB = aligned.b[lastBar];
+      const pending = pendingSignal;
+      pendingSignal = null;  // consumed — or dropped if state no longer matches
+      if (pending.kind === 'exit' && openTrade) {
+        paperExecuteExit(pending.reason!, pending.signalZ, fillA.open, fillB.open, fillA.time, lastBar);
+        return;
+      }
+      if (pending.kind === 'entry' && !openTrade) {
+        paperExecuteEntry(
+          pending.side!, pending.signalZ, cointState,
+          fillA.open, fillB.open, fillA.time, lastBar,
+          cointState.adfTStat, cointState.halflife,
+        );
+        return;
+      }
+      // State mismatch (an emergency exit / manual close intervened) — the
+      // stale pending signal was dropped above; fall through and re-evaluate.
+    }
+
     // ------- Position management -------
     if (openTrade) {
-      const barsSinceEntry = lastBar - openTrade.entryBar;
+      const barsSinceEntry = barsHeld(openTrade, lastBar);
       const lastA = aligned.a[lastBar];
       const lastB = aligned.b[lastBar];
 
-      const doExit = async (reason: string): Promise<void> => {
+      // Emergency exits (stop_z, drawdown_kill) fill IMMEDIATELY at the
+      // current price — risk control never waits for the next bar.
+      const doImmediateExit = async (reason: string): Promise<void> => {
+        pendingSignal = null;  // emergency exit supersedes any queued signal
         if (_effectiveMode === 'live') {
           await liveExecuteExit(reason, zScore, lastBar);
         } else {
           paperExecuteExit(reason, zScore, lastA.close, lastB.close, lastA.time, lastBar);
         }
       };
+      // Non-emergency exits (mean_revert, time_stop): live fills immediately
+      // at live prices; paper queues for next-bar-open fill (backtest semantics).
+      const queueExit = async (reason: string): Promise<void> => {
+        if (_effectiveMode === 'live') {
+          await liveExecuteExit(reason, zScore, lastBar);
+          return;
+        }
+        if (!pendingSignal) {
+          pendingSignal = { kind: 'exit', reason, signalBarTime: lastA.time, signalZ: zScore };
+          console.log(`[PAIRS] exit signal queued (${reason}) — fills at next bar's open`);
+        }
+      };
 
-      // Mean-revert exit.
-      if (Math.abs(zScore) < PAIRS_CONFIG.EXIT_Z) {
-        await doExit(`mean_revert z=${zScore.toFixed(2)}`);
-        return;
-      }
+      // Emergency checks run FIRST every loop so a queued non-emergency exit
+      // can't shadow them while waiting for the next bar.
       // Stop z (spread ran further than expected).
       if (Math.abs(zScore) > PAIRS_CONFIG.STOP_Z) {
-        await doExit(`stop_z z=${zScore.toFixed(2)}`);
-        return;
-      }
-      // Time stop.
-      if (barsSinceEntry >= PAIRS_CONFIG.MAX_HOLD_BARS && openTrade.entryBar > 0) {
-        await doExit('time_stop');
+        await doImmediateExit(`stop_z z=${zScore.toFixed(2)}`);
         return;
       }
       // Drawdown kill-switch — mark-to-market unrealized PnL.
@@ -539,7 +658,17 @@ async function runLoop(): Promise<void> {
       const unrealizedPct = (unrealizedA + unrealizedB) / PAIRS_CONFIG.TOTAL_NOTIONAL_USD;
       if (unrealizedPct < -PAIRS_CONFIG.MAX_DRAWDOWN_PCT_PER_TRADE) {
         alertDrawdownKill(unrealizedPct, _effectiveMode === 'live' ? 'live' : 'paper');
-        await doExit(`drawdown_kill (${(unrealizedPct * 100).toFixed(2)}%)`);
+        await doImmediateExit(`drawdown_kill (${(unrealizedPct * 100).toFixed(2)}%)`);
+        return;
+      }
+      // Mean-revert exit.
+      if (Math.abs(zScore) < PAIRS_CONFIG.EXIT_Z) {
+        await queueExit(`mean_revert z=${zScore.toFixed(2)}`);
+        return;
+      }
+      // Time stop. barsHeld() handles adopted trades (entryBar=0) via wall-clock.
+      if (barsSinceEntry >= PAIRS_CONFIG.MAX_HOLD_BARS) {
+        await queueExit('time_stop');
         return;
       }
       console.log(
@@ -550,6 +679,9 @@ async function runLoop(): Promise<void> {
     }
 
     // ------- Entry evaluation -------
+    // A queued entry is awaiting its next-bar-open fill — don't evaluate
+    // fresh signals until it resolves.
+    if (pendingSignal) return;
     // Cointegration gate.
     if (cointState.adfTStat > PAIRS_CONFIG.REQUIRE_ADF_T_BELOW) {
       console.log(`[PAIRS] no entry — ADF t=${cointState.adfTStat.toFixed(2)} above threshold ${PAIRS_CONFIG.REQUIRE_ADF_T_BELOW}`);
@@ -568,12 +700,10 @@ async function runLoop(): Promise<void> {
           cointState!.adfTStat, cointState!.halflife,
         );
       } else {
-        // For paper-mode: fill at the LAST candle's close. Live uses live bid/ask.
-        paperExecuteEntry(
-          side, zScore, cointState!,
-          lastA.close, lastB.close, lastA.time, lastBar,
-          cointState!.adfTStat, cointState!.halflife,
-        );
+        // Paper mode: queue the signal; it fills at the NEXT bar's open
+        // (see pending-fill block above), matching backtest semantics.
+        pendingSignal = { kind: 'entry', side, signalBarTime: lastA.time, signalZ: zScore };
+        console.log(`[PAIRS] entry signal queued (${side} z=${zScore.toFixed(2)}) — fills at next bar's open`);
       }
     };
 
@@ -619,6 +749,7 @@ export function initPairsEngine(): void {
     return;
   }
   initPairsTables();
+  restoreKillSwitchState();
   adoptOpenTrade();
   console.log(`[PAIRS] engine initialized (mode=${_effectiveMode}, pair=${PAIRS_CONFIG.SYMBOL_A}/${PAIRS_CONFIG.SYMBOL_B})`);
   if (_effectiveMode === 'live') {
@@ -680,6 +811,8 @@ export async function forceClosePairsTrade(reason: string = 'manual_force_close'
     : 0;
   const lastBar = candleCache.a.length - 1;
   try {
+    // Manual close is an immediate action — drop any queued next-bar signal.
+    pendingSignal = null;
     if (_effectiveMode === 'live') {
       await liveExecuteExit(reason, currentZ, lastBar);
     } else {
@@ -703,8 +836,9 @@ export function stopPairsEngine(): void {
 
 // Compute mark-to-market unrealized PnL on the open trade using last-known
 // close prices in the candle cache. Mirrors the exit-side math in
-// paperExecuteExit / liveExecuteExit minus the slippage haircut (since we
-// haven't actually crossed the spread to exit).
+// paperExecuteExit / liveExecuteExit: net = gross − entry fees (sunk) −
+// projected exit fees − projected exit slippage (we'd cross the spread once
+// more per leg to close).
 function computeMarkAndUnrealized(): {
   markA: number | null;
   markB: number | null;
@@ -727,10 +861,17 @@ function computeMarkAndUnrealized(): {
     ? (openTrade.entryPriceB - markB) * openTrade.qtyB
     : (markB - openTrade.entryPriceB) * openTrade.qtyB;
   const gross = pnlA + pnlB;
-  // Estimate round-trip fees assuming we'd exit at mark prices. Both legs.
+  // Fees: entry side already incurred (per leg per side, on entry notional)
+  // + projected exit side if we closed both legs at mark prices.
   const notionalA = openTrade.qtyA * openTrade.entryPriceA;
   const notionalB = openTrade.qtyB * openTrade.entryPriceB;
-  const fees = (notionalA + notionalB) * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
+  const markNotional = openTrade.qtyA * markA + openTrade.qtyB * markB;
+  const entryFees = (notionalA + notionalB) * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
+  const projectedExitFees = markNotional * PAIRS_CONFIG.FEE_PER_LEG_TAKER;
+  // Entry slippage is already baked into the entry fill prices; closing
+  // would cross the spread once more on each leg.
+  const projectedExitSlippage = markNotional * PAIRS_CONFIG.SLIPPAGE_PER_SIDE;
+  const fees = entryFees + projectedExitFees + projectedExitSlippage;
   const net = gross - fees;
   const totalNotional = notionalA + notionalB;
   return {
