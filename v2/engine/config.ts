@@ -11,11 +11,14 @@ export const V2_CONFIG = {
 
   // --- Scan ---
   SCAN_TICKERS: [
-    'AKTUSD', 'ZECUSD', 'COMPUSD',
-    'HYPEUSD', 'SUIUSD',
-    'RUNEUSD', 'ENAUSD',
-    // 2026-05-19: Added top 3 from backtest sweep — all PF>2.4, WR>73%
-    'FETUSD', 'PENGUUSD', 'RENDERUSD',
+    // 2026-05-27: Concentrated on 6 top performers. $10K/6 = $1,667/ticker.
+    // PF 8.64, +$8,443 (84.4% in 90d), 180d +$13,486 (134.8%)
+    'AKTUSD',    // PF best, 93.3% WR, +$2,009
+    'ZECUSD',    // 92.4% WR, +$1,554
+    'FETUSD',    // 91.7% WR, +$1,402
+    'PENGUUSD',  // 90.9% WR, +$1,489
+    'TAOUSD',    // 89.5% WR, +$1,479
+    'PENDLEUSD', // 88.1% WR, +$511, PF 8.20
     // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
     //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
     //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
@@ -49,11 +52,11 @@ export const V2_CONFIG = {
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
   BASE_POSITION_PERCENT: 0.40,  // 2026-05-18: 0.25→0.40. Backtest: PF 3.84→6.63, +$414→+$888 on $6K. Safe — max DD stays 0.2%.
-  MAX_RISK_PER_TRADE_PERCENT: 0.02, // 2026-05-18: 0.01→0.02. Doubles position on high-ATR assets while keeping max loss at 2% of equity.
+  MAX_RISK_PER_TRADE_PERCENT: 0.015, // 2026-06-06: 0.03→0.015. Live: high-ATR trades (FET 4.5%, ZEC 3%) got $400+ positions with $40 max loss. Caps high-ATR smaller while low-ATR unaffected.
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
 
   // --- Re-entry Cooldown ---
-  REENTRY_COOLDOWN_MS: 8 * 60 * 60 * 1000,  // 8h (2 candles) — prevents churn on same ticker after exit
+  REENTRY_COOLDOWN_MS: 0,  // 2026-05-27: disabled. Backtest: 0h cooldown triples trades (357→1207) while maintaining 88% WR. Intra-bar trailing catches re-entries profitably.
 
   // --- Correlation Check ---
   CORRELATION_MAX_AVG: 0.70,           // reject if avg correlation with open positions > this
@@ -67,7 +70,7 @@ export const V2_CONFIG = {
   SHORTS_ENABLED: true,                  // 2026-05-18: enabled for paper testing
   SHORT_ALLOWED_REGIMES: ['STRONG_DOWN', 'DOWN'] as readonly string[],
   SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
-  SHORT_STOP_LOSS_ATR_MULT: 2.0,
+  SHORT_STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-06: matched to long SL. ZEC short lost -$39.53 at 2.0x ATR (9% stop). At 1.5x would be ~-$28.
   SHORT_TAKE_PROFIT_ATR_MULT: 3.5,
   SHORT_TRAILING_ACTIVATE_PERCENT: 0.01,
   SHORT_TRAILING_GIVEBACK_PERCENT: 0.03,
@@ -84,7 +87,7 @@ export const V2_CONFIG = {
   CANDLE_INTERVAL: '4h' as string, // Was 15m — backtest: 15m=21%WR/-$1030, 1h=26%WR/-$1669, 4h=27%WR/-$455. 4h gives trends room past 0.52% fees.
 
   // --- Exit Management ---
-  STOP_LOSS_ATR_MULT: 2.0,  // 2026-05-06 Config A: 2.5 → 2.0 — tighter stop in combination with TG 0.03 reduces avg_loss while win profile preserved by trailing
+  STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-03: 2.0→1.5. Live data: SL avg -$11.13 vs trail avg +$2.13 (5.2:1 ratio). Tighter SL cuts loss size ~33%. Backtest: +$6,391→+$7,186, PF 9.07→9.50.
   TAKE_PROFIT_ATR_MULT: 4.0,       // 2026-04-29: 3.5 → 4.0 (R:R 1.4 → 1.6). Avg_win problem: at R:R 1.4 the cohort was avg_win $0.97 vs needed ~$1.10 for 59% WR break-even. Wider TP makes individual TP hits +$2.00 instead of +$1.75. Risk: historical R:R 1.6 cohort underperformed R:R 1.4 (-$10.89 vs -$1.89), but that was without working BE/trailing stops. With current trailing-active@1% catching moderate winners, wider TP may behave differently. Deliberate test under user's risk-on framing 2026-04-29.
   TRAILING_ACTIVATE_PERCENT: 0.01, // 2026-05-18: 0.025→0.015. At 2.5% most trades peaked +1-2% and never trailed. At 1.5% trailing engages on moderate moves — PF 1.67→3.71, time_kill 72→26 trades.
   TRAILING_GIVEBACK_PERCENT: 0.03,  // 2026-05-06 Config A: 0.25 → 0.03 — extreme tight trail. Once activated, surrender only 3% of peak gain. The trailing-exit P&L moved from +$216 (PF 1.43) to +$312 (PF 1.62) on AKT+ZEC+COMP 90d
@@ -130,9 +133,9 @@ export const V2_CONFIG = {
 
 // Which timeframes each strategy runs on
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
-  TREND:           ['1h', '4h'],
+  TREND:           ['30m', '1h', '4h'],
   MOMENTUM:        ['1h', '4h'],
-  BREAKOUT:        ['15m', '1h'],
+  BREAKOUT:        ['15m', '30m', '1h'],
   // MEAN_REVERSION and SCALP disabled — live data: 0% and 22% WR respectively
 };
 
@@ -152,14 +155,14 @@ export interface StrategyExitConfig {
 
 export const STRATEGY_EXIT_CONFIGS: Record<string, StrategyExitConfig> = {
   TREND: {
-    slAtrMult: 2.0, tpAtrMult: 4.0,
+    slAtrMult: 1.5, tpAtrMult: 4.0,
     trailActivatePercent: 0.025, trailGivebackPercent: 0.03,
     timeKillBars: 2, timeKillMinMove: 0.007,
     quickKillBars: 1, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
     useTrailing: true,
   },
   MOMENTUM: {
-    slAtrMult: 2.0, tpAtrMult: 3.0,
+    slAtrMult: 1.5, tpAtrMult: 3.0,
     trailActivatePercent: 0.025, trailGivebackPercent: 0.05,
     timeKillBars: 4, timeKillMinMove: 0.005,
     quickKillBars: 2, quickKillMinGain: 0.006, quickKillSlMult: 1.2,

@@ -11,7 +11,7 @@ import { getDb } from '../../services/database.js';
 // --- Interval Mapping ---
 
 const INTERVAL_TO_MINUTES: Record<string, number> = {
-  '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240, '1d': 1440,
+  '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440,
 };
 
 // CryptoCompare endpoint per interval family
@@ -19,6 +19,7 @@ const CC_ENDPOINTS: Record<string, string> = {
   '1m': 'histominute',
   '5m': 'histominute',   // fetch 1m, aggregate to 5m
   '15m': 'histominute',  // fetch 1m, aggregate to 15m
+  '30m': 'histominute',  // fetch 1m, aggregate to 30m
   '1h': 'histohour',
   '4h': 'histohour',     // fetch 1h, aggregate to 4h
   '1d': 'histoday',
@@ -152,6 +153,9 @@ async function fetchHistoricalCandles(
   } else if (interval === '15m') {
     baseEndpoint = 'histominute';
     aggregateFactor = 15;
+  } else if (interval === '30m') {
+    baseEndpoint = 'histominute';
+    aggregateFactor = 30;
   } else if (interval === '1h') {
     baseEndpoint = 'histohour';
   } else if (interval === '4h') {
