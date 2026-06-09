@@ -215,6 +215,35 @@ async function fetchHistoricalCandles(
   return deduped;
 }
 
+// --- Kraken Public OHLC Fallback ---
+// CryptoCompare's free min-api now returns 401 without an API key, which
+// silently broke all fresh candle fetches. Kraken's public OHLC endpoint
+// needs no auth and returns the last 720 candles of the requested interval
+// (~120 days at 4h) — enough for 30-90d backtests on slow timeframes.
+
+async function fetchKrakenOHLC(ticker: string, interval: string): Promise<Candle[]> {
+  const minutes = INTERVAL_TO_MINUTES[interval] || 15;
+  const url = `https://api.kraken.com/0/public/OHLC?pair=${ticker}&interval=${minutes}`;
+  const json = await rateLimitedFetchJSON(url) as {
+    error: string[];
+    result: Record<string, unknown>;
+  };
+  if (json.error && json.error.length > 0) {
+    throw new Error(`Kraken error: ${json.error.join(', ')}`);
+  }
+  const key = Object.keys(json.result).find((k) => k !== 'last');
+  if (!key) throw new Error('Kraken: empty OHLC result');
+  const rows = json.result[key] as Array<[number, string, string, string, string, string, string, number]>;
+  return rows.map((r) => ({
+    time: r[0] * 1000,
+    open: Number(r[1]),
+    high: Number(r[2]),
+    low: Number(r[3]),
+    close: Number(r[4]),
+    volume: Number(r[6]),
+  }));
+}
+
 // --- Cache Operations ---
 
 function getCachedCandles(
@@ -316,10 +345,19 @@ export async function loadCandles(
     return getCachedCandles(ticker, interval, startMs, endMs);
   }
 
-  // Fetch from CryptoCompare (supports full history)
+  // Fetch from CryptoCompare (supports full history); fall back to Kraken
+  // public OHLC (no auth, last 720 candles) when CC fails — e.g. the free
+  // min-api now 401s without an API key.
   console.log(`  Fetching ${ticker} ${interval} candles...`);
 
-  const candles = await fetchHistoricalCandles(ticker, startMs, endMs, interval);
+  let candles: Candle[];
+  try {
+    candles = await fetchHistoricalCandles(ticker, startMs, endMs, interval);
+  } catch (ccErr) {
+    console.log(`  CryptoCompare failed (${(ccErr as Error).message}) — trying Kraken public OHLC`);
+    candles = (await fetchKrakenOHLC(ticker, interval))
+      .filter((c) => c.time >= startMs && c.time <= endMs);
+  }
   saveCandlesToCache(ticker, interval, candles);
 
   console.log(`  Cached ${candles.length} candles for ${ticker}`);
