@@ -47,8 +47,11 @@ export function runAllStrategies(
     const scanResults = scanMarket(tfCandles);
     const passedScan = getPassedTickers(scanResults);
 
+    // Strategy lookups are null-safe (?.) — disabling a strategy by removing
+    // its STRATEGY_TIMEFRAMES key is the documented kill switch and must not
+    // crash the loop (2026-06-09: BREAKOUT removal did exactly that).
     // --- TREND (1h, 4h) ---
-    if (STRATEGY_TIMEFRAMES.TREND.includes(tf) && passedScan.length > 0) {
+    if (STRATEGY_TIMEFRAMES.TREND?.includes(tf) && passedScan.length > 0) {
       const trendSignals = generateSignals(passedScan, tfCandles);
       for (const sig of getPassedSignals(trendSignals)) {
         results.push({ ...sig, _strategy: 'TREND', _timeframe: tf });
@@ -56,7 +59,7 @@ export function runAllStrategies(
     }
 
     // --- MOMENTUM (1h, 4h) ---
-    if (MOMENTUM_CONFIG.ENABLED && STRATEGY_TIMEFRAMES.MOMENTUM.includes(tf)) {
+    if (MOMENTUM_CONFIG.ENABLED && STRATEGY_TIMEFRAMES.MOMENTUM?.includes(tf)) {
       for (const scan of passedScan) {
         // Skip if TREND already produced a signal for this ticker+timeframe
         if (results.some(r => r.ticker === scan.ticker && r._timeframe === tf && r._strategy === 'TREND')) continue;
@@ -70,7 +73,7 @@ export function runAllStrategies(
     }
 
     // --- BREAKOUT (15m, 1h) ---
-    if (STRATEGY_TIMEFRAMES.BREAKOUT.includes(tf)) {
+    if (STRATEGY_TIMEFRAMES.BREAKOUT?.includes(tf)) {
       for (const [ticker, candles] of tfCandles) {
         // Breakout has its own regime check internally
         const boSignal = detectBreakoutEntry(candles, ticker);
@@ -86,7 +89,7 @@ export function runAllStrategies(
     // Re-enable only after fundamental rework of entry logic.
 
     // --- SHORTS (any TF where TREND runs) ---
-    if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live' && STRATEGY_TIMEFRAMES.TREND.includes(tf)) {
+    if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live' && STRATEGY_TIMEFRAMES.TREND?.includes(tf)) {
       const shortScanResults = scanMarket(tfCandles, 'short');
       const passedShortScan = getPassedTickers(shortScanResults);
       if (passedShortScan.length > 0) {
