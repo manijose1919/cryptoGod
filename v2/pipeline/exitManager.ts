@@ -27,11 +27,13 @@ import { updateTradeStop, markTrailingActivated, updateTradePeakPrice } from '..
 export interface ExitMutators {
   setStop(tradeId: string, newStop: number, trade: V2Trade): void;
   setTrailingActivated(tradeId: string, trade: V2Trade): void;
+  setPeakPrice(tradeId: string, newPeak: number, trade: V2Trade): void;
 }
 
 const DEFAULT_DB_MUTATORS: ExitMutators = {
   setStop: (tradeId, newStop) => updateTradeStop(tradeId, newStop),
   setTrailingActivated: (tradeId) => markTrailingActivated(tradeId),
+  setPeakPrice: (tradeId, newPeak, trade) => updateTradePeakPrice(tradeId, newPeak, trade.side ?? 'long'),
 };
 
 // --- Result Interface ---
@@ -53,6 +55,7 @@ function makeDecision(
   decision: 'pass' | 'reject' | 'execute',
   reason: string,
   signals: Record<string, number>,
+  thresholds?: Record<string, number>,
 ): DecisionRecord {
   return {
     tradeId,
@@ -61,7 +64,10 @@ function makeDecision(
     decision: DECISION[decision],
     reason,
     signals,
-    thresholds: {
+    // Log the thresholds actually applied to THIS trade — previously this
+    // logged V2_CONFIG globals while behavior came from STRATEGY_EXIT_CONFIGS,
+    // so decision logs claimed parameters the trade never ran under.
+    thresholds: thresholds ?? {
       trailingActivatePercent: V2_CONFIG.TRAILING_ACTIVATE_PERCENT,
       trailingGivebackPercent: V2_CONFIG.TRAILING_GIVEBACK_PERCENT,
       timeKillMs: V2_CONFIG.TIME_KILL_MS,
@@ -100,8 +106,34 @@ export async function checkExits(
     const cfgTrailGiveback = exitCfg.trailGivebackPercent;
     const cfgUseTrailing = exitCfg.useTrailing;
 
-    // Update peak price (highest for longs, lowest for shorts)
-    updateTradePeakPrice(trade.id, currentPrice, trade.side ?? 'long');
+    // Per-strategy timers: bar counts × the trade's entry timeframe.
+    // Trades without a persisted timeframe (pre-2026-06-09 rows) fall back to
+    // the global 6h/4h timers — the behavior they were opened under.
+    const tfMs = trade.timeframe ? timeframeToMs(trade.timeframe) : null;
+    const cfgTimeKillMs = tfMs ? exitCfg.timeKillBars * tfMs : V2_CONFIG.TIME_KILL_MS;
+    const cfgTimeKillMinMove = tfMs ? exitCfg.timeKillMinMove : V2_CONFIG.TIME_KILL_MIN_MOVE;
+    const cfgQuickKillMs = tfMs ? exitCfg.quickKillBars * tfMs : V2_CONFIG.QUICK_KILL_AFTER_MS;
+    const cfgQuickKillMinGain = tfMs ? exitCfg.quickKillMinGain : V2_CONFIG.QUICK_KILL_MIN_GAIN;
+    const cfgQuickKillSlMult = tfMs ? exitCfg.quickKillSlMult : V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
+    const appliedThresholds = {
+      trailingActivatePercent: cfgTrailActivate,
+      trailingGivebackPercent: cfgTrailGiveback,
+      timeKillMs: cfgTimeKillMs,
+      timeKillMinMove: cfgTimeKillMinMove,
+      quickKillMs: cfgQuickKillMs,
+    };
+
+    // Update peak price (highest for longs, lowest for shorts).
+    // H3: route through mutators — dual-engine in-memory trades aren't in
+    // v2_trades, so the direct DB write was a silent no-op and their trailing
+    // stop stayed pinned at entry (peakGain perpetually 0).
+    mutators.setPeakPrice(trade.id, currentPrice, trade);
+    // Mirror into the in-memory object so this loop's trailing math uses the
+    // fresh peak instead of the value loaded at the start of the pass.
+    const isShortPeak = (trade.side ?? 'long') === 'short';
+    if (trade.peakPrice == null || (isShortPeak ? currentPrice < trade.peakPrice : currentPrice > trade.peakPrice)) {
+      trade.peakPrice = currentPrice;
+    }
 
     const pnlPercent = isShort
       ? (trade.entryPrice - currentPrice) / trade.entryPrice
@@ -131,7 +163,7 @@ export async function checkExits(
           currentStop: trade.currentStop,
           initialStop: trade.initialStop,
           pnlPercent,
-        }),
+        }, appliedThresholds),
       });
       continue;
     }
@@ -183,9 +215,17 @@ export async function checkExits(
       const breakEvenStop = isShort
         ? trade.entryPrice * (1 - beOffset)
         : trade.entryPrice * (1 + beOffset);
-      const beShouldUpdate = isShort
+      // Clamp: the BE stop must stay on the correct side of the current price.
+      // On high-ATR tickers the 0.5×ATR offset can exceed current profit
+      // (e.g. ATR 3% → offset 1.5% while price is only +0.9%), which placed
+      // the stop ABOVE the market for longs — instantly "triggered" next loop
+      // and, in paper mode, booked a phantom exit at a price never reached.
+      const beOnValidSide = isShort
+        ? breakEvenStop > currentPrice
+        : breakEvenStop < currentPrice;
+      const beShouldUpdate = beOnValidSide && (isShort
         ? breakEvenStop < trade.currentStop
-        : breakEvenStop > trade.currentStop;
+        : breakEvenStop > trade.currentStop);
       if (beShouldUpdate) {
         newStop = breakEvenStop;
         mutators.setStop(trade.id, newStop, trade);
@@ -202,15 +242,15 @@ export async function checkExits(
       ? Math.abs(trade.currentStop - trade.entryPrice) / trade.entryPrice
       : pnlPercent;
     if (
-      holdMs > V2_CONFIG.QUICK_KILL_AFTER_MS &&
-      peakPnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
-      pnlPercent < V2_CONFIG.QUICK_KILL_MIN_GAIN &&
+      holdMs > cfgQuickKillMs &&
+      peakPnlPercent < cfgQuickKillMinGain &&
+      pnlPercent < cfgQuickKillMinGain &&
       trade.atrPercent != null && trade.atrPercent > 0
     ) {
       const atrPct = trade.atrPercent!;
-      const qkMult = atrPct > 1.5 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.5
-                    : atrPct > 1.0 ? V2_CONFIG.QUICK_KILL_SL_ATR_MULT * 0.75
-                    : V2_CONFIG.QUICK_KILL_SL_ATR_MULT;
+      const qkMult = atrPct > 1.5 ? cfgQuickKillSlMult * 0.5
+                    : atrPct > 1.0 ? cfgQuickKillSlMult * 0.75
+                    : cfgQuickKillSlMult;
       // For longs: tighten up. For shorts: tighten down.
       const tighterStop = isShort
         ? trade.entryPrice + (trade.entryPrice * atrPct / 100) * qkMult
@@ -299,14 +339,16 @@ export async function checkExits(
             currentPrice,
             trailingStop: newStop,
             pnlPercent,
-          }),
+          }, appliedThresholds),
         });
         continue;
       }
     }
 
     // --- 4. Time Kill ---
-    if (holdMs > V2_CONFIG.TIME_KILL_MS && Math.abs(pnlPercent) < V2_CONFIG.TIME_KILL_MIN_MOVE) {
+    // Per-strategy: timeKillBars × entry timeframe (MOMENTUM on 4h gets ~2.7
+    // days, not the global 6h that was killing it after 1.5 candles).
+    if (holdMs > cfgTimeKillMs && Math.abs(pnlPercent) < cfgTimeKillMinMove) {
       results.push({
         trade,
         shouldExit: true,
@@ -314,12 +356,12 @@ export async function checkExits(
         exitPrice: currentPrice,
         newStop,
         trailingJustActivated,
-        decision: makeDecision(trade.id, 'execute', `Time kill: held ${(holdMs / 3600000).toFixed(1)}h, move ${(pnlPercent * 100).toFixed(2)}% < ${(V2_CONFIG.TIME_KILL_MIN_MOVE * 100).toFixed(1)}%`, {
+        decision: makeDecision(trade.id, 'execute', `Time kill: held ${(holdMs / 3600000).toFixed(1)}h > ${(cfgTimeKillMs / 3600000).toFixed(1)}h, move ${(pnlPercent * 100).toFixed(2)}% < ${(cfgTimeKillMinMove * 100).toFixed(1)}%`, {
           currentPrice,
           holdMs,
           pnlPercent,
-          timeKillMs: V2_CONFIG.TIME_KILL_MS,
-        }),
+          timeKillMs: cfgTimeKillMs,
+        }, appliedThresholds),
       });
       continue;
     }
@@ -337,7 +379,7 @@ export async function checkExits(
         currentStop: newStop,
         pnlPercent,
         holdMs,
-      }),
+      }, appliedThresholds),
     });
     } catch (e) {
       // H5: never let one trade's failure abort the whole exit-check pass.

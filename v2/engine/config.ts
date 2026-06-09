@@ -159,7 +159,11 @@ export interface StrategyExitConfig {
 export const STRATEGY_EXIT_CONFIGS: Record<string, StrategyExitConfig> = {
   TREND: {
     slAtrMult: 1.5, tpAtrMult: 4.0,
-    trailActivatePercent: 0.025, trailGivebackPercent: 0.03,
+    // 2026-06-09: 0.025→0.01 to match V2_CONFIG.TRAILING_ACTIVATE_PERCENT.
+    // exitManager reads ONLY this value — V2_CONFIG's tuned 0.01 was dead config
+    // since 2026-05-18 while live trades silently trailed at 2.5% (the backtest
+    // that justified 0.01/0.015 claimed PF 1.67→3.71 from this one change).
+    trailActivatePercent: 0.01, trailGivebackPercent: 0.03,
     timeKillBars: 2, timeKillMinMove: 0.007,
     quickKillBars: 1, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
     useTrailing: true,

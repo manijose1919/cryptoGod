@@ -423,6 +423,15 @@ async function checkEngineExits(engine: EngineInstance): Promise<void> {
   const inMemoryMutators: ExitMutators = {
     setStop: (_id, newStop, trade) => { trade.currentStop = newStop; },
     setTrailingActivated: (_id, trade) => { trade.trailingActivated = true; },
+    // Monotonic like the DB version: highest for longs, lowest for shorts.
+    // Without this, dual-engine trades never updated peakPrice and trailing
+    // degenerated to a breakeven stop (peakGain stuck at 0).
+    setPeakPrice: (_id, newPeak, trade) => {
+      const short = (trade.side ?? 'long') === 'short';
+      if (trade.peakPrice == null || (short ? newPeak < trade.peakPrice : newPeak > trade.peakPrice)) {
+        trade.peakPrice = newPeak;
+      }
+    },
   };
 
   try {

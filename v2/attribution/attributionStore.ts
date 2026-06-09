@@ -101,6 +101,15 @@ export function initV2Tables(): void {
   try {
     db.exec(`ALTER TABLE v2_trades ADD COLUMN stop_order_id TEXT`);
   } catch { /* column already exists */ }
+
+  // Migration (2026-06-09): persist entry timeframe. Per-strategy
+  // timeKillBars/quickKillBars are bar counts — without the trade's timeframe
+  // the exit manager can't convert them to real time and fell back to the
+  // global 6h/4h timers for every strategy. Old rows have NULL — exitManager
+  // falls back to the global timers for them.
+  try {
+    db.exec(`ALTER TABLE v2_trades ADD COLUMN timeframe TEXT`);
+  } catch { /* column already exists */ }
 }
 
 // --- Prepared Statements (lazily initialized) ---
@@ -125,14 +134,14 @@ function getInsertStmt() {
         pnl_gross, pnl_net, fees_paid, hold_duration_ms,
         initial_stop, current_stop, take_profit_target, trailing_activated,
         entry_signals, entry_regime, entry_confidence, decision_log, strategy,
-        atr_percent, peak_price, peak_histogram, stop_order_id, created_at
+        atr_percent, peak_price, peak_histogram, stop_order_id, timeframe, created_at
       ) VALUES (
         @id, @ticker, @side, @status, @entryPrice, @entryTime, @entryOrderType,
         @quantity, @positionSizeUsd, @exitPrice, @exitTime, @exitReason,
         @pnlGross, @pnlNet, @feesPaid, @holdDurationMs,
         @initialStop, @currentStop, @takeProfitTarget, @trailingActivated,
         @entrySignals, @entryRegime, @entryConfidence, @decisionLog, @strategy,
-        @atrPercent, @peakPrice, @peakHistogram, @stopOrderId, @createdAt
+        @atrPercent, @peakPrice, @peakHistogram, @stopOrderId, @timeframe, @createdAt
       )
     `);
   }
@@ -172,6 +181,7 @@ export function insertTrade(trade: V2Trade): void {
     peakPrice: trade.peakPrice ?? null,
     peakHistogram: trade.peakHistogram ?? null,
     stopOrderId: trade.stopOrderId ?? null,
+    timeframe: trade.timeframe ?? null,
     createdAt: trade.createdAt,
   });
 }
@@ -398,6 +408,28 @@ export function getClosedTradesByStrategy(strategy: string, limit: number = 100)
   return rows.map(rowToTrade);
 }
 
+/**
+ * Total closed PnL over the WHOLE table via SUM — never a capped page.
+ * loadPortfolio used to sum getClosedTrades(1000); once the table passes
+ * 1000 closed rows, older PnL silently falls out of equity/sizing.
+ */
+export function getClosedPnlSum(strategy?: string): number {
+  const row = (strategy
+    ? getDb().prepare(`SELECT COALESCE(SUM(pnl_net), 0) AS total FROM v2_trades WHERE status = 'closed' AND strategy = @strategy`).get({ strategy })
+    : getDb().prepare(`SELECT COALESCE(SUM(pnl_net), 0) AS total FROM v2_trades WHERE status = 'closed'`).get()
+  ) as { total: number };
+  return row.total;
+}
+
+/** Closed trades exited after `sinceMs` — for daily PnL windows. */
+export function getClosedTradesSince(sinceMs: number, strategy?: string): V2Trade[] {
+  const rows = (strategy
+    ? getDb().prepare(`SELECT * FROM v2_trades WHERE status = 'closed' AND strategy = @strategy AND exit_time > @sinceMs ORDER BY exit_time DESC`).all({ strategy, sinceMs })
+    : getDb().prepare(`SELECT * FROM v2_trades WHERE status = 'closed' AND exit_time > @sinceMs ORDER BY exit_time DESC`).all({ sinceMs })
+  ) as Record<string, unknown>[];
+  return rows.map(rowToTrade);
+}
+
 let _recentClosedByTickerStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
 export function getRecentClosedByTicker(ticker: string, strategy: string, sinceMs: number): V2Trade[] {
   if (!_recentClosedByTickerStmt) {
@@ -517,6 +549,7 @@ function rowToTrade(row: Record<string, unknown>): V2Trade {
     peakPrice: (row.peak_price as number) ?? undefined,
     peakHistogram: (row.peak_histogram as number) ?? undefined,
     stopOrderId: (row.stop_order_id as string) ?? null,
+    timeframe: (row.timeframe as string) ?? undefined,
     createdAt: row.created_at as number,
   };
 }
