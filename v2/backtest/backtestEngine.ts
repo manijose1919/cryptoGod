@@ -45,8 +45,12 @@ interface ExitCheckResult {
 
 /**
  * Simulate intra-bar price sequence to match live engine behavior.
- * Live checks exits every 60s; this simulates 4 price points per bar:
- * Open → favorable extreme → adverse extreme → Close.
+ * Live checks exits every 60s; this simulates 4 price points per bar.
+ * Ordering depends on config.barSequence (default 'pessimistic'):
+ *   pessimistic: Open → adverse extreme → favorable extreme → Close
+ *     (SL is tested before TP when both fall inside one bar, and trailing
+ *      can't ratchet on the favorable extreme before the adverse is checked)
+ *   optimistic (legacy, for comparison runs): Open → favorable → adverse → Close
  * At each step: update peak, check BE/trailing/stops — just like live.
  */
 function checkExitOnBar(
@@ -62,13 +66,21 @@ function checkExitOnBar(
   let currentStop = trade.currentStop;
   let trailingActivated = trade.trailingActivated;
 
-  // Build intra-bar price sequence: Open → favorable → adverse → Close
-  // Favorable = high for longs, low for shorts (best case first)
+  // Build intra-bar price sequence (see checkExitOnBar doc comment).
+  // Pessimistic (default): adverse extreme before favorable extreme.
+  // Optimistic (legacy): favorable extreme first — inflates results when TP and SL
+  // both fall inside one bar; kept only for comparison runs.
+  const optimistic = config.barSequence === 'optimistic';
   const priceSequence = isShort
-    ? [bar.open, bar.low, bar.high, bar.close]   // short: low is favorable
-    : [bar.open, bar.high, bar.low, bar.close];   // long: high is favorable
+    ? (optimistic
+        ? [bar.open, bar.low, bar.high, bar.close]    // short: low (favorable) first
+        : [bar.open, bar.high, bar.low, bar.close])   // short: high (adverse) first
+    : (optimistic
+        ? [bar.open, bar.high, bar.low, bar.close]    // long: high (favorable) first
+        : [bar.open, bar.low, bar.high, bar.close]);  // long: low (adverse) first
 
-  for (const price of priceSequence) {
+  for (let seqIndex = 0; seqIndex < priceSequence.length; seqIndex++) {
+    const price = priceSequence[seqIndex];
     // Update peak price (highest for longs, lowest for shorts)
     if (isShort) {
       if (price < trade.peakPrice) trade.peakPrice = price;
@@ -80,9 +92,15 @@ function checkExitOnBar(
     const slHit = isShort ? price >= currentStop : price <= currentStop;
     if (slHit) {
       const stopWasRaised = isShort ? currentStop < trade.stopLoss : currentStop > trade.stopLoss;
+      // Gap-through fill: if the bar OPENED beyond the stop (first sequence price
+      // already breaches), the fill happens at the open, not the stop price.
+      // Intra-bar touches still fill at the stop price.
+      const exitPrice = seqIndex === 0
+        ? (isShort ? Math.max(currentStop, bar.open) : Math.min(currentStop, bar.open))
+        : currentStop;
       return {
         shouldExit: true,
-        exitPrice: currentStop,
+        exitPrice,
         exitReason: stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss,
         newStop: currentStop,
         trailingActivated,

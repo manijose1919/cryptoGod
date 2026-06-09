@@ -8,6 +8,7 @@
 //   --budget=1000    Budget per ticker in USD (default: 1000)
 //   --interval=15m   Candle timeframe (default: 15m)
 //   --tickers=BTC,ETH  Comma-separated ticker list (default: all 10)
+//   --bar-sequence=pessimistic|optimistic  Intra-bar ordering (default: pessimistic)
 //   --seed           Seed v2_signal_scores with results
 //   --json           Export results to JSON file
 // ============================================
@@ -29,6 +30,7 @@ function parseArgs(): {
   seed: boolean;
   json: boolean;
   endDate: string | null;
+  barSequence: 'pessimistic' | 'optimistic';
 } {
   const args = process.argv.slice(2);
   const parsed = {
@@ -39,6 +41,7 @@ function parseArgs(): {
     seed: false,
     json: false,
     endDate: null as string | null,
+    barSequence: 'pessimistic' as 'pessimistic' | 'optimistic',
   };
 
   for (const arg of args) {
@@ -56,6 +59,12 @@ function parseArgs(): {
       });
     } else if (arg.startsWith('--end=')) {
       parsed.endDate = arg.split('=')[1];
+    } else if (arg.startsWith('--bar-sequence=')) {
+      const value = arg.split('=')[1];
+      if (value !== 'pessimistic' && value !== 'optimistic') {
+        throw new Error(`Invalid --bar-sequence '${value}'. Must be 'pessimistic' or 'optimistic'.`);
+      }
+      parsed.barSequence = value;
     } else if (arg === '--seed') {
       parsed.seed = true;
     } else if (arg === '--json') {
@@ -69,8 +78,10 @@ Usage: node --experimental-strip-types scripts/backtest-v2.ts [options]
 Options:
   --days=N          Lookback period in days (default: 90)
   --budget=N        Budget per ticker in USD (default: 1000)
-  --interval=INTV   Candle timeframe: 1m, 5m, 15m, 1h, 4h (default: 15m)
+  --interval=INTV   Candle timeframe: 1m, 5m, 15m, 30m, 1h, 4h (default: 15m)
   --tickers=A,B,C   Comma-separated tickers (default: all 10)
+  --bar-sequence=S  Intra-bar ordering: pessimistic (adverse extreme first, default)
+                    or optimistic (legacy favorable-first, for comparison runs)
   --seed            Write signal scores to v2_signal_scores table
   --json            Export full results to data/backtest-results-*.json
   --help            Show this help
@@ -90,7 +101,7 @@ Examples:
 // --- Interval to Minutes ---
 
 const INTERVAL_MINUTES: Record<string, number> = {
-  '1m': 1, '5m': 5, '15m': 15, '1h': 60, '4h': 240,
+  '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240,
 };
 
 // --- Main ---
@@ -108,7 +119,13 @@ async function main(): Promise<void> {
 
   const endDate = args.endDate ? new Date(args.endDate + 'T00:00:00Z') : new Date();
   const startDate = new Date(endDate.getTime() - args.days * 24 * 60 * 60 * 1000);
-  const intervalMinutes = INTERVAL_MINUTES[args.interval] || 15;
+  const intervalMinutes = INTERVAL_MINUTES[args.interval];
+  if (intervalMinutes === undefined) {
+    throw new Error(
+      `Unknown interval '${args.interval}'. Supported: ${Object.keys(INTERVAL_MINUTES).join(', ')}. ` +
+      `Refusing to default — a wrong intervalMinutes silently corrupts all time-based exit logic.`,
+    );
+  }
 
   const config: BacktestConfig = {
     startDate,
@@ -119,6 +136,7 @@ async function main(): Promise<void> {
     intervalMinutes,
     maxOpenPositions: V2_CONFIG.MAX_OPEN_POSITIONS,
     feeRoundTrip: V2_CONFIG.FEE_ROUND_TRIP_TAKER, // Conservative: use taker fees
+    barSequence: args.barSequence,
     seed: args.seed,
   };
 
@@ -128,6 +146,7 @@ async function main(): Promise<void> {
   console.log(`  Timeframe: ${args.interval} (${intervalMinutes}min)`);
   console.log(`  Budget:    $${args.budget}/ticker ($${args.budget * args.tickers.length} total)`);
   console.log(`  Fees:      ${(config.feeRoundTrip * 100).toFixed(2)}% round-trip (Kraken taker)`);
+  console.log(`  Bar seq:   ${args.barSequence}${args.barSequence === 'optimistic' ? ' (legacy favorable-first — results inflated)' : ''}`);
   console.log(`  Seed:      ${args.seed ? 'YES' : 'no'}`);
 
   const startTime = Date.now();

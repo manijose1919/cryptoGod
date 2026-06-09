@@ -15,6 +15,10 @@ export interface BacktestConfig {
   intervalMinutes: number; // 15, 60, etc.
   maxOpenPositions: number;
   feeRoundTrip: number;   // e.g. 0.0052 for Kraken taker
+  // Intra-bar price ordering for exit simulation (default 'pessimistic').
+  // 'pessimistic' visits the adverse extreme before the favorable one (SL wins ties);
+  // 'optimistic' is the legacy favorable-first ordering, kept for comparison runs.
+  barSequence?: 'pessimistic' | 'optimistic';
   seed: boolean;
 }
 
