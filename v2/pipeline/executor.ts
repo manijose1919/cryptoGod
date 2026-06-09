@@ -15,7 +15,7 @@ import {
   DECISION,
   PIPELINE_STAGE,
 } from './types.ts';
-import { V2_CONFIG, getExchangeFees } from '../engine/config.ts';
+import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, getExchangeFees } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // --- Helpers ---
@@ -97,8 +97,11 @@ export async function executeTrade(
     }
     const quantity = risk.positionSizeUsd / price;
     const isShort = risk.side === 'short';
-    const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : V2_CONFIG.STOP_LOSS_ATR_MULT;
-    const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    // Use per-strategy exit config for SL/TP (BREAKOUT uses tighter stops than TREND)
+    const strategy = (signal as any)._strategy ?? 'TREND';
+    const exitCfg = STRATEGY_EXIT_CONFIGS[strategy] ?? STRATEGY_EXIT_CONFIGS.TREND;
+    const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : exitCfg.slAtrMult;
+    const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : exitCfg.tpAtrMult;
     const stopLoss = isShort ? price + atr * slMult : price - atr * slMult;
     const takeProfit = isShort ? price - atr * tpMult : price + atr * tpMult;
     // H7: exchange-aware maker fee for paper-mode entry estimate
