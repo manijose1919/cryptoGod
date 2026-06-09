@@ -5,7 +5,7 @@
 
 import type { V2Trade, V2PortfolioState } from '../pipeline/types.ts';
 import type { CircuitBreakerState } from '../pipeline/riskGate.ts';
-import { getOpenTrades, getClosedTrades, getOpenTradesByStrategy, getClosedTradesByStrategy } from '../attribution/attributionStore.ts';
+import { getOpenTrades, getClosedTrades, getOpenTradesByStrategy, getClosedTradesByStrategy, getClosedPnlSum, getClosedTradesSince } from '../attribution/attributionStore.ts';
 
 // --- Load Portfolio ---
 
@@ -17,7 +17,6 @@ import { getOpenTrades, getClosedTrades, getOpenTradesByStrategy, getClosedTrade
  */
 export function loadPortfolio(initialBudget: number, strategy?: string): V2PortfolioState {
   const openTrades = strategy ? getOpenTradesByStrategy(strategy) : getOpenTrades();
-  const closedTrades = strategy ? getClosedTradesByStrategy(strategy, 1000) : getClosedTrades(1000);
 
   const openPositions = new Map<string, V2Trade>();
   let lockedCapital = 0;
@@ -26,18 +25,16 @@ export function loadPortfolio(initialBudget: number, strategy?: string): V2Portf
     lockedCapital += trade.positionSizeUsd;
   }
 
-  const totalClosedPnlNet = closedTrades.reduce(
-    (sum, t) => sum + (t.pnlNet ?? 0),
-    0,
-  );
+  // SQL SUM over the whole table — the old getClosedTrades(1000) page cap
+  // silently dropped older PnL from equity once trade count passed 1000,
+  // drifting position sizing and the daily-loss denominator.
+  const totalClosedPnlNet = getClosedPnlSum(strategy);
 
   const availableCapital = initialBudget + totalClosedPnlNet - lockedCapital;
 
   // Daily P&L: sum of closed trades in last 24h
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  const todayTrades = closedTrades.filter(
-    (t) => t.exitTime != null && t.exitTime > dayAgo,
-  );
+  const todayTrades = getClosedTradesSince(dayAgo, strategy);
   const dailyPnl = todayTrades.reduce((sum, t) => sum + (t.pnlNet ?? 0), 0);
 
   return {
