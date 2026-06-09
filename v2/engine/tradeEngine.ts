@@ -378,7 +378,10 @@ async function runLoop(): Promise<void> {
         if (gk.evaluateEntry) {
           const mlResults = [];
           for (const risk of approved) {
-            const signal = passedSignals.find((s) => s.ticker === risk.ticker);
+            // Match side too — a long and a short on the same ticker can both
+            // survive strategyRunner's ticker:side dedup; ticker-only find()
+            // could pair a short risk result with the long signal's prices.
+            const signal = passedSignals.find((s) => s.ticker === risk.ticker && (s.side ?? 'long') === (risk.side ?? 'long'));
             if (!signal) continue;
             const candles = tickerCandles.get(risk.ticker);
             if (!candles || candles.length < 50) { mlResults.push(risk); continue; }
@@ -389,7 +392,22 @@ async function runLoop(): Promise<void> {
               // Apply ML size multiplier
               if (gate.sizeMultiplier && gate.sizeMultiplier !== 1.0) {
                 risk.positionSizeUsd *= gate.sizeMultiplier;
-                risk.quantity = risk.positionSizeUsd / ((signal.signals.close_price as number) || 1);
+                // Re-apply the risk cap AFTER the multiplier. The gatekeeper
+                // can scale up to 1.5x, which silently breached
+                // MAX_RISK_PER_TRADE_PERCENT (riskGate clamps BEFORE this).
+                const closePrice = (signal.signals.close_price as number) || 1;
+                const stopDistPercent = risk.stopLoss > 0 ? Math.abs(closePrice - risk.stopLoss) / closePrice : 0;
+                if (stopDistPercent > 0) {
+                  const maxRiskUsd = portfolio.totalEquity * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT;
+                  risk.positionSizeUsd = Math.min(risk.positionSizeUsd, maxRiskUsd / stopDistPercent);
+                }
+                // Downward multipliers (0.5x) can also drop below Kraken's $10 min
+                if (!isFinite(risk.positionSizeUsd) || risk.positionSizeUsd < 10) {
+                  stats.rejectedByRisk++;
+                  console.log(`[V2] ML SIZE REJECT ${risk.ticker}: $${risk.positionSizeUsd.toFixed(2)} below $10 min after ${gate.sizeMultiplier}x multiplier`);
+                  continue;
+                }
+                risk.quantity = risk.positionSizeUsd / closePrice;
               }
               mlResults.push(risk);
             } else {
@@ -416,7 +434,7 @@ async function runLoop(): Promise<void> {
     if (mlFiltered.length > 0) {
       // Take the best (first, since signals are sorted by score)
       const bestRisk = mlFiltered[0];
-      const bestSignal = passedSignals.find((s) => s.ticker === bestRisk.ticker);
+      const bestSignal = passedSignals.find((s) => s.ticker === bestRisk.ticker && (s.side ?? 'long') === (bestRisk.side ?? 'long'));
 
       if (bestSignal) {
         console.log(`[V2] Loop #${stats.loopCount}: executing ${bestSignal.ticker} score=${bestSignal.compositeScore.toFixed(1)} size=$${bestRisk.positionSizeUsd.toFixed(2)}`);
@@ -447,6 +465,16 @@ async function runLoop(): Promise<void> {
             console.error(`[V2] insertTrade failed for ${trade.ticker}: ${ie.message}`);
             if (V2_CONFIG.MODE === 'live') {
               try {
+                // Cancel the native SL FIRST — otherwise it survives the
+                // rollback sell and fires later against a position we no
+                // longer hold (selling a future re-entry's coins).
+                if (trade.stopOrderId) {
+                  try {
+                    await exchange!.cancelOrder(trade.stopOrderId);
+                  } catch (cancelErr) {
+                    console.error(`[V2] WARNING: could not cancel native SL ${trade.stopOrderId} during rollback: ${(cancelErr as Error).message}. Cancel it manually on Kraken.`);
+                  }
+                }
                 await exchange!.placeMarketSell(trade.ticker, trade.quantity);
                 console.error(`[V2] Position rolled back via market sell after insertTrade failure`);
               } catch (rollbackErr) {
