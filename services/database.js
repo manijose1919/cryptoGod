@@ -1194,6 +1194,11 @@ export function cleanupOldData(daysToKeep = 90) { // Batch 5A: extended from 30â
   sweep('agentPerformance', 'DELETE FROM agent_performance WHERE created_at < ?');
   sweep('driftEvents', 'DELETE FROM drift_events WHERE created_at < ?');
   sweep('systemLogs', 'DELETE FROM system_logs WHERE created_at < ?');
+  // V2 pairs monitoring tables grow one row per 60s engine loop forever
+  // (heartbeat snapshots + alert log). Both store ms timestamps via Date.now().
+  // v2_pairs_trades is NOT swept â€” it's the trade audit record.
+  sweep('v2PairsState', 'DELETE FROM v2_pairs_state WHERE loop_at < ?');
+  sweep('v2PairsAlerts', 'DELETE FROM v2_pairs_alerts WHERE created_at < ?');
   console.log(`[Database] Cleanup: removed old data older than ${daysToKeep} days`, results);
   return results;
 }
@@ -1599,11 +1604,24 @@ export function insertTrainingRun(run) {
          run.start_time || Date.now(), run.total_steps || 0);
 }
 
+// Allowlist of updatable columns (from the training_runs CREATE TABLE).
+// Caller-supplied keys are interpolated into SQL, so anything outside this
+// set is rejected to prevent SQL injection via object keys.
+const TRAINING_RUN_COLUMNS = new Set([
+  'status', 'config_json', 'start_time', 'end_time', 'current_step',
+  'total_steps', 'current_date', 'total_trades', 'win_rate', 'total_pnl',
+  'max_drawdown', 'sharpe_ratio', 'final_equity', 'learned_state_json',
+  'strategy_weights_json', 'error',
+]);
+
 export function updateTrainingRun(runId, updates) {
   const fields = [];
   const values = [];
   for (const [key, val] of Object.entries(updates)) {
     const col = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+    if (!TRAINING_RUN_COLUMNS.has(col)) {
+      throw new Error(`updateTrainingRun: invalid column '${col}'`);
+    }
     fields.push(`${col} = ?`);
     values.push(typeof val === 'object' ? JSON.stringify(val) : val);
   }
@@ -1748,11 +1766,20 @@ export function insertWalkForwardRun(run) {
          JSON.stringify(run.config || {}), run.total_folds || 0, run.completed_folds || 0);
 }
 
+// Allowlist of updatable columns (from the walk_forward_runs CREATE TABLE).
+const WALK_FORWARD_RUN_COLUMNS = new Set([
+  'status', 'config_json', 'total_folds', 'completed_folds',
+  'aggregate_results_json', 'best_fold_id',
+]);
+
 export function updateWalkForwardRun(id, updates) {
   const fields = [];
   const values = [];
   for (const [key, val] of Object.entries(updates)) {
     const col = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+    if (!WALK_FORWARD_RUN_COLUMNS.has(col)) {
+      throw new Error(`updateWalkForwardRun: invalid column '${col}'`);
+    }
     fields.push(`${col} = ?`);
     values.push(typeof val === 'object' && val !== null ? JSON.stringify(val) : val);
   }
@@ -1779,11 +1806,22 @@ export function insertWalkForwardFold(fold) {
          fold.status || 'pending');
 }
 
+// Allowlist of updatable columns (from the walk_forward_folds CREATE TABLE).
+const WALK_FORWARD_FOLD_COLUMNS = new Set([
+  'wf_run_id', 'fold_number', 'train_start', 'train_end', 'test_start',
+  'test_end', 'train_run_id', 'test_run_id', 'train_pnl', 'test_pnl',
+  'train_trades', 'test_trades', 'train_win_rate', 'test_win_rate',
+  'overfitting_ratio', 'learned_state_json', 'status',
+]);
+
 export function updateWalkForwardFold(id, updates) {
   const fields = [];
   const values = [];
   for (const [key, val] of Object.entries(updates)) {
     const col = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+    if (!WALK_FORWARD_FOLD_COLUMNS.has(col)) {
+      throw new Error(`updateWalkForwardFold: invalid column '${col}'`);
+    }
     fields.push(`${col} = ?`);
     values.push(typeof val === 'object' && val !== null ? JSON.stringify(val) : val);
   }
@@ -2144,11 +2182,20 @@ export function createLabelingJob() {
   return result.lastInsertRowid;
 }
 
+// Allowlist of updatable columns (from the synthetic_labeling_jobs CREATE TABLE).
+const LABELING_JOB_COLUMNS = new Set([
+  'status', 'total_pairs', 'completed_pairs', 'total_samples',
+  'started_at', 'completed_at', 'error',
+]);
+
 export function updateLabelingJob(id, updates) {
   const sets = [];
   const values = {};
   for (const [key, val] of Object.entries(updates)) {
     const snakeKey = key.replace(/[A-Z]/g, m => '_' + m.toLowerCase());
+    if (!LABELING_JOB_COLUMNS.has(snakeKey)) {
+      throw new Error(`updateLabelingJob: invalid column '${snakeKey}'`);
+    }
     sets.push(`${snakeKey} = @${key}`);
     values[key] = val;
   }
