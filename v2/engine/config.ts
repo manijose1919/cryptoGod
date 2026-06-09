@@ -135,7 +135,10 @@ export const V2_CONFIG = {
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
   TREND:           ['30m', '1h', '4h'],
   MOMENTUM:        ['1h', '4h'],
-  BREAKOUT:        ['15m', '30m', '1h'],
+  // BREAKOUT disabled 2026-06-09 — live post-baseline: 2/12 wins (17%), -$50.28.
+  // Still losing after the 2026-06-01 executor-SL fix (Jun 8: 4 trades, -$7.69).
+  // Re-enable only after a walk-forward refit validates positive OOS expectancy.
+  // BREAKOUT:        ['15m', '30m', '1h'],
   // MEAN_REVERSION and SCALP disabled — live data: 0% and 22% WR respectively
 };
 
