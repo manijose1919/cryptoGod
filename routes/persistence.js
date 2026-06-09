@@ -34,7 +34,7 @@ router.get('/trades', (req, res, next) => {
   }
 });
 
-router.post('/trades', (req, res, next) => {
+router.post('/trades', requireAdminAuth, (req, res, next) => {
   try {
     const { ticker, strategy, entryPrice, exitPrice, quantity, pnl, pnlPercent, outcome, reason, entryTime, exitTime } = req.body;
     if (!ticker || !strategy || !entryPrice || !quantity || !entryTime) {
@@ -65,7 +65,7 @@ router.get('/trade-memory', (req, res, next) => {
   }
 });
 
-router.post('/trade-memory', (req, res, next) => {
+router.post('/trade-memory', requireAdminAuth, (req, res, next) => {
   try {
     const m = req.body;
     if (!m.ticker || !m.strategy) {
@@ -109,7 +109,7 @@ router.get('/learned-patterns', (req, res, next) => {
   }
 });
 
-router.put('/learned-patterns/:id', (req, res, next) => {
+router.put('/learned-patterns/:id', requireAdminAuth, (req, res, next) => {
   try {
     const p = req.body;
     const id = req.params.id;
@@ -154,7 +154,7 @@ router.get('/parameter-history/latest', (req, res, next) => {
   }
 });
 
-router.post('/parameter-history', (req, res, next) => {
+router.post('/parameter-history', requireAdminAuth, (req, res, next) => {
   try {
     const { params, winRate, profitFactor, totalTrades, reason } = req.body;
     if (!params) {
@@ -186,7 +186,7 @@ router.get('/sessions', (req, res, next) => {
   }
 });
 
-router.post('/sessions', (req, res, next) => {
+router.post('/sessions', requireAdminAuth, (req, res, next) => {
   try {
     const { startTime, initialBudget, notes } = req.body;
     if (!startTime) {
@@ -203,7 +203,7 @@ router.post('/sessions', (req, res, next) => {
   }
 });
 
-router.put('/sessions/:id', (req, res, next) => {
+router.put('/sessions/:id', requireAdminAuth, (req, res, next) => {
   try {
     const id = parseInt(req.params.id);
     const { endTime, finalValue, totalTrades, winRate, pnl } = req.body;
@@ -261,7 +261,7 @@ router.get('/candles', (req, res, next) => {
   }
 });
 
-router.post('/candles/batch', (req, res, next) => {
+router.post('/candles/batch', requireAdminAuth, (req, res, next) => {
   try {
     const { candles } = req.body;
     if (!Array.isArray(candles) || candles.length === 0) {
@@ -287,7 +287,7 @@ router.get('/sentiment/:ticker', (req, res, next) => {
   }
 });
 
-router.post('/sentiment', (req, res, next) => {
+router.post('/sentiment', requireAdminAuth, (req, res, next) => {
   try {
     const { ticker, source, score, rawData } = req.body;
     if (!ticker || !source) {

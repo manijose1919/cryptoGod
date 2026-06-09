@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { createLogger } from '../services/logger.js';
 import { validateBody } from '../middleware/validate.js';
+import { requireAdminAuth } from '../middleware/adminAuth.js';
 
 const log = createLogger('Sessions');
 
@@ -12,8 +13,8 @@ export default function createSessionsRouter(ctx) {
         res.json(ctx.getSessionStatus(ctx.portfolio, ctx.botState));
     });
 
-    // POST /session/pause
-    router.post('/session/pause', (req, res) => {
+    // POST /session/pause — gated: stops the trading loop
+    router.post('/session/pause', requireAdminAuth, (req, res) => {
         if (ctx.botState.isActive) {
             ctx.botState.isActive = false;
             if (ctx.botInterval) { clearInterval(ctx.botInterval); ctx.botInterval = null; }
@@ -29,8 +30,8 @@ export default function createSessionsRouter(ctx) {
         res.json({ success: true, botActive: false });
     });
 
-    // POST /session/resume
-    router.post('/session/resume', async (req, res) => {
+    // POST /session/resume — gated: restarts the trading loop
+    router.post('/session/resume', requireAdminAuth, async (req, res) => {
         if (!ctx.botState.isActive) {
             ctx.botState.isActive = true;
             ctx.botInterval = setInterval(ctx.tradingBotLoop, ctx.CONFIG.BOT_INTERVAL_MS);
@@ -46,8 +47,9 @@ export default function createSessionsRouter(ctx) {
         res.json({ success: true, botActive: true });
     });
 
-    // POST /session/start
-    router.post('/session/start', validateBody({
+    // POST /session/start — admin-gated: accepts mode:'REAL' (real-money trading),
+    // so it must never be reachable by unauthenticated remote clients.
+    router.post('/session/start', requireAdminAuth, validateBody({
         mode: { type: 'string', oneOf: ['SIMULATION', 'REAL'] },
         budget: { type: 'number', min: 1, max: 10000000 },
         tickers: { type: 'array' },
@@ -178,8 +180,8 @@ export default function createSessionsRouter(ctx) {
         }
     });
 
-    // POST /session/stop
-    router.post('/session/stop', async (req, res) => {
+    // POST /session/stop — admin-gated: force-closes all open positions.
+    router.post('/session/stop', requireAdminAuth, async (req, res) => {
         try {
             const wasActive = ctx.botState.isActive;
 
@@ -345,8 +347,8 @@ export default function createSessionsRouter(ctx) {
         }
     });
 
-    // POST /session/settings
-    router.post('/session/settings', validateBody({
+    // POST /session/settings — admin-gated: mutates risk/position-sizing settings.
+    router.post('/session/settings', requireAdminAuth, validateBody({
         riskAmount: { type: 'number', min: 0.01, max: 1.0 },
         maxConcurrentTrades: { type: 'number', min: 1, max: 50 },
         sessionProfitGoal: { type: 'number', min: 0 },
@@ -390,8 +392,8 @@ export default function createSessionsRouter(ctx) {
         }
     });
 
-    // POST /sessions/:sessionId/restore
-    router.post('/sessions/:sessionId/restore', async (req, res) => {
+    // POST /sessions/:sessionId/restore — gated: effectively starts a new session
+    router.post('/sessions/:sessionId/restore', requireAdminAuth, async (req, res) => {
         try {
             if (ctx.botState.isActive) {
                 return res.status(400).json({ error: 'A session is already active. Stop it first.' });
