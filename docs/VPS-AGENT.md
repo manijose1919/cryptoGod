@@ -50,6 +50,22 @@ Pairs engine is deployed in PAPER MODE (FILUSD/ICPUSD). Every monitoring cycle:
 - See `docs/runbooks/pairs-runbook.md` for failure-mode response procedures.
 - **NEVER** set `PAIRS_MODE=live` or `PAIRS_LIVE_CONFIRMED=yes` without explicit human sign-off. Phase A = 30 days paper.
 
+### 5c. 2026-06-09 Audit-Batch Monitoring (NEW — PRIORITY)
+
+Local Claude shipped a 16-finding fix batch on 2026-06-09 (commits `b37171e`..`0ae3e4c`, full details in CHANGELOG.md — **read that entry first**). A new `stats_baseline_time` was set (1781038623818). Joseph expects **progress reports ready on demand** comparing the new cohort against the pre-fix cohort. Every monitoring cycle:
+
+1. **Exit-behavior shift (the headline change):** trailing now activates at 1% (was silently 2.5%) and per-strategy time-kills are live. Track post-baseline exit_reason mix vs the old cohort (old: 82 trailing / 20 stop_loss / 7 time_kill, avg trail +$3.14, avg SL -$11.10). Expect MORE trailing exits, SMALLER avg wins, FEWER time-kills. **Red flag:** avg trailing win below ~$1.90 on a $360 position (fee floor) → the 1% activation is too tight; report it, candidate revert is the config line in `449ddf3`.
+2. **Fee drag ratio:** old cohort burned 84% of gross in fees ($127.93 / $152.30). Report `SUM(fees_paid) / SUM(pnl_gross)` post-baseline each cycle. Target: trending below 50%.
+3. **MOMENTUM revival:** the global 6h time-kill was strangling it (no post-baseline MOMENTUM trades at all). It should start completing trades with multi-day holds. Report its first 10 trades individually.
+4. **ML size cap:** watch for `[V2] ML SIZE REJECT` lines and confirm no position exceeds 1.5% equity risk (position_size_usd × stop-distance% ≤ 1.5% × equity).
+5. **Pairs engine (restored by this deploy — it was missing from the VPS since 05-27, see CHANGELOG divergence notice):** fees are now honest (2× prior). Expect lower paper PnL per trade. Confirm `pairs_consecutive_losses` / `pairs_paused_until` settings keys survive restarts. Watch for `stale_candles` alerts.
+6. **Candle fetch health:** `[V2 Candles] N/24 fetches failed` warnings = Kraken pressure; persistent → raise CHUNK_GAP_MS in candleManager.ts.
+7. **Keep a running progress report at `data/reports/audit-batch-progress.md`** updated every cycle: post-baseline trades by strategy/exit_reason, fee ratio, comparison vs pre-baseline cohort, anomalies, and a one-paragraph verdict ("fixes working / not working / too early"). Joseph will ask for this — have it current.
+
+**Baseline queries:** filter the new cohort with `WHERE entry_time >= 1781038623818`. Pre-fix cohort: `entry_time >= 1779802737790 AND entry_time < 1781038623818`.
+
+**Git discipline reminder (this matters — see CHANGELOG 2026-06-09):** your May-27→Jun-6 commits were built on a stale base and force-moved master, which un-deployed the pairs engine and a loop fix for two weeks. Before ANY commit: `git pull` from the deployed master, branch from it, and add a CHANGELOG entry per the standing rule.
+
 ### 5b. Report Generation
 Maintain an up-to-date report at `data/reports/latest-report.md` that includes:
 
