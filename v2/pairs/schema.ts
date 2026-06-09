@@ -71,13 +71,39 @@ export function initPairsTables(): void {
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at      INTEGER NOT NULL,
       severity        TEXT NOT NULL,    -- 'info' | 'warn' | 'crit'
-      kind            TEXT NOT NULL,    -- 'entry' | 'exit' | 'pause' | 'drawdown_kill' | 'adf_degrade' | 'margin_low' | 'margin_critical' | 'state_drift' | 'partial_fill'
+      kind            TEXT NOT NULL,    -- 'entry' | 'exit' | 'pause' | 'drawdown_kill' | 'adf_degrade' | 'margin_low' | 'margin_critical' | 'state_drift' | 'partial_fill' | 'stale_candles'
       message         TEXT NOT NULL,
       data_json       TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_pairs_alerts_created_at ON v2_pairs_alerts(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pairs_alerts_kind ON v2_pairs_alerts(kind);
   `);
+}
+
+// Key-value persistence in the shared `settings` table (created by
+// services/database.js). Used for engine state that must survive pm2
+// restarts (kill-switch counters, pause timestamps).
+export function setPairsSetting(key: string, value: string): void {
+  try {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES (?, ?, unixepoch() * 1000)
+      ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = unixepoch() * 1000
+    `).run(key, value, value);
+  } catch {
+    /* settings persistence must never crash the engine */
+  }
+}
+
+export function getPairsSetting(key: string): string | null {
+  try {
+    const db = getDb();
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function recordPairsAlert(a: {

@@ -83,7 +83,10 @@ async function main(): Promise<void> {
     perWindowCointegration[days] = testCointegration(logA, logB);
 
     for (const feeMode of ['taker', 'maker'] as const) {
-      const feeRT = feeMode === 'maker' ? PAIRS_CONFIG.FEE_PER_LEG_MAKER : PAIRS_CONFIG.FEE_PER_LEG_TAKER;
+      // FEE_PER_LEG_* is per leg PER SIDE; the runner's feeRoundTripPerLeg
+      // wants the per-leg ROUND-TRIP rate (entry + exit), so multiply by 2.
+      // Total per trade = (notionalA + notionalB) × 2 × rate = 4 sides × rate.
+      const feeRT = 2 * (feeMode === 'maker' ? PAIRS_CONFIG.FEE_PER_LEG_MAKER : PAIRS_CONFIG.FEE_PER_LEG_TAKER);
       const warmup = PAIRS_CONFIG.WARMUP_BARS;
       const result = runPairsBacktest({
         symA, symB,
