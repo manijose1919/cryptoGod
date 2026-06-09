@@ -71,16 +71,25 @@ export async function fetchTimeframeCandles(
     const raw = await adapter.getCandles(ticker, timeframe, limit);
     if (raw && raw.length > 0) {
       const candles = normalizeCandles(raw);
-      cache.set(key, { candles, fetchedAt: Date.now() });
+      // Jitter the effective fetch time by up to 15% of TTL so all keys of a
+      // timeframe don't expire in lockstep (lockstep expiry = 12-24 REST
+      // calls bursting at once every TTL boundary, brushing Kraken's limits).
+      const jitter = Math.floor(Math.random() * ttl * 0.15);
+      cache.set(key, { candles, fetchedAt: Date.now() - jitter });
       return candles;
     }
   } catch {
     // Return stale cache if available
     if (cached) return cached.candles;
+    fetchFailuresThisPass++;
   }
 
   return null;
 }
+
+// Count of fetches that failed with NO cached fallback in the current
+// fetchAllCandles pass — surfaced so silent 429s don't read as "no signals".
+let fetchFailuresThisPass = 0;
 
 /**
  * Fetch candles for all tickers across specified timeframes.
@@ -92,20 +101,32 @@ export async function fetchAllCandles(
 ): Promise<Map<string, Map<string, Candle[]>>> {
   const result = new Map<string, Map<string, Candle[]>>();
 
-  // Batch all fetches in parallel
-  const fetches: { ticker: string; tf: string; promise: Promise<Candle[] | null> }[] = [];
+  // Chunked fetching: 6 tickers × 4 TFs = 24 simultaneous REST calls was near
+  // Kraken's public burst limit on cold start / TTL-aligned expiry. Run 4 at a
+  // time with a short gap — cache hits resolve instantly so a warm pass adds
+  // no latency, and a fully cold pass adds ~1.3s to a 60s loop.
+  const CHUNK_SIZE = 4;
+  const CHUNK_GAP_MS = 250;
 
+  const fetches: { ticker: string; tf: string; run: () => Promise<Candle[] | null> }[] = [];
   for (const ticker of tickers) {
     for (const tf of timeframes) {
-      fetches.push({
-        ticker,
-        tf,
-        promise: fetchTimeframeCandles(ticker, tf),
-      });
+      fetches.push({ ticker, tf, run: () => fetchTimeframeCandles(ticker, tf) });
     }
   }
 
-  const results = await Promise.allSettled(fetches.map(f => f.promise));
+  fetchFailuresThisPass = 0;
+  const results: PromiseSettledResult<Candle[] | null>[] = [];
+  for (let i = 0; i < fetches.length; i += CHUNK_SIZE) {
+    const chunk = fetches.slice(i, i + CHUNK_SIZE);
+    results.push(...await Promise.allSettled(chunk.map(f => f.run())));
+    if (i + CHUNK_SIZE < fetches.length) {
+      await new Promise(r => setTimeout(r, CHUNK_GAP_MS));
+    }
+  }
+  if (fetchFailuresThisPass > 0) {
+    console.warn(`[V2 Candles] ${fetchFailuresThisPass}/${fetches.length} fetches failed with no cached fallback this pass`);
+  }
 
   for (let i = 0; i < fetches.length; i++) {
     const { ticker, tf } = fetches[i];
