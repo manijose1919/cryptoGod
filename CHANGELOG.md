@@ -37,6 +37,41 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-09 — Branch divergence healed + full-audit fix batch (16 findings) — local-claude
+
+**Commits:** merge `27765ee` into master, then `b37171e`, `449ddf3`, `0ce729e`, `c922d61`, `04c4387`, `4078477`, `f95362b`, `6b8e2ca`, `91c9fa2`
+**Files changed:** v2/engine/, v2/pipeline/, v2/pairs/, v2/backtest/, v2/attribution/, routes/, services/database.js, services/correlationRiskBackend.js, scripts/backtest-v2.ts
+**Stats baseline reset:** YES — new baseline set on deploy (see settings.stats_baseline_time). Material changes: trailing activation 2.5%→1% (TREND), per-strategy time-kills now active, ML sizing capped, BREAKOUT disabled, pairs fees corrected.
+
+### IMPORTANT: branch divergence (read this, VPS Claude)
+
+VPS Claude's 10 commits (2026-05-27 → 06-06, `ef5065c`..`27765ee`) were built on `3632c2b`, a base from BEFORE the 2026-05-26 pairs deployment, and VPS `master` was force-moved onto that line. Result: **the VPS ran without the pairs engine, the `11c8f5a` loop fix, and the backtest harness from 05-27 to today** (confirmed: `v2_pairs_state` rows stop ~05-27). This deploy merges both lines — nothing was lost, but always `git pull` / branch from the deployed master before committing on the VPS, and add changelog entries (the 10 tuning commits had none).
+
+### What changed (by priority)
+
+1. **Exit-config wiring (`449ddf3`)** — exitManager only reads `STRATEGY_EXIT_CONFIGS`; tuned values in `V2_CONFIG` were dead. TREND now actually trails at 1% (was silently 2.5%); per-strategy time-kill/quick-kill now scale `bars × entry timeframe` via a new persisted `timeframe` column (old rows keep global 6h/4h timers); break-even stop clamped to the valid side of price (was booking phantom paper profits on high-ATR tickers); live executor uses per-strategy SL/TP + real strategy tag; dual-engine peakPrice now updates.
+2. **Risk path (`0ce729e`)** — ML sizeMultiplier re-capped at MAX_RISK_PER_TRADE_PERCENT (was breaching the 06-06 1.5% cap by up to 50%); riskGate fee-floor uses per-strategy TP; signal/risk matched by ticker+side; live rollback cancels the native SL.
+3. **BREAKOUT disabled (`b37171e`)** — 2/12 wins, -$50.28 post-baseline.
+4. **Security (`4078477`)** — session start/stop/pause/resume/restore, /api/db/* writes, pairs force-close, dual/bearish start/stop now require admin auth (localhost exempt; ADMIN_API_KEY deliberately unset = remote default-deny).
+5. **Pairs engine (`6b8e2ca`)** — fees were undercounted 2× (round trip = 4 executions); kill-switch pause/loss-counter persisted across restarts; time-stop works for adopted trades; stale-candle freshness gate; paper fills at next-bar open (backtest semantics). **All prior pairs paper PnL was overstated by ~$2.60 per $1K round trip.**
+6. **Backtest realism (`91c9fa2`)** — intra-bar ordering now pessimistic by default (adverse extreme first); gap-through opens fill at the open; 30m no longer silently maps to 15m. **Re-validate the 6-ticker concentration, no-cooldown, and 30m decisions against the pessimistic default before trusting their numbers** — live data already contradicts the in-sample claims (AKT picked at "93.3% WR" is 1/4 wins live; PENGU 2/5; PENDLE 0/2).
+7. **DB/infra (`f95362b`, `c922d61`, `04c4387`)** — dashboard correlation matrix unbroken (`timestamp`→`time` column bug); v2_pairs_state/alerts added to 90-day retention sweeps; UPDATE-builder column allowlists; equity from SQL SUM not last-1000 page; candle fetches chunked + TTL-jittered.
+
+### Why
+
+Fee drag and exit-config drift, measured live: post-baseline gross +$152.30 vs $127.93 fees = +$24.36 net (84% eaten); avg stop -$11.10 vs avg trailing win +$3.14; stops erased 86% of winners' PnL. The tuning that was supposed to fix this (1% trailing, 1.5% risk cap) was either dead config or being silently undone by the ML multiplier.
+
+### What to monitor / watch for
+
+- Trailing exits should activate earlier: expect more `trailing` exits with smaller avg size, fewer `time_kill`/`stop_loss`. If win SIZE collapses below fee floor (~$1.9 on $360), the 1% activation is too tight — candidate revert is `449ddf3`'s config line only.
+- MOMENTUM trades should now hold up to ~2.7 days on 4h (watch `time_kill` reasons mention the per-strategy threshold).
+- `[V2] ML SIZE REJECT` log lines = ML multiplier hitting the new floor (expected occasionally).
+- Pairs (re-enabled by this deploy, paper mode): expect FEWER profitable-looking trades now fees are honest. `pairs_consecutive_losses`/`pairs_paused_until` keys in settings must survive restarts.
+- `[V2 Candles] N/24 fetches failed` warnings = Kraken rate-limit pressure; if persistent, raise CHUNK_GAP_MS.
+- Rollback: each numbered item is one commit — `git revert <SHA>` individually.
+
+---
+
 ## 2026-05-26 18:00 UTC — Pairs trading engine deployed in PAPER MODE — local-claude
 
 **Commits:** merge commit of `feat/canonical-strategy-backtest` (commits `ab1ae8e` through `557afc9`) + ecosystem config update
