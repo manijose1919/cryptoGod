@@ -173,6 +173,7 @@ export interface V2Trade {
   peakPrice?: number;            // Highest price seen since entry — used by Chandelier exit
   peakHistogram?: number;        // Peak MACD histogram since entry — used by Momentum exit
   strategy?: string;             // 'TREND' | 'MEAN_REVERSION' | 'BREAKOUT' | 'MOMENTUM'
+  timeframe?: string;            // entry timeframe ('30m'|'1h'|'4h'...) — scales per-strategy time-kill/quick-kill bars to real time
   stopOrderId?: string | null;   // C2: native exchange stop-loss order id; cancel before market-sell on managed exit
   decisionLog: DecisionRecord[];
   createdAt: number;

@@ -38,6 +38,8 @@ function makeExecuteDecision(
   reason: string,
   confidence: number,
   signals: Record<string, number>,
+  slAtrMult: number = V2_CONFIG.STOP_LOSS_ATR_MULT,
+  tpAtrMult: number = V2_CONFIG.TAKE_PROFIT_ATR_MULT,
 ): DecisionRecord {
   return {
     tradeId,
@@ -48,8 +50,8 @@ function makeExecuteDecision(
     signals,
     thresholds: {
       makerFillTimeoutMs: V2_CONFIG.MAKER_FILL_TIMEOUT_MS,
-      slAtrMult: V2_CONFIG.STOP_LOSS_ATR_MULT,
-      tpAtrMult: V2_CONFIG.TAKE_PROFIT_ATR_MULT,
+      slAtrMult,
+      tpAtrMult,
     },
     confidence,
   };
@@ -112,6 +114,8 @@ export async function executeTrade(
       `${V2_CONFIG.MODE} ${isShort ? 'SHORT' : ''} entry at ${price.toFixed(2)}`,
       signal.confidence,
       { price, quantity, stopLoss, takeProfit, atr },
+      slMult,
+      tpMult,
     );
 
     const trade: V2Trade = {
@@ -142,6 +146,7 @@ export async function executeTrade(
       peakPrice: price,
       stopOrderId: null, // C2: paper mode never places a native SL
       strategy: (signal as any)._strategy ?? 'TREND',
+      timeframe: (signal as any)._timeframe ?? V2_CONFIG.CANDLE_INTERVAL,
       decisionLog: [...previousDecisions, decision],
       createdAt: Date.now(),
     };
@@ -151,10 +156,15 @@ export async function executeTrade(
 
   // --- Live mode: maker-only, no chasing ---
   try {
+    // Per-strategy exit config — Stage 5 executes whatever strategy ranked
+    // best (TREND/MOMENTUM/BREAKOUT), so hardcoding TREND's 4.0x TP here gave
+    // other strategies the wrong exits and mislabeled their stats.
+    const liveStrategy = (signal as any)._strategy ?? 'TREND';
+    const liveExitCfg = STRATEGY_EXIT_CONFIGS[liveStrategy] ?? STRATEGY_EXIT_CONFIGS.TREND;
     const bestBid = await exchange.getBestBid(signal.ticker);
     const quantity = risk.positionSizeUsd / bestBid;
-    const stopLoss = bestBid - atr * V2_CONFIG.STOP_LOSS_ATR_MULT;
-    const takeProfit = bestBid + atr * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    const stopLoss = bestBid - atr * liveExitCfg.slAtrMult;
+    const takeProfit = bestBid + atr * liveExitCfg.tpAtrMult;
 
     // Place maker buy at best bid
     const orderResult = await exchange.placeMakerBuy(signal.ticker, bestBid, quantity);
@@ -183,8 +193,8 @@ export async function executeTrade(
       : fillPrice * fillQty * getExchangeFees(exchange.getName()).MAKER_PERCENT;
 
     // Recalculate SL/TP from actual fill price
-    const actualStop = fillPrice - atr * V2_CONFIG.STOP_LOSS_ATR_MULT;
-    const actualTp = fillPrice + atr * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
+    const actualStop = fillPrice - atr * liveExitCfg.slAtrMult;
+    const actualTp = fillPrice + atr * liveExitCfg.tpAtrMult;
 
     // Place native stop loss on exchange — retry with backoff, rollback if all fail.
     // A live position without an exchange-side SL is exposed to catastrophic loss
@@ -229,6 +239,8 @@ export async function executeTrade(
       `Live entry filled at ${fillPrice.toFixed(2)}, native SL at ${actualStop.toFixed(2)}`,
       signal.confidence,
       { price: fillPrice, quantity: fillQty, stopLoss: actualStop, takeProfit: actualTp, atr },
+      liveExitCfg.slAtrMult,
+      liveExitCfg.tpAtrMult,
     );
 
     const trade: V2Trade = {
@@ -258,7 +270,8 @@ export async function executeTrade(
       atrPercent: signal.signals.atr_percent,
       peakPrice: fillPrice,
       stopOrderId, // C2: persist for cancellation on managed exit
-      strategy: 'TREND',  // M23: set explicitly (executor is only invoked from TREND today)
+      strategy: liveStrategy,  // Stage 5 executes any ranked strategy — tag the real one
+      timeframe: (signal as any)._timeframe ?? V2_CONFIG.CANDLE_INTERVAL,
       decisionLog: [...previousDecisions, decision],
       createdAt: Date.now(),
     };
