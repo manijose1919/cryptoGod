@@ -18,7 +18,7 @@ function getClosePrices(ticker, timeframe, lookbackMinutes) {
   if (!db) return [];
   const since = Date.now() - lookbackMinutes * 60 * 1000;
   const rows = db.prepare(
-    `SELECT close FROM candle_history WHERE ticker = ? AND timeframe = ? AND timestamp >= ? ORDER BY timestamp ASC`
+    `SELECT close FROM candle_history WHERE ticker = ? AND timeframe = ? AND time >= ? ORDER BY time ASC`
   ).all(ticker, timeframe, since);
   return rows.map(r => r.close);
 }
