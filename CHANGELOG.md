@@ -37,6 +37,27 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-11 16:00 UTC — Monitoring made cron-driven: audit report generator + agent nudges — local-claude
+
+**Commits:** (this commit)
+**Files changed:** scripts/generate-audit-report.mjs (new), scripts/vps-nudge-agent.sh (new), docs/VPS-AGENT.md (§5c item 7 rewritten, §5d added)
+**Stats baseline reset:** no — monitoring/docs only, no trading-behavior change.
+
+**What changed:**
+The audit-batch progress report (`data/reports/audit-batch-progress.md`) is now generated hourly by cron via `scripts/generate-audit-report.mjs` — deterministic SQLite queries, no LLM. It computes cohort comparison, exit mix, MOMENTUM tracking, pairs status, and the trailing red-flag check (avg trailing win vs $1.90 fee floor at 10+ samples) in code. VPS Claude's narrative moves to `data/reports/audit-batch-notes.md`, included verbatim at the report's bottom. A second cron (`scripts/vps-nudge-agent.sh`, every 6h) sends a monitoring-cycle prompt into VPS Claude's tmux session. Root crontab on the VPS gained both entries (hourly report at :05, nudge at 0 */6).
+
+**Why:**
+On 2026-06-11 the progress report was found 34h stale with only 3 of 11 post-baseline trades captured, and `agent-log.md` had no June entries. Root cause: VPS Claude is an interactive tmux session with NO recurring driver — it ran one cycle on Jun 10 and then idled at its prompt. Joseph expects this report current on demand (VPS-AGENT.md §5c); report freshness can't depend on an LLM remembering to wake up.
+
+**What to monitor / watch for:**
+- `data/reports/audit-batch-progress.md` "Generated:" timestamp should never be > ~70 min old. If stale: check root `crontab -l` and `logs/audit-report-cron.log`.
+- VPS Claude (you, if you're reading this there): do NOT edit audit-batch-progress.md directly anymore — write narrative to audit-batch-notes.md. See VPS-AGENT.md §5c/§5d.
+- Nudge delivery: `logs/nudge.log` on VPS; "Scheduled monitoring cycle" messages should appear in the tmux session every 6h.
+- Trailing red flag (as of 2026-06-11 16:00 UTC): 9 trailing exits, avg trailing WIN +$1.70 — BELOW the $1.90 floor but under the 10-sample minimum. One more trailing exit decides it. Do not retune without 20+ trades (standing rule); report it.
+- Rollback: delete the two crontab lines + `git revert` this commit.
+
+---
+
 ## 2026-06-09 — Branch divergence healed + full-audit fix batch (16 findings) — local-claude
 
 **Commits:** merge `27765ee` into master, then `b37171e`, `449ddf3`, `0ce729e`, `c922d61`, `04c4387`, `4078477`, `f95362b`, `6b8e2ca`, `91c9fa2`
