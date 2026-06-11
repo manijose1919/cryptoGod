@@ -60,9 +60,17 @@ Local Claude shipped a 16-finding fix batch on 2026-06-09 (commits `b37171e`..`0
 4. **ML size cap:** watch for `[V2] ML SIZE REJECT` lines and confirm no position exceeds 1.5% equity risk (position_size_usd × stop-distance% ≤ 1.5% × equity).
 5. **Pairs engine (restored by this deploy — it was missing from the VPS since 05-27, see CHANGELOG divergence notice):** fees are now honest (2× prior). Expect lower paper PnL per trade. Confirm `pairs_consecutive_losses` / `pairs_paused_until` settings keys survive restarts. Watch for `stale_candles` alerts.
 6. **Candle fetch health:** `[V2 Candles] N/24 fetches failed` warnings = Kraken pressure; persistent → raise CHUNK_GAP_MS in candleManager.ts.
-7. **Keep a running progress report at `data/reports/audit-batch-progress.md`** updated every cycle: post-baseline trades by strategy/exit_reason, fee ratio, comparison vs pre-baseline cohort, anomalies, and a one-paragraph verdict ("fixes working / not working / too early"). Joseph will ask for this — have it current.
+7. **Progress report (UPDATED 2026-06-11):** the data tables in `data/reports/audit-batch-progress.md` are auto-generated **hourly by cron** via `scripts/generate-audit-report.mjs` — do NOT edit that file directly (cron will overwrite you). Your job each cycle: read the generated report, then write your narrative, anomalies, and one-paragraph verdict ("fixes working / not working / too early") in `data/reports/audit-batch-notes.md` — the generator includes it verbatim at the bottom of the report. The generator also computes the trailing red-flag check (item 1) deterministically; if it shows 🚩 TRIPPED, flag it prominently in your notes but do not change config without 20+ trades of evidence. Joseph will ask for this report — the data stays current via cron even if you're idle, but your narrative should not go stale either.
 
 **Baseline queries:** filter the new cohort with `WHERE entry_time >= 1781038623818`. Pre-fix cohort: `entry_time >= 1779802737790 AND entry_time < 1781038623818`.
+
+### 5d. How your monitoring cycles are driven (NEW — 2026-06-11)
+
+You are an interactive session — you only act when prompted. Two cron jobs (root crontab) keep monitoring alive:
+- **Hourly:** `node scripts/generate-audit-report.mjs` regenerates the audit progress report data (no LLM involved).
+- **Every 6 hours:** `scripts/vps-nudge-agent.sh` sends you a monitoring-cycle prompt via tmux. When you receive a "Scheduled monitoring cycle" message, run the cycle per §1/2/5a/5c and log it in `agent-log.md`.
+
+If you notice nudges have stopped arriving (no "Scheduled monitoring cycle" message in > 12h of session history), check `crontab -l` as root and `logs/nudge.log`.
 
 **Git discipline reminder (this matters — see CHANGELOG 2026-06-09):** your May-27→Jun-6 commits were built on a stale base and force-moved master, which un-deployed the pairs engine and a loop fix for two weeks. Before ANY commit: `git pull` from the deployed master, branch from it, and add a CHANGELOG entry per the standing rule.
 
