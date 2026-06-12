@@ -37,6 +37,26 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-12 15:15 UTC — VPS inner .git resynced + deploy hook now self-syncs it — local-claude
+
+**Commits:** (this commit — docs only; the hook lives on the VPS at `/opt/trading-bot.git/hooks/post-receive`, not in the repo)
+**Files changed:** CHANGELOG.md only (repo); on VPS: `/opt/trading-bot.git/hooks/post-receive` patched, original backed up to `post-receive.bak-2026-06-12`
+**Stats baseline reset:** no — no trading-behavior change.
+
+**What changed:**
+One-time fix: `/opt/trading-bot/.git` (the work-tree repo VPS Claude commits from) was stale at `27765ee` while deployed files were at `897ec61` — the post-receive hook's `GIT_WORK_TREE=... git checkout -f` updates files but never the inner repo. Verified fast-forward ancestry, then `git fetch vps master` + `git reset --mixed` brought the inner master/index to the deployed SHA without touching working files (only expected diff afterward: `dist/index.html`, the VPS-built artifact). Root-cause fix: the hook now syncs the inner `.git` to the deployed SHA on every push (unsets `GIT_DIR`, fetches from the bare repo, resets if on master / force-moves the master ref otherwise; non-fatal on failure).
+
+**Why:**
+This exact staleness caused the May 2026 branch-divergence incident — VPS commits built on a pre-pairs base, force-moving master and silently dropping the pairs engine for ~10 days. The hook guaranteed recurrence on every deploy.
+
+**What to monitor / watch for:**
+- VPS Claude: before committing on the VPS, `git log --oneline -1` should match `/opt/trading-bot.git` master. If it ever doesn't, the hook sync failed — check `logs/deploy.log` for "inner .git sync failed".
+- Next deploy's `logs/deploy.log` should show the fetch/reset lines between checkout and npm install.
+- Rollback: `cp /opt/trading-bot.git/hooks/post-receive.bak-2026-06-12 /opt/trading-bot.git/hooks/post-receive`.
+- Note: this entry is pushed to origin only (a vps push just for docs would pointlessly restart the bot); it reaches the VPS with the next real deploy.
+
+---
+
 ## 2026-06-11 16:00 UTC — Monitoring made cron-driven: audit report generator + agent nudges — local-claude
 
 **Commits:** (this commit)
