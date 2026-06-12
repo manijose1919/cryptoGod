@@ -37,6 +37,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-12 — [PREPARED — NOT DEPLOYED] Fee-aware trailing-activation floor — local-claude
+
+**Branch:** `fix/fee-aware-trail-activation` (on origin only; deliberately NOT pushed to vps)
+**Commits:** (this commit)
+**Files changed:** v2/engine/config.ts (TRAIL_ACTIVATE_FEE_FLOOR_MULT added), v2/pipeline/exitManager.ts (activation floored)
+**Stats baseline reset:** will be YES on deploy — changes trade-level expected outcomes. Set new `stats_baseline_time` per the CLAUDE.md standing rule when this ships.
+
+**Status: staged for the 20-trade decision point.** The post-baseline trailing red flag tripped 2026-06-12 (11 trailing exits, avg win +$1.55 < $1.90 fee floor) but the standing rule requires 20 post-baseline trades before retuning (15 as of prep time). DO NOT deploy until the cohort hits 20 and Joseph signs off. Deploy = merge to master + `bash scripts/push-deploy.sh` + baseline reset + update this entry's header with the deploy date.
+
+**What changed:**
+Trailing activation is no longer a bare per-strategy percentage. `exitManager.ts` (the only read-site of `trailActivatePercent`) now floors the effective activation at `FEE_ROUND_TRIP_TAKER × TRAIL_ACTIVATE_FEE_FLOOR_MULT` (0.52% × 3 = 1.56%). Strategies asking to trail earlier than the floor get the floor; MOMENTUM (2.5%) is unaffected. The break-even-stop trigger (0.6 × activation) inherits the floor (TREND: 0.6% → 0.94%). Decision logs record the effective (floored) value.
+
+**Why:**
+Both fixed values failed live, in opposite directions: 2.5% armed too late (pre-baseline: 20 stop-losses at −$11.10 avg erased the trailing wins), 1% armed too early (post-baseline: trailing wins avg +$1.55, below the fee paid). A fee multiple replaces the magic number with the economic constraint: worst-case immediate trail-out at the 1.56% floor exits ~1.47% gross → ~0.95% net ≈ 1.8× fees, so every trailing win clears its fee by construction.
+
+**What to monitor / watch for:**
+- Avg trailing WIN should rise above $1.90 (the red-flag floor) within the first 10 post-deploy trailing exits.
+- Stop-losses will increase vs the 1%-activation cohort (more room before the trail arms) — acceptable up to the point net PnL beats both prior cohorts. If avg stop-loss returns to the −$11 range AND trailing wins don't compensate, the floor isn't the bottleneck; look at entry quality instead.
+- More `time_kill` exits on 30m expected (sub-1.56% moves no longer convert to tiny trailing wins). This is the floor doing its job — watch whether 30m net improves or stays negative (decides the separate 30m question).
+- Rollback: `git revert` the single commit; no schema changes.
+
+---
+
 ## 2026-06-11 16:00 UTC — Monitoring made cron-driven: audit report generator + agent nudges — local-claude
 
 **Commits:** (this commit)

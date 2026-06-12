@@ -101,8 +101,16 @@ export async function checkExits(
 
     // Per-strategy exit config (falls back to TREND defaults)
     const exitCfg: StrategyExitConfig = STRATEGY_EXIT_CONFIGS[trade.strategy ?? 'TREND'] ?? STRATEGY_EXIT_CONFIGS.TREND;
-    // Use strategy-specific params, falling back to V2_CONFIG for backward compat
-    const cfgTrailActivate = exitCfg.trailActivatePercent;
+    // Use strategy-specific params, falling back to V2_CONFIG for backward compat.
+    // Trailing activation is floored at a fee multiple (see config) so the trail
+    // can never arm on a move too small to clear round-trip fees — strategies may
+    // ask to trail earlier, but economics set the minimum. This is the only
+    // read-site of trailActivatePercent, so the floor applies engine-wide.
+    // Note: the BE-stop trigger below (0.6 × activation) inherits the floor.
+    const cfgTrailActivate = Math.max(
+      exitCfg.trailActivatePercent,
+      V2_CONFIG.FEE_ROUND_TRIP_TAKER * V2_CONFIG.TRAIL_ACTIVATE_FEE_FLOOR_MULT,
+    );
     const cfgTrailGiveback = exitCfg.trailGivebackPercent;
     const cfgUseTrailing = exitCfg.useTrailing;
 

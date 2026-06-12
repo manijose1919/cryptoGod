@@ -49,6 +49,18 @@ export const V2_CONFIG = {
   FEE_ROUND_TRIP_MAKER: 0.0032,
   FEE_ROUND_TRIP_TAKER: 0.0052,
 
+  // Fee-aware trailing-activation floor: the trail may not arm until unrealized
+  // profit ≥ this multiple of the round-trip taker fee (3 × 0.52% = 1.56%).
+  // Both fixed activation values failed live: 2.5% armed too late (20 stop-losses
+  // at -$11.10 avg ate the pre-baseline cohort), 1% armed too early (post-baseline
+  // trailing wins avg +$1.55 vs the ~$1.90 fee floor — red flag tripped 2026-06-12
+  // at 11 samples). A fee multiple instead of a magic % self-scales across
+  // timeframes/ATR. 3× chosen because TREND's effective giveback can reach ~5.85%
+  // of peak gain (3% base × 1.5 loose-early × 1.3 high-ATR): worst-case immediate
+  // trail-out exits at ~1.47% gross → ~0.95% net ≈ 1.8× fees. At 2× the same
+  // worst case nets ~0.46%, below the fee paid — the exact failure being fixed.
+  TRAIL_ACTIVATE_FEE_FLOOR_MULT: 3.0,
+
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
   BASE_POSITION_PERCENT: 0.40,  // 2026-05-18: 0.25→0.40. Backtest: PF 3.84→6.63, +$414→+$888 on $6K. Safe — max DD stays 0.2%.
