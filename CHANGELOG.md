@@ -37,6 +37,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-13 17:10 UTC — Fee-aware trailing floor + 30m removal — vps-claude
+
+**Commits:** (see below)
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/exitManager.ts`
+**Stats baseline reset:** YES — new baseline 1781370610019
+
+**What changed:**
+1. **Fee-aware trailing activation floor** (from local-claude branch `fix/fee-aware-trail-activation`, commit c596902). Trailing activation floored at `FEE_ROUND_TRIP_TAKER × TRAIL_ACTIVATE_FEE_FLOOR_MULT` (0.52% × 3 = 1.56%). Both previous fixed values failed: 2.5% caused 20 SLs at -$11 avg; 1% caused trailing wins of +$1.55 below the $1.90 fee floor (red flag tripped at 11 trailing exits). The fee multiple self-scales across timeframes/ATR.
+
+2. **Removed 30m from TREND timeframes.** Post-baseline data: 4 trades, 1 win, -$21.29. The 30m granularity triggers trailing on noise that 1h/4h would filter. 4h was 11 trades, 10 wins, +$13.70. 30m accounted for 100% of the cohort's net loss.
+
+**Why:**
+20-trade threshold reached. Joseph signed off on both changes. The trailing red flag (avg win +$1.88 < $1.90 fee floor) confirmed the 1% activation was too tight. The fee-aware floor ensures trailing wins clear fees by construction (~1.8× fees at worst case).
+
+**What to monitor:**
+- Trailing wins should now avg above $1.90 (floor prevents sub-fee activation)
+- 30m entries should stop appearing — only 1h and 4h for TREND
+- MOMENTUM keeps 1h+4h — its first trade was +$5.83 (best in cohort)
+- If trailing win avg drops below $2.50 after 10+ trades, the 3× floor may need raising
+- Rollback: revert this commit for both changes
+
+---
+
 ## 2026-06-11 16:00 UTC — Monitoring made cron-driven: audit report generator + agent nudges — local-claude
 
 **Commits:** (this commit)
