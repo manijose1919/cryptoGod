@@ -2,6 +2,7 @@ import type { Candle, V2Trade } from '../pipeline/types.ts';
 import { MR_CONFIG } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 import { detectMeanReversionEntry } from '../pipeline/meanReversionSignal.ts';
+import type { MRSignalResult } from '../pipeline/meanReversionSignal.ts';
 import { checkMeanReversionExits } from '../pipeline/meanReversionExitManager.ts';
 import {
   insertTrade,
@@ -58,7 +59,10 @@ async function runMRLoop(): Promise<void> {
         if (!result.shouldExit) continue;
         const t = result.trade;
         const holdMs = Date.now() - t.entryTime;
-        const pnlGross = (result.exitPrice - t.entryPrice) * t.quantity;
+        const isShortTrade = t.side === 'short';
+        const pnlGross = isShortTrade
+          ? (t.entryPrice - result.exitPrice) * t.quantity
+          : (result.exitPrice - t.entryPrice) * t.quantity;
         const fees = t.positionSizeUsd * MR_CONFIG.FEE_ROUND_TRIP;
         const pnlNet = pnlGross - fees;
 
@@ -85,16 +89,17 @@ async function runMRLoop(): Promise<void> {
     let rejectCount = 0;
 
     for (const ticker of MR_CONFIG.SCAN_TICKERS) {
-      if (currentMR.some(t => t.ticker === ticker)) continue;
-
       const candles = await fetchCandles(ticker);
       if (!candles || candles.length < MR_CONFIG.MIN_CANDLES) continue;
 
       const sigCandleTime = candles[candles.length - 1].time;
       if ((lastTradedCandleTime.get(ticker) ?? 0) >= sigCandleTime) continue;
 
-      const signal = detectMeanReversionEntry(candles, ticker);
+      const signal = detectMeanReversionEntry(candles, ticker) as MRSignalResult | null;
       if (!signal) { rejectCount++; continue; }
+
+      // Allow one long + one short per ticker simultaneously; block duplicates by direction
+      if (currentMR.some(t => t.ticker === ticker && t.side === signal.side)) continue;
       signalCount++;
 
       const equity = portfolio.totalEquity;
@@ -104,23 +109,31 @@ async function runMRLoop(): Promise<void> {
       if (posSize > portfolio.availableCapital) posSize = portfolio.availableCapital;
       if (posSize < 5) continue;
 
+      const side = signal.side;
       const atrPct = signal.signals.atr_percent as number;
       const price0 = signal.signals.close_price as number;
-      const ema0 = signal.signals.ema_12 as number;
+      const ema0  = signal.signals.ema_12 as number;
       const atrDollar = price0 * atrPct / 100;
-      const tpPercent = (ema0 - price0) / price0;
+
+      // TP is EMA midline in both directions; TP% must be positive
+      const tpPercent = side === 'short'
+        ? (price0 - ema0) / price0   // short: ema is below price, we profit as price falls to ema
+        : (ema0 - price0) / price0;  // long:  ema is above price, we profit as price rises to ema
       const expectedReturn = tpPercent - MR_CONFIG.FEE_ROUND_TRIP;
       if (expectedReturn < 0.001) continue;
 
-      const price = signal.signals.close_price as number;
+      const price = price0;
       const qty = posSize / price;
-      const sl = price - atrDollar * MR_CONFIG.STOP_LOSS_ATR_MULT;
-      const tp = signal.signals.ema_12 as number;
+      // SL: below entry for longs, above entry for shorts
+      const sl = side === 'short'
+        ? price + atrDollar * MR_CONFIG.STOP_LOSS_ATR_MULT
+        : price - atrDollar * MR_CONFIG.STOP_LOSS_ATR_MULT;
+      const tp = ema0; // EMA midline is the mean-reversion target in both directions
 
       const trade: V2Trade = {
         id: randomUUID(),
         ticker,
-        side: 'long',
+        side: side as any,
         status: 'open' as any,
         entryPrice: price,
         entryTime: Date.now(),
@@ -151,7 +164,7 @@ async function runMRLoop(): Promise<void> {
       insertTrade(trade);
       lastTradedCandleTime.set(ticker, sigCandleTime);
       stats.tradesOpened++;
-      console.log(`[MR] Trade opened: ${ticker} @ $${price.toFixed(4)} qty=${qty.toFixed(6)} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} conf=${signal.confidence.toFixed(2)}`);
+      console.log(`[MR] Trade opened: ${ticker} ${side} @ $${price.toFixed(4)} qty=${qty.toFixed(6)} SL=$${sl.toFixed(4)} TP=$${tp.toFixed(4)} conf=${signal.confidence.toFixed(2)}`);
       break; // one entry per loop to avoid overloading
     }
 
