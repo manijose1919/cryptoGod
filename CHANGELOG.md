@@ -37,6 +37,35 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-19 — Dual-mode ADX engine: Phase 1 + Phase 2 — local-claude
+
+**Commits:** 949f0d5 (adx indicator), baa6fbd (Phase 1 TREND), 2595ec4 (Phase 2 MR), c80c92a (plan docs)
+**Files changed:** v2/indicators/indicators.ts, v2/engine/config.ts, v2/engine/strategyRunner.ts, v2/pipeline/meanReversionSignal.ts, v2/engine/meanReversionEngine.ts, v2/pipeline/meanReversionExitManager.ts
+**Stats baseline reset:** YES — set after deploy completes on VPS (see deploy step below)
+
+**What changed:**
+Phase 1: TREND now requires ADX>25 AND STRONG_UP regime (previously STRONG_UP OR UP). Timeframes pruned to 4h only (1h/30m removed — live data showed TAO 1h -$6.41, ZEC 1h -$4.60, FET 1h multiple losses). Trail activation raised from 1% to 1.4% of TP. ADX gate goes in strategyRunner.ts — filters passedScan per-ticker before generating signals.
+
+Phase 2: Mean Reversion engine rebuilt from 15m long-only (0/4 wins, -$2.80 live) to 1h dual-direction. Primary gate: ADX<20 + SIDEWAYS regime. Long entry: RSI<28 + %B<0.15 + EMA above price. Short entry: RSI>72 + %B>0.85 + EMA below price. Exit: EMA midline TP (binary, no trailing). BAR_MS now dynamic from timeframeToMs(MR_CONFIG.CANDLE_INTERVAL). MR_CONFIG.ENABLED=true; engine boots in v2/index.ts at startup. Same tickers as TREND. Maker both sides (0.32% RT vs TREND's 0.42%).
+
+**Why:**
+Root cause of -$25 net on 52 post-baseline trades: EMA10/EMA30 regime detector calls UP in choppy/ranging markets, causing trend-following to fire in mean-reverting conditions. ADX (Average Directional Index) measures trend STRENGTH independent of direction — flips to ranging (<20) much faster than EMA crossover when markets transition. ADX>25 + STRONG_UP = two independent confirmations required. ADX<20 is where MR edge lives.
+
+**What to monitor / watch for:**
+- TREND: trade frequency drops significantly (ADX>25 is selective). Trailing loss rate should fall below 25% of trailing exits.
+- MR: heartbeat logs `[MR] Loop #N:` every 60s in pm2 logs. First 10 MR trades tracked individually — confirm WR ≥60%, avg winner ≥+$3.50 net.
+- BOTH: if MR engine errors on boot, check `pm2 logs canuck-node | grep '\[MR\]'` — any `[MR] Loop error:` lines need immediate attention.
+- Rollback Phase 2: set `MR_CONFIG.ENABLED: false` in config.ts, push. No DB changes needed.
+- Rollback Phase 1: revert STRATEGY_TIMEFRAMES.TREND to ['30m','1h','4h'], ALLOWED_REGIMES to ['STRONG_UP','UP'], trailActivatePercent to 0.01.
+
+**VPS deploy action needed:**
+After `push-deploy.sh` completes, reset stats baseline:
+```
+sqlite3 /opt/trading-bot/data/trading.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));"
+```
+
+---
+
 ## 2026-06-12 15:15 UTC — VPS inner .git resynced + deploy hook now self-syncs it — local-claude
 
 **Commits:** (this commit — docs only; the hook lives on the VPS at `/opt/trading-bot.git/hooks/post-receive`, not in the repo)
