@@ -49,6 +49,12 @@ export const V2_CONFIG = {
   FEE_ROUND_TRIP_MAKER: 0.0032,
   FEE_ROUND_TRIP_TAKER: 0.0052,
 
+  // Fee-aware trailing-activation floor: trail may not arm until unrealized
+  // profit >= this multiple of round-trip taker fee (3 × 0.52% = 1.56%).
+  // Both fixed values failed live: 2.5% armed too late (20 SLs), 1% armed
+  // too early (trailing wins +$1.55 < $1.90 fee floor). Fee multiple self-scales.
+  TRAIL_ACTIVATE_FEE_FLOOR_MULT: 3.0,
+
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
   BASE_POSITION_PERCENT: 0.40,  // 2026-05-18: 0.25→0.40. Backtest: PF 3.84→6.63, +$414→+$888 on $6K. Safe — max DD stays 0.2%.
@@ -133,7 +139,7 @@ export const V2_CONFIG = {
 
 // Which timeframes each strategy runs on
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
-  TREND:           ['4h'],  // 2026-06-19: dropped 1h/30m — live data shows 1h consistently losing (TAO -$6.41, ZEC -$4.60, -$1.94); 4h gives room above 0.42% fee floor
+  TREND:           ['4h'],  // 2026-06-19: dropped 1h/30m. VPS-claude removed 30m (2026-06-13, 4 trades, 1 win, -$21.29). Local-claude also removed 1h (TAO -$6.41, ZEC -$4.60, -$1.94). 4h only.
   MOMENTUM:        ['1h', '4h'],
   // BREAKOUT disabled 2026-06-09 — live post-baseline: 2/12 wins (17%), -$50.28.
   // Still losing after the 2026-06-01 executor-SL fix (Jun 8: 4 trades, -$7.69).
