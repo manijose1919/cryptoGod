@@ -5,7 +5,8 @@
 // ============================================
 
 import type { Candle, SignalResult } from '../pipeline/types.ts';
-import { V2_CONFIG, MOMENTUM_CONFIG, STRATEGY_TIMEFRAMES } from './config.ts';
+import { V2_CONFIG, MOMENTUM_CONFIG, STRATEGY_TIMEFRAMES, ADX_THRESHOLDS } from './config.ts';
+import { adx } from '../indicators/indicators.ts';
 import { generateSignals, generateShortSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
 import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
 import { detectBreakoutEntry } from '../pipeline/breakoutSignal.ts';
@@ -50,11 +51,20 @@ export function runAllStrategies(
     // Strategy lookups are null-safe (?.) — disabling a strategy by removing
     // its STRATEGY_TIMEFRAMES key is the documented kill switch and must not
     // crash the loop (2026-06-09: BREAKOUT removal did exactly that).
-    // --- TREND (1h, 4h) ---
+    // --- TREND (4h only, ADX>25 gate) ---
     if (STRATEGY_TIMEFRAMES.TREND?.includes(tf) && passedScan.length > 0) {
-      const trendSignals = generateSignals(passedScan, tfCandles);
-      for (const sig of getPassedSignals(trendSignals)) {
-        results.push({ ...sig, _strategy: 'TREND', _timeframe: tf });
+      // ADX gate: only enter TREND when market is genuinely trending (ADX>25).
+      // Root cause of prior losses: EMA regime called UP in ranging conditions.
+      const trendPassed = passedScan.filter(scan => {
+        const candles = tfCandles.get(scan.ticker);
+        if (!candles || candles.length < 30) return false;
+        return adx(candles) >= ADX_THRESHOLDS.TREND_MIN;
+      });
+      if (trendPassed.length > 0) {
+        const trendSignals = generateSignals(trendPassed, tfCandles);
+        for (const sig of getPassedSignals(trendSignals)) {
+          results.push({ ...sig, _strategy: 'TREND', _timeframe: tf });
+        }
       }
     }
 
@@ -88,10 +98,14 @@ export function runAllStrategies(
     // Both strategies lose money in live execution despite backtest promise.
     // Re-enable only after fundamental rework of entry logic.
 
-    // --- SHORTS (any TF where TREND runs) ---
+    // --- SHORTS (any TF where TREND runs, same ADX>25 gate) ---
     if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live' && STRATEGY_TIMEFRAMES.TREND?.includes(tf)) {
       const shortScanResults = scanMarket(tfCandles, 'short');
-      const passedShortScan = getPassedTickers(shortScanResults);
+      const passedShortScan = getPassedTickers(shortScanResults).filter(scan => {
+        const candles = tfCandles.get(scan.ticker);
+        if (!candles || candles.length < 30) return false;
+        return adx(candles) >= ADX_THRESHOLDS.TREND_MIN;
+      });
       if (passedShortScan.length > 0) {
         const shortSignals = generateShortSignals(passedShortScan, tfCandles);
         for (const sig of getPassedSignals(shortSignals)) {
