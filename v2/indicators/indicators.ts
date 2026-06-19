@@ -178,6 +178,52 @@ export function rsi(closes: number[], period: number = 14): number[] {
 }
 
 /**
+ * ADX — Average Directional Index via Wilder's smoothing.
+ * Returns a single value 0–100; > 25 = trending market, < 20 = ranging.
+ * Returns 0 when candle count < period * 2 + 1 (insufficient data).
+ */
+export function adx(candles: Candle[], period = 14): number {
+  if (candles.length < period * 2 + 1) return 0;
+
+  const trs: number[] = [];
+  const plusDMs: number[] = [];
+  const minusDMs: number[] = [];
+
+  for (let i = 1; i < candles.length; i++) {
+    const { high, low } = candles[i];
+    const prevHigh = candles[i - 1].high;
+    const prevLow  = candles[i - 1].low;
+    const prevClose = candles[i - 1].close;
+
+    trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+
+    const upMove   = high - prevHigh;
+    const downMove = prevLow - low;
+    plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+  }
+
+  const smoothTR    = rma(trs, period);
+  const smoothPlus  = rma(plusDMs, period);
+  const smoothMinus = rma(minusDMs, period);
+
+  const dxValues: number[] = [];
+  for (let i = period - 1; i < smoothTR.length; i++) {
+    const tr = smoothTR[i];
+    if (!tr || isNaN(tr)) { dxValues.push(0); continue; }
+    const pdi = (smoothPlus[i] / tr) * 100;
+    const mdi = (smoothMinus[i] / tr) * 100;
+    const sum = pdi + mdi;
+    dxValues.push(sum === 0 ? 0 : (Math.abs(pdi - mdi) / sum) * 100);
+  }
+
+  if (dxValues.length < period) return 0;
+  const adxArr = rma(dxValues, period);
+  const last = adxArr[adxArr.length - 1];
+  return isNaN(last) ? 0 : last;
+}
+
+/**
  * MACD — Moving Average Convergence Divergence
  * Returns macd line, signal line, and histogram arrays
  */
