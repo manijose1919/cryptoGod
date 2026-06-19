@@ -44,25 +44,48 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 **Stats baseline reset:** YES — set after deploy completes on VPS (see deploy step below)
 
 **What changed:**
-Phase 1: TREND now requires ADX>25 AND STRONG_UP regime (previously STRONG_UP OR UP). Timeframes pruned to 4h only (1h/30m removed — live data showed TAO 1h -$6.41, ZEC 1h -$4.60, FET 1h multiple losses). Trail activation raised from 1% to 1.4% of TP. ADX gate goes in strategyRunner.ts — filters passedScan per-ticker before generating signals.
+Phase 1: TREND now requires ADX>25 AND STRONG_UP regime (previously STRONG_UP OR UP). Timeframes pruned to 4h only (VPS-claude removed 30m on 2026-06-13; local-claude also removed 1h — TAO 1h -$6.41, ZEC 1h -$4.60). Trail activation raised from 1% to 1.4% of TP. ADX gate in strategyRunner.ts filters passedScan per-ticker before generating signals. Note: VPS-claude added TRAIL_ACTIVATE_FEE_FLOOR_MULT=3.0 (1.56% dynamic floor) — that is kept and complements the 1.4% static floor.
 
 Phase 2: Mean Reversion engine rebuilt from 15m long-only (0/4 wins, -$2.80 live) to 1h dual-direction. Primary gate: ADX<20 + SIDEWAYS regime. Long entry: RSI<28 + %B<0.15 + EMA above price. Short entry: RSI>72 + %B>0.85 + EMA below price. Exit: EMA midline TP (binary, no trailing). BAR_MS now dynamic from timeframeToMs(MR_CONFIG.CANDLE_INTERVAL). MR_CONFIG.ENABLED=true; engine boots in v2/index.ts at startup. Same tickers as TREND. Maker both sides (0.32% RT vs TREND's 0.42%).
 
 **Why:**
-Root cause of -$25 net on 52 post-baseline trades: EMA10/EMA30 regime detector calls UP in choppy/ranging markets, causing trend-following to fire in mean-reverting conditions. ADX (Average Directional Index) measures trend STRENGTH independent of direction — flips to ranging (<20) much faster than EMA crossover when markets transition. ADX>25 + STRONG_UP = two independent confirmations required. ADX<20 is where MR edge lives.
+Root cause of -$25 net on 52 post-baseline trades: EMA10/EMA30 regime detector calls UP in choppy/ranging markets, causing trend-following to fire in mean-reverting conditions. ADX measures trend STRENGTH independent of direction — flips to ranging (<20) much faster than EMA crossover. ADX>25 + STRONG_UP = two independent confirmations required.
 
 **What to monitor / watch for:**
 - TREND: trade frequency drops significantly (ADX>25 is selective). Trailing loss rate should fall below 25% of trailing exits.
-- MR: heartbeat logs `[MR] Loop #N:` every 60s in pm2 logs. First 10 MR trades tracked individually — confirm WR ≥60%, avg winner ≥+$3.50 net.
+- MR: heartbeat logs `[MR] Loop #N:` every 60s in pm2 logs. First 10 MR trades individually — confirm WR ≥60%, avg winner ≥+$3.50 net.
 - BOTH: if MR engine errors on boot, check `pm2 logs canuck-node | grep '\[MR\]'` — any `[MR] Loop error:` lines need immediate attention.
 - Rollback Phase 2: set `MR_CONFIG.ENABLED: false` in config.ts, push. No DB changes needed.
-- Rollback Phase 1: revert STRATEGY_TIMEFRAMES.TREND to ['30m','1h','4h'], ALLOWED_REGIMES to ['STRONG_UP','UP'], trailActivatePercent to 0.01.
+- Rollback Phase 1: revert STRATEGY_TIMEFRAMES.TREND, ALLOWED_REGIMES, trailActivatePercent.
 
 **VPS deploy action needed:**
-After `push-deploy.sh` completes, reset stats baseline:
+After deploy completes, reset stats baseline:
 ```
 sqlite3 /opt/trading-bot/data/trading.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));"
 ```
+
+---
+
+## 2026-06-13 17:10 UTC — Fee-aware trailing floor + 30m removal — vps-claude
+
+**Commits:** 0c909b0
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/exitManager.ts`
+**Stats baseline reset:** YES — new baseline 1781370610019
+
+**What changed:**
+1. **Fee-aware trailing activation floor** (from local-claude branch `fix/fee-aware-trail-activation`, commit c596902). Trailing activation floored at `FEE_ROUND_TRIP_TAKER × TRAIL_ACTIVATE_FEE_FLOOR_MULT` (0.52% × 3 = 1.56%). Both previous fixed values failed: 2.5% caused 20 SLs at -$11 avg; 1% caused trailing wins of +$1.55 below the $1.90 fee floor (red flag tripped at 11 trailing exits). The fee multiple self-scales across timeframes/ATR.
+
+2. **Removed 30m from TREND timeframes.** Post-baseline data: 4 trades, 1 win, -$21.29. The 30m granularity triggers trailing on noise that 1h/4h would filter. 4h was 11 trades, 10 wins, +$13.70. 30m accounted for 100% of the cohort's net loss.
+
+**Why:**
+20-trade threshold reached. Joseph signed off on both changes. The trailing red flag (avg win +$1.88 < $1.90 fee floor) confirmed the 1% activation was too tight. The fee-aware floor ensures trailing wins clear fees by construction (~1.8× fees at worst case).
+
+**What to monitor:**
+- Trailing wins should now avg above $1.90 (floor prevents sub-fee activation)
+- 30m entries should stop appearing — only 1h and 4h for TREND
+- MOMENTUM keeps 1h+4h — its first trade was +$5.83 (best in cohort)
+- If trailing win avg drops below $2.50 after 10+ trades, the 3× floor may need raising
+- Rollback: revert this commit for both changes
 
 ---
 
