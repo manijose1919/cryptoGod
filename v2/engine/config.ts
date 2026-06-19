@@ -36,7 +36,7 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // 2026-04-29: STRONG_UP re-allowed. Original block (Apr 21) was based on R:R 0.8 era (14 trades, 36% WR, -$38). At current R:R 1.4: 5 trades, 60% WR, +$0.04 net (essentially break-even). Different config = different result. Re-evaluate if STRONG_UP underperforms UP in live data.
+  ALLOWED_REGIMES: ['STRONG_UP'] as const, // 2026-06-19: removed UP. ADX>25 gate in strategyRunner is now the primary trend-strength check; STRONG_UP is the regime backstop. UP was too broad — EMA crossover calls UP in choppy conditions. STRONG_UP + ADX>25 = two independent confirmations.
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
@@ -133,7 +133,7 @@ export const V2_CONFIG = {
 
 // Which timeframes each strategy runs on
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
-  TREND:           ['30m', '1h', '4h'],
+  TREND:           ['4h'],  // 2026-06-19: dropped 1h/30m — live data shows 1h consistently losing (TAO -$6.41, ZEC -$4.60, -$1.94); 4h gives room above 0.42% fee floor
   MOMENTUM:        ['1h', '4h'],
   // BREAKOUT disabled 2026-06-09 — live post-baseline: 2/12 wins (17%), -$50.28.
   // Still losing after the 2026-06-01 executor-SL fix (Jun 8: 4 trades, -$7.69).
@@ -163,7 +163,7 @@ export const STRATEGY_EXIT_CONFIGS: Record<string, StrategyExitConfig> = {
     // exitManager reads ONLY this value — V2_CONFIG's tuned 0.01 was dead config
     // since 2026-05-18 while live trades silently trailed at 2.5% (the backtest
     // that justified 0.01/0.015 claimed PF 1.67→3.71 from this one change).
-    trailActivatePercent: 0.01, trailGivebackPercent: 0.03,
+    trailActivatePercent: 0.014, trailGivebackPercent: 0.03,  // 2026-06-19: 0.01→0.014 (~75% of 1.8% typical TP). At 1%, trail activated in noise zone — reversals still netted below breakeven after fees. At 1.4%, minimum locked-in gross is ~1.35%.
     timeKillBars: 2, timeKillMinMove: 0.007,
     quickKillBars: 1, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
     useTrailing: true,
@@ -206,6 +206,15 @@ export const STRATEGY_COOLDOWN_MS: Record<string, number> = {
   MEAN_REVERSION: 30 * 60 * 1000,    // 30min
   SCALP:          10 * 60 * 1000,    // 10min
 };
+
+// ADX routing thresholds (Average Directional Index, 0–100)
+// ADX > TREND_MIN: genuinely trending → run TREND signals only
+// ADX < MR_MAX: ranging / choppy → run MEAN_REVERSION signals only
+// Between: dead zone, skip both (neither strategy has edge here)
+export const ADX_THRESHOLDS = {
+  TREND_MIN: 25,
+  MR_MAX: 20,
+} as const;
 
 // Convert timeframe string to milliseconds
 export function timeframeToMs(tf: string): number {
@@ -356,32 +365,55 @@ export const SNIPER_CONFIG = {
 // ============================================
 
 export const MR_CONFIG = {
-  ENABLED: false,                  // DISABLED — live results: 0 wins, 4 losses, -$2.80. Backtest claimed +$6.33/52% WR but live is 0% WR. Re-enable when strategy is reworked.
-  CANDLE_INTERVAL: '15m' as string,
-  ALLOWED_REGIMES: ['SIDEWAYS', 'UP'] as readonly string[],
-  SCAN_TICKERS: ['BTCUSD', 'ETHUSD', 'XRPUSD', 'DOGEUSD'] as string[],
+  // 2026-06-19: Rebuilt from 15m long-only (0/4 wins, -$2.80 live) to
+  // 1h dual-direction with ADX<20 gate. Root causes of failure:
+  //   1. 15m too noisy — reversion signal drowned in noise
+  //   2. BTCUSD/ETHUSD tickers wrong — these trend; ranging MR needs the
+  //      same mid-cap tickers as TREND (AKT, ZEC, FET, etc.)
+  //   3. No ADX gate — was entering ranging AND trending markets
+  //   4. Long-only — missed 50% of MR opportunities (overbought shorts)
+  ENABLED: true,
+  CANDLE_INTERVAL: '1h' as string,
+  ALLOWED_REGIMES: ['SIDEWAYS'] as readonly string[],
+  SCAN_TICKERS: [
+    'AKTUSD', 'ZECUSD', 'FETUSD', 'PENGUUSD', 'TAOUSD', 'PENDLEUSD',
+  ] as string[],
 
-  RSI_THRESHOLD: 30,
+  // ADX gate — only enter when market is ranging (primary gate)
+  ADX_MAX_FOR_ENTRY: 20,
+
+  // Long entry: oversold at lower Bollinger Band
+  RSI_LONG_THRESHOLD: 28,        // tightened from 30 — more extreme oversold required
+  BB_LONG_THRESHOLD: 0.15,       // %B < 0.15 (near lower band)
+
+  // Short entry: overbought at upper Bollinger Band
+  SHORTS_ENABLED: true,
+  RSI_SHORT_THRESHOLD: 72,       // RSI > 72 = overbought
+  BB_SHORT_THRESHOLD: 0.85,      // %B > 0.85 (near upper band)
+
+  // Legacy field used by meanReversionSignal.ts (still referenced; points to long threshold)
+  RSI_THRESHOLD: 28,
   BB_PERCENT_B_THRESHOLD: 0.15,
-  MAX_ATR_PERCENT: 3.0,
+
+  MAX_ATR_PERCENT: 5.0,          // widened from 3.0 — mid-caps can ATR 4%+ on 1h
   MIN_CANDLES: 50,
 
-  POSITION_SIZE_PERCENT: 0.15,
-  MAX_POSITION_PERCENT: 0.20,
-  MAX_OPEN_POSITIONS: 3,
+  POSITION_SIZE_PERCENT: 0.40,   // matched to TREND — same risk per trade
+  MAX_POSITION_PERCENT: 0.50,
+  MAX_OPEN_POSITIONS: 2,         // MR can hold long + short on different tickers
 
-  STOP_LOSS_ATR_MULT: 2.0,
-  TIME_KILL_BARS: 4,            // 4 × 15m = 1 hour
+  STOP_LOSS_ATR_MULT: 1.5,
+  TIME_KILL_BARS: 6,             // 6 × 1h = 6h — MR trades not reverting in 6h likely won't
   TIME_KILL_MIN_MOVE: 0.003,
-  QUICK_KILL_AFTER_BARS: 2,     // 2 × 15m = 30 min
-  QUICK_KILL_MIN_GAIN: 0.002,
+  QUICK_KILL_AFTER_BARS: 3,      // 3 × 1h = 3h
+  QUICK_KILL_MIN_GAIN: 0.003,
   QUICK_KILL_SL_ATR_MULT: 0.8,
 
   USE_MAKER_ORDERS: true,
-  FEE_ROUND_TRIP: 0.0032,       // Maker fees — critical for profitability
+  FEE_ROUND_TRIP: 0.0032,        // Maker both sides → 0.32% RT vs TREND's 0.42%
 
   BOT_LOOP_INTERVAL_MS: 60_000,
-  LOOP_OFFSET_MS: 30_000,       // Stagger 30s from TREND loop to avoid API rate limits
+  LOOP_OFFSET_MS: 30_000,        // 30s stagger from TREND loop
 } as const;
 
 // --- Exchange-specific fee configs ---
