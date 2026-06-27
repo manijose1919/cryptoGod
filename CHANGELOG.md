@@ -37,6 +37,30 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-27 — Aggressive loosening: UP regime + ADX 20 + 1h timeframe — vps-claude
+
+**Commits:** (see below)
+**Files changed:** `v2/engine/config.ts`
+**Stats baseline reset:** YES — 1782595222099
+
+**What changed:**
+Three filters loosened simultaneously — the ADX engine was too selective (1 TREND trade in 9 days):
+1. **ALLOWED_REGIMES:** STRONG_UP-only → STRONG_UP + UP. ADX gate still filters weak trends.
+2. **ADX threshold:** 25 → 20. Catches emerging trends, not just established ones.
+3. **TREND timeframes:** 4h-only → 1h + 4h. More entry windows. 30m stays removed (proven loser).
+
+**Why:**
+9 days, 1 TREND trade, 0 MR trades. The triple gate (STRONG_UP + ADX>25 + ML) produced near-zero data. Can't evaluate a strategy that never fires. Joseph requested aggressive approach. Safety nets remain: fee-aware trailing floor (1.56%), ML gatekeeper, 1.5× ATR SL, 1.5% risk cap, correlation check.
+
+**What to monitor:**
+- Trade frequency should increase significantly (UP is the most common bullish regime)
+- Watch trailing loss rate — UP trades had 44.7% WR pre-fee-floor, should be better now
+- If losses accumulate past -$30 in 20 trades, consider reverting UP or raising ADX back to 25
+- 1h trades specifically — were -$6.44 net in the fee-floor cohort, may perform differently now
+- Rollback: revert this commit
+
+---
+
 ## 2026-06-19 — Dual-mode ADX engine: Phase 1 + Phase 2 — local-claude
 
 **Commits:** 949f0d5 (adx indicator), baa6fbd (Phase 1 TREND), 2595ec4 (Phase 2 MR), c80c92a (plan docs)

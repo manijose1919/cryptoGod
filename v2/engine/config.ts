@@ -36,7 +36,7 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP'] as const, // 2026-06-19: removed UP. ADX>25 gate in strategyRunner is now the primary trend-strength check; STRONG_UP is the regime backstop. UP was too broad — EMA crossover calls UP in choppy conditions. STRONG_UP + ADX>25 = two independent confirmations.
+  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // 2026-06-27: UP restored. ADX gate (now 20) handles trend-strength filtering. STRONG_UP-only was too strict — 1 trade in 9 days. Fee-aware floor protects against sub-fee wins.
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
@@ -139,7 +139,7 @@ export const V2_CONFIG = {
 
 // Which timeframes each strategy runs on
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
-  TREND:           ['4h'],  // 2026-06-19: dropped 1h/30m. VPS-claude removed 30m (2026-06-13, 4 trades, 1 win, -$21.29). Local-claude also removed 1h (TAO -$6.41, ZEC -$4.60, -$1.94). 4h only.
+  TREND:           ['1h', '4h'],  // 2026-06-27: 1h restored. Was 4h-only since Jun 19 (1 trade in 9 days). Fee-aware floor now protects 1h wins. 30m stays out (proven loser).
   MOMENTUM:        ['1h', '4h'],
   // BREAKOUT disabled 2026-06-09 — live post-baseline: 2/12 wins (17%), -$50.28.
   // Still losing after the 2026-06-01 executor-SL fix (Jun 8: 4 trades, -$7.69).
@@ -218,7 +218,7 @@ export const STRATEGY_COOLDOWN_MS: Record<string, number> = {
 // ADX < MR_MAX: ranging / choppy → run MEAN_REVERSION signals only
 // Between: dead zone, skip both (neither strategy has edge here)
 export const ADX_THRESHOLDS = {
-  TREND_MIN: 25,
+  TREND_MIN: 20,  // 2026-06-27: 25→20. Catches emerging trends earlier. Was too strict — 1 trade in 9 days at 25.
   MR_MAX: 20,
 } as const;
 
