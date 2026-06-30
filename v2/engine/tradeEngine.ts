@@ -398,7 +398,10 @@ async function runLoop(): Promise<void> {
                 const closePrice = (signal.signals.close_price as number) || 1;
                 const stopDistPercent = risk.stopLoss > 0 ? Math.abs(closePrice - risk.stopLoss) / closePrice : 0;
                 if (stopDistPercent > 0) {
-                  const maxRiskUsd = portfolio.totalEquity * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT;
+                  const maxRiskUsd = Math.min(
+                    portfolio.totalEquity * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT,
+                    V2_CONFIG.MAX_RISK_PER_TRADE_USD,
+                  );
                   risk.positionSizeUsd = Math.min(risk.positionSizeUsd, maxRiskUsd / stopDistPercent);
                 }
                 // Downward multipliers (0.5x) can also drop below Kraken's $10 min

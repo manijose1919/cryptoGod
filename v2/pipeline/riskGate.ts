@@ -216,9 +216,14 @@ export function evaluateRisk(
       : 1.0;
     let positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier * pullbackMult;
 
-    // Risk-based cap: limit position so max loss (entry→stop) ≤ MAX_RISK_PER_TRADE_PERCENT of equity.
+    // Risk-based cap: limit position so max loss (entry→stop) ≤ MAX_RISK_PER_TRADE of equity.
     // High-ATR assets (e.g. AKT 5% ATR → 10% stop) get smaller positions; low-ATR assets unaffected.
-    const maxRiskUsd = portfolio.totalEquity * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT;
+    // The % cap is a ceiling that floated as high as $38 on volatile names; the absolute
+    // MAX_RISK_PER_TRADE_USD hard-caps the dollar tail (backtest: worst loss -$40→-$15).
+    const maxRiskUsd = Math.min(
+      portfolio.totalEquity * V2_CONFIG.MAX_RISK_PER_TRADE_PERCENT,
+      V2_CONFIG.MAX_RISK_PER_TRADE_USD,
+    );
     const riskCapSizeUsd = stopDistPercent > 0 ? maxRiskUsd / stopDistPercent : positionSizeUsd;
     const riskCapped = positionSizeUsd > riskCapSizeUsd;
     if (riskCapped) {
