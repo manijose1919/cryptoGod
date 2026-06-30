@@ -37,6 +37,42 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-30 — Fix XTER→TER asset-pair error in Kraken balance pricing — local-claude
+
+**Commits:** (this commit)
+**Files changed:** `services/exchangeAdapters/krakenAdapter.js`
+**Stats baseline reset:** no — bugfix restoring intended behavior, no trading-config change.
+
+**What changed:**
+`getBalance()` normalized Kraken asset codes by stripping any leading `X` followed
+by 3 uppercase letters (`/^X(?=[A-Z]{3})/`). That convention is only valid for
+Kraken's *legacy* assets (XETH→ETH, XXRP→XRP, XZEC→ZEC…). The live account holds
+**XTER** (~432 units, ~$4.58), a modern token whose real name keeps the X — its
+only pair is `XTERUSD`. The pattern-strip turned it into `TER`, so the balance
+refresh queried the non-existent `TERUSD`/`TERCAD` every hour and logged
+`EQuery:Unknown asset pair` (twice/hour since at least 2026-06-29).
+
+Replaced the pattern-strip with an explicit frozen allowlist
+`KRAKEN_LEGACY_X_ASSETS` (the 11 known X-prefixed legacy codes). Modern X-named
+tokens (XTER, XAUT, XION, XTZ…) now keep their name and price correctly. Verified
+against Kraken's `Assets` endpoint (legacy = altname differs from code) and a
+normalization unit test over 18 representative assets (0 regressions).
+
+**Why:**
+Hourly log spam + XTER showing as unpriced/$0 in account value. The regex couldn't
+distinguish `XETH` (strip) from `XTER` (keep) — both are X+3-uppercase — so an
+enumerated allowlist is the only correct fix. The same flawed regex still lives in
+`fromKrakenPair()` (line ~62) but is latent: it only affects traded pairs and XTER
+isn't traded. Left unchanged to keep this a one-change fix; flag for later.
+
+**What to monitor / watch for:**
+- `pm2 logs canuck-node | grep "Unknown asset pair"` should stop appearing after deploy.
+- Next balance log should show `Asset: XTER → normalized: XTER, base: XTER` and a
+  `[Kraken] XTER priced...` (or a successful USD value), not a CAD-fallback warning.
+- Rollback: revert this commit (no DB/state change involved).
+
+---
+
 ## 2026-06-27 — Aggressive loosening: UP regime + ADX 20 + 1h timeframe — vps-claude
 
 **Commits:** (see below)
