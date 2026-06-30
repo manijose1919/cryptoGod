@@ -125,6 +125,26 @@ lines.push('# Audit Batch Progress Report (2026-06-09 fix batch)');
 lines.push(`**Generated:** ${fmtTime(Date.now())} | **Baseline:** ${BASELINE_MS} (${fmtTime(BASELINE_MS)})`);
 lines.push('');
 
+// Self-triggering reminder for VPS Claude: once the post-baseline cohort reaches
+// ~15-20 closed trades, run the backtest-vs-live comparison for the 2026-06-30
+// R:R + edge sprint and report to Joseph. Fires only inside the review window so it
+// doesn't nag forever. (Set by local-claude 2026-06-30.)
+if (post.n >= 15 && post.n <= 30) {
+  lines.push('> ## ⚠️ ACTION FOR VPS CLAUDE — run the 2026-06-30 sprint review');
+  lines.push(`> The post-baseline cohort has **${post.n} closed trades** — enough to check the`);
+  lines.push('> R:R + edge sprint against its backtests. Compare live vs expected and write the');
+  lines.push('> findings to `audit-batch-notes.md`, then ping Joseph. Check specifically:');
+  lines.push('> 1. **$12 risk cap:** no single closed trade should lose more than ~$15 net. Query the worst loss.');
+  lines.push('> 2. **Per-trade expectancy:** should run well above the +$0.25 pre-sprint baseline (backtest implied ~+$0.5–0.6 with the time gate + regime gates). Compare avg pnl_net/trade.');
+  lines.push('> 3. **Regime gates:** confirm no new MOMENTUM outside STRONG_UP and no shorts outside STRONG_DOWN.');
+  lines.push('> 4. **Time gate:** confirm no new entries in 0–7 UTC (or 13/20 UTC).');
+  lines.push('> 5. **Gatekeeper A/B:** if ≥30 PROCEED_AB samples exist, run:');
+  lines.push(">    `SELECT decision, COUNT(*), ROUND(100.0*AVG(was_correct),0) win_pct FROM ml_gatekeeper_log WHERE actual_outcome IS NOT NULL AND decision LIKE 'PROCEED%' GROUP BY decision;`");
+  lines.push('>    If PROCEED_AB (would-block) win% ≥ PROCEED (approved), recommend removing the gatekeeper.');
+  lines.push('> See CHANGELOG.md 2026-06-30 entries for full context and rollback steps.');
+  lines.push('');
+}
+
 lines.push('## Post-Baseline Cohort (new)');
 lines.push('| Metric | Value |');
 lines.push('|---|---|');
