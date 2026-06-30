@@ -41,7 +41,7 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 **Commits:** 16df9c0 (risk cap), <this commit> (shorts filter + changelog)
 **Files changed:** `v2/engine/config.ts`, `v2/pipeline/riskGate.ts`, `v2/engine/tradeEngine.ts`, `v2/engine/strategyRunner.ts`
-**Stats baseline reset:** YES — set after deploy (see deploy step). These change trade-level expected outcomes (position sizing + which shorts fire).
+**Stats baseline reset:** YES — new baseline = 1782834161576 (2026-06-30 15:42:41 UTC). These change trade-level expected outcomes (position sizing + which shorts fire). No open positions at reset time (clean cohort cut).
 
 **What changed:**
 Driven by a 522-trade counterfactual re-sizing backtest of the live trade history
