@@ -10,6 +10,16 @@ import { BaseExchangeAdapter } from './baseAdapter.js';
 
 const KRAKEN_BASE_URL = 'https://api.kraken.com';
 
+// Kraken's legacy assets carry an 'X' (crypto) prefix whose canonical altname
+// drops it: XETH→ETH, XXRP→XRP, XZEC→ZEC, etc. This is a FROZEN set — Kraken
+// abandoned the X/Z prefix convention years ago, so modern listings keep a real
+// leading X (XTER, XAUT, XION, XTZ...). We must strip the X ONLY for these known
+// codes, never by pattern: XTER is NOT TER (its tradeable pair is XTERUSD, and
+// "TERUSD" does not exist — the pattern-strip caused hourly "Unknown asset pair").
+const KRAKEN_LEGACY_X_ASSETS = new Set([
+    'XXBT', 'XETH', 'XETC', 'XLTC', 'XMLN', 'XREP', 'XXDG', 'XXLM', 'XXMR', 'XXRP', 'XZEC',
+]);
+
 // Session manager reference (set via init)
 let _SessionManager = null;
 
@@ -290,14 +300,18 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             const qty = parseFloat(balance);
             if (qty <= 0) continue;
 
-            // Normalize: XBT→BTC first, then strip X/Z prefix (with lookahead so
-            // single-X assets like XRP aren't mangled). Also handle staked/flex
-            // suffixes: ETH2.S → ETH, CAD.F → CAD, DOT.S → DOT.
+            // Normalize: XBT→BTC, strip the unambiguous Z fiat prefix (ZUSD→USD),
+            // then strip staked/flex suffixes (ETH2.S → ETH, CAD.F → CAD, DOT.S → DOT).
+            // The legacy 'X' crypto prefix is stripped only for the known frozen set
+            // (see KRAKEN_LEGACY_X_ASSETS) so modern X-named tokens like XTER survive.
             let normalized = asset
                 .replace(/X?XBT/g, 'BTC')
-                .replace(/^X(?=[A-Z]{3})/, '')
                 .replace(/^Z(?=USD|CAD|EUR|GBP)/, '');
-            const baseAsset = normalized.replace(/[\d]*\.[A-Z]+$/, '');  // Strip any suffix like .S .F .M .HOLD
+            let baseAsset = normalized.replace(/[\d]*\.[A-Z]+$/, '');  // Strip any suffix like .S .F .M .HOLD
+            if (KRAKEN_LEGACY_X_ASSETS.has(baseAsset)) {
+                baseAsset = baseAsset.slice(1);  // XETH → ETH, XXRP → XRP (legacy prefix only)
+                normalized = baseAsset;
+            }
 
             console.log(`[Kraken] Asset: ${asset} → normalized: ${normalized}, base: ${baseAsset}, qty: ${qty}`);
 
