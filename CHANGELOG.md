@@ -37,6 +37,45 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-30 — Edge sprint: tighten regime gates (shorts→STRONG_DOWN, MOMENTUM→STRONG_UP) — local-claude
+
+**Commits:** <this commit>
+**Files changed:** `v2/engine/config.ts`
+**Stats baseline reset:** NO — continues the 1782834161576 baseline set earlier today. Zero trades have closed since that reset, so this stays one clean tuning sprint (per CLAUDE.md "baseline once at the end of a sprint, not per tweak").
+
+**What changed:**
+Edge/entry-quality diagnosis on 522 trades (filtered to LIVE strategies TREND+MOMENTUM
+to exclude disabled SCALP/BREAKOUT/old-MR noise) found the thin edge is a regime-gate
+problem. Two gates tightened:
+
+1. **`SHORT_ALLOWED_REGIMES`: ['STRONG_DOWN','DOWN'] → ['STRONG_DOWN'].** 75-trade split:
+   STRONG_DOWN shorts 74% WR/+$36; DOWN shorts 65% WR/−$42. Shorts only work in strong
+   downtrends; plain DOWN is chop-prone.
+2. **`MOMENTUM_CONFIG.ALLOWED_REGIMES`: ['STRONG_UP','UP','SIDEWAYS'] → ['STRONG_UP'].**
+   42-trade split: MOMENTUM STRONG_UP 94% WR/+$82 (best setup in the whole system);
+   UP 8% WR/−$20; SIDEWAYS −$0.65. MOMENTUM only works in strong uptrends.
+
+**Why:**
+After the $12 cap fixed survivability, the remaining problem was edge (~+$0.17/trade).
+Diagnosis showed: exits are healthy (trailing captures 91% of peak, don't touch);
+sizing now bounded; the leak is taking the right strategy in the wrong regime.
+
+**Open findings (NOT changed — bigger projects, flagged for next sprint):**
+- **Confidence score is not predictive above 0.60.** .60–.70 and .70–.80 buckets have
+  identical 57% WR but +$107 vs +$3 net; ≥0.80 is negative. Yet confidence scales
+  position size. Scoring formula needs rework, or decouple size from confidence.
+- **ML gatekeeper feedback loop is dead:** 20,757 decisions logged, blocks 92% of
+  signals, but `ml_gatekeeper_log.actual_outcome` / `was_correct` are NULL on every
+  row — outcomes are never backfilled, so its value is unmeasured. Fix the backfill
+  before trusting/tuning it.
+
+**What to monitor / watch for:**
+- No new shorts should open outside STRONG_DOWN; no new MOMENTUM outside STRONG_UP.
+- TREND unaffected (still STRONG_UP+UP). MOMENTUM trade frequency will drop (STRONG_UP is rarer).
+- Rollback: each config line documents its own revert (re-add 'DOWN' / re-add 'UP','SIDEWAYS').
+
+---
+
 ## 2026-06-30 — R:R fix: $12 hard risk cap + shorts restricted to 4h — local-claude
 
 **Commits:** 16df9c0 (risk cap), <this commit> (shorts filter + changelog)

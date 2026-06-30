@@ -77,7 +77,7 @@ export const V2_CONFIG = {
   // --- Short Selling ---
   SHORTS_ENABLED: true,                  // 2026-05-18: enabled for paper testing
   SHORT_TIMEFRAMES: ['4h'] as readonly string[],  // 2026-06-30: shorts restricted to 4h. Backtest: 1h shorts 36% WR/-$15.72, 30m shorts 40% WR/-$18.33; 4h shorts 76% WR. Dropping 1h/30m shorts added +$34 net & best sharpe over 522 trades. Lower-conviction (16-trade sample) — revisit.
-  SHORT_ALLOWED_REGIMES: ['STRONG_DOWN', 'DOWN'] as readonly string[],
+  SHORT_ALLOWED_REGIMES: ['STRONG_DOWN'] as readonly string[],  // 2026-06-30: dropped DOWN. Edge diagnosis (75 trades): STRONG_DOWN shorts 74% WR/+$36; DOWN shorts 65% WR/−$42. Shorts only work in strong downtrends; plain DOWN is chop-prone. Rollback: re-add 'DOWN'.
   SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
   SHORT_STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-06: matched to long SL. ZEC short lost -$39.53 at 2.0x ATR (9% stop). At 1.5x would be ~-$28.
   SHORT_TAKE_PROFIT_ATR_MULT: 3.5,
@@ -255,7 +255,7 @@ export const MOMENTUM_CONFIG = {
   SCAN_TICKERS: ['ZECUSD', 'RUNEUSD', 'FLOWUSD', 'ENAUSD', 'KASUSD', 'ICPUSD', 'WIFUSD'] as readonly string[],
 
   CANDLE_INTERVAL: '4h' as string,  // 4h was the best timeframe — 1h gave PF 0 (too noisy)
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP', 'SIDEWAYS'] as readonly string[],
+  ALLOWED_REGIMES: ['STRONG_UP'] as readonly string[],  // 2026-06-30: STRONG_UP-only. Edge diagnosis (42 trades): MOMENTUM STRONG_UP 94% WR/+$82 (best setup in system); UP 8% WR/−$20; SIDEWAYS −$0.65. MOMENTUM only works in strong uptrends. Rollback: re-add 'UP','SIDEWAYS'.
   MIN_CANDLES: 50,
 
   // Entry filters (v2):
