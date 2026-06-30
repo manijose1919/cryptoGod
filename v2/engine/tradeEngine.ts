@@ -373,7 +373,13 @@ async function runLoop(): Promise<void> {
     // Stage 4: ML Gatekeeper (optional)
     // ==============================
     let mlFiltered = approved;
-    if (approved.length > 0) {
+    // Gatekeeper A/B: on a fraction of loops, bypass the gatekeeper entirely (OFF arm)
+    // so we can measure its block-recall — do the trades it would block actually lose?
+    const abOff = V2_CONFIG.GATEKEEPER_AB_TEST && Math.random() < V2_CONFIG.GATEKEEPER_AB_OFF_RATE;
+    if (approved.length > 0 && abOff) {
+      mlFiltered = approved; // all approved proceed at 1.0x size (no ML multiplier)
+      console.log(`[V2] Loop #${stats.loopCount}: GATEKEEPER A/B OFF arm — bypassing gatekeeper for ${approved.length} signal(s)`);
+    } else if (approved.length > 0) {
       try {
         const gk = await import('../../services/mlGatekeeper.js');
         if (gk.evaluateEntry) {
@@ -464,6 +470,29 @@ async function runLoop(): Promise<void> {
             insertTrade(trade);
             console.log(`[V2] Trade opened: ${trade.ticker} @ $${trade.entryPrice.toFixed(2)} qty=${trade.quantity.toFixed(6)}`);
             await sendEntryAlert(trade);
+
+            // Gatekeeper A/B (OFF arm): shadow-evaluate what the gatekeeper WOULD have
+            // decided for this executed trade. If it would have BLOCKED, log a PROCEED_AB
+            // row so the close handler attaches the outcome — that's the block-recall sample.
+            if (abOff) {
+              try {
+                const gk = await import('../../services/mlGatekeeper.js');
+                const cs = tickerCandles.get(bestRisk.ticker);
+                if (gk.evaluateEntry && cs && cs.length >= 50) {
+                  const fmt = cs.map(c => ({ o: c.open, h: c.high, l: c.low, c: c.close, v: c.volume }));
+                  const wd = gk.evaluateEntry(bestRisk.ticker, fmt, 'TREND', bestSignal.confidence, {});
+                  if (!wd.proceed) {
+                    const { insertGatekeeperDecision } = await import('../../services/database.js');
+                    insertGatekeeperDecision({
+                      ticker: bestRisk.ticker, decision: 'PROCEED_AB',
+                      ml_confidence: wd.confidence ? wd.confidence / 100 : 0, tier: wd.tier || '',
+                      final_size_multiplier: 1.0,
+                      reason: `AB-OFF forced through (gatekeeper would BLOCK: ${wd.reason})`,
+                    });
+                  }
+                }
+              } catch { /* shadow logging is best-effort */ }
+            }
           } catch (insertErr) {
             const ie = insertErr as Error;
             console.error(`[V2] insertTrade failed for ${trade.ticker}: ${ie.message}`);

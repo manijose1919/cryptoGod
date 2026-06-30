@@ -245,15 +245,17 @@ export function resolveGatekeeperByEntry(
   entryTime: number,
   actualOutcome: 'WIN' | 'LOSS',
 ): number | null {
+  // A trade only follows a PROCEED/PROCEED_AB decision, never a BLOCK — match those
+  // only (matching a BLOCK row would wrongly score a block against a different trade).
   const row = getDb().prepare(`
     SELECT id, decision FROM ml_gatekeeper_log
-    WHERE ticker = ? AND actual_outcome IS NULL AND ABS(created_at - ?) < 120000
+    WHERE ticker = ? AND actual_outcome IS NULL AND decision LIKE 'PROCEED%'
+      AND ABS(created_at - ?) < 120000
     ORDER BY ABS(created_at - ?) ASC LIMIT 1
   `).get(ticker, entryTime, entryTime) as { id: number; decision: string } | undefined;
   if (!row) return null;
-  const wasCorrect = row.decision === 'PROCEED'
-    ? (actualOutcome === 'WIN' ? 1 : 0)
-    : (actualOutcome === 'WIN' ? 0 : 1);
+  // PROCEED(_AB) expects a win -> correct when the trade won.
+  const wasCorrect = actualOutcome === 'WIN' ? 1 : 0;
   getDb().prepare(
     'UPDATE ml_gatekeeper_log SET actual_outcome = ?, was_correct = ? WHERE id = ?'
   ).run(actualOutcome, wasCorrect, row.id);

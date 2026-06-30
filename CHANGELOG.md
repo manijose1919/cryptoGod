@@ -37,6 +37,39 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-30 — ML gatekeeper forward A/B harness — local-claude
+
+**Commits:** <this commit>
+**Files changed:** `v2/engine/config.ts`, `v2/engine/tradeEngine.ts`, `v2/attribution/attributionStore.ts`
+**Stats baseline reset:** NO — A/B trades are tagged (PROCEED_AB) and separable; gatekeeper-ON arm reflects current config. Continues 1782834161576.
+
+**What changed:**
+`GATEKEEPER_AB_TEST: true`, `GATEKEEPER_AB_OFF_RATE: 0.5`. On ~half of loops the ML
+gatekeeper is bypassed (OFF arm): all risk-approved signals proceed at 1.0x size. When
+an OFF-arm trade executes, we shadow-evaluate what the gatekeeper WOULD have decided; if
+it would have BLOCKED, we log a `PROCEED_AB` row so the close handler attaches the
+outcome. This measures the gatekeeper's **block-recall** — do the trades it blocks
+actually lose? — which is impossible to get retroactively (blocked signals never trade).
+Also fixed `resolveGatekeeperByEntry` to match `PROCEED%` only (a trade never follows a
+BLOCK; matching BLOCK rows would mis-score them).
+
+**Why:**
+The gatekeeper blocks 92% of signals; its approvals win 48% (= baseline, no precision
+edge); ml_confidence is saturated. No evidence it helps — but we can't condemn it without
+recall data. This experiment generates that data forward. Paper mode (no $ risk); $12
+risk cap + MAX_OPEN_POSITIONS=3 bound exposure.
+
+**What to monitor / watch for:**
+- `pm2 logs | grep "A/B OFF arm"` should appear ~50% of loops that have signals.
+- Decision after ~30 PROCEED_AB samples:
+  `SELECT decision, COUNT(*) n, ROUND(100.0*AVG(was_correct),0) win_pct FROM ml_gatekeeper_log WHERE actual_outcome IS NOT NULL AND decision LIKE 'PROCEED%' GROUP BY decision;`
+  If PROCEED_AB (would-block) win rate ≈ or > PROCEED (approved), the gatekeeper is
+  blocking winners → strong case to remove it. If clearly lower, its blocking is justified.
+- Clean-sprint stats: exclude A/B-forced trades by anti-joining v2_trades to PROCEED_AB rows.
+- Rollback: `GATEKEEPER_AB_TEST: false` (instantly reverts to normal gatekeeper).
+
+---
+
 ## 2026-06-30 — Edge sprint pt2: decouple sizing from confidence + wire ML feedback loop — local-claude
 
 **Commits:** <confidence commit>, <ml commit>
