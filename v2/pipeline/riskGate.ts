@@ -214,7 +214,12 @@ export function evaluateRisk(
     const pullbackMult = signal.regime === REGIME.PULLBACK_UP
       ? V2_CONFIG.MTF_POSITION_MULTIPLIER
       : 1.0;
-    let positionSizeUsd = maxPositionUsd * signal.confidence * fgMultiplier * pullbackMult;
+    // Confidence as a size multiplier is disabled (SIZE_BY_CONFIDENCE=false): the
+    // composite confidence has no out-of-sample predictive skill (AUC 0.44), so scaling
+    // bet size by it added variance and bet more on slightly-worse trades. Use an
+    // exposure-neutral flat factor instead.
+    const confFactor = V2_CONFIG.SIZE_BY_CONFIDENCE ? signal.confidence : V2_CONFIG.CONFIDENCE_SIZE_FLAT;
+    let positionSizeUsd = maxPositionUsd * confFactor * fgMultiplier * pullbackMult;
 
     // Risk-based cap: limit position so max loss (entry→stop) ≤ MAX_RISK_PER_TRADE of equity.
     // High-ATR assets (e.g. AKT 5% ATR → 10% stop) get smaller positions; low-ATR assets unaffected.

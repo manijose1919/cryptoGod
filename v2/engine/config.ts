@@ -62,6 +62,8 @@ export const V2_CONFIG = {
   MAX_RISK_PER_TRADE_USD: 12,    // 2026-06-30: hard $ cap layered ON TOP of the % cap. The % cap is a CEILING that floated to $38 on high-ATR names (522-trade backtest). Capping at $12 cut worst loss -$40→-$15, eliminated all 9 tail losses (>$15), -14% volatility, while net rose +$91→+$105 (combined w/ short filter). Effective risk = min(equity×1.5%, $12). NOTE: scales as an absolute $; revisit upward as the account grows.
 
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
+  SIZE_BY_CONFIDENCE: false,     // 2026-06-30: was true. Confidence proven NON-predictive (out-of-sample AUC 0.44 — slightly INVERSE; 3 analyses: calibration, feature reweight, scorecard edges all ~0). Sizing by a non-predictive (slightly inverse) score bet MORE on worse trades. Flat factor below is exposure-neutral and reallocates size toward the profitable .60-.70 band. Re-enable only if a recalibrated score shows OOS AUC > 0.55.
+  CONFIDENCE_SIZE_FLAT: 0.70,    // exposure-neutral constant (= historical avg entry_confidence) used when SIZE_BY_CONFIDENCE is false
 
   // --- Re-entry Cooldown ---
   REENTRY_COOLDOWN_MS: 0,  // 2026-05-27: disabled. Backtest: 0h cooldown triples trades (357→1207) while maintaining 88% WR. Intra-bar trailing catches re-entries profitably.
