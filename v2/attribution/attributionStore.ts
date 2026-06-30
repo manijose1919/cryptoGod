@@ -235,6 +235,31 @@ export function closeTrade(
   });
 }
 
+// Forward outcome-tracking for the ML gatekeeper. When a trade closes, resolve the
+// gatekeeper decision logged closest to its entry (same ticker, within 120s, not yet
+// resolved). Until this was wired, actual_outcome/was_correct were NULL on every row,
+// so the gatekeeper's accuracy was never measurable. A PROCEED is "correct" on a WIN.
+// (BLOCK rows produce no trade, so they stay unresolved — block-recall is unknowable.)
+export function resolveGatekeeperByEntry(
+  ticker: string,
+  entryTime: number,
+  actualOutcome: 'WIN' | 'LOSS',
+): number | null {
+  const row = getDb().prepare(`
+    SELECT id, decision FROM ml_gatekeeper_log
+    WHERE ticker = ? AND actual_outcome IS NULL AND ABS(created_at - ?) < 120000
+    ORDER BY ABS(created_at - ?) ASC LIMIT 1
+  `).get(ticker, entryTime, entryTime) as { id: number; decision: string } | undefined;
+  if (!row) return null;
+  const wasCorrect = row.decision === 'PROCEED'
+    ? (actualOutcome === 'WIN' ? 1 : 0)
+    : (actualOutcome === 'WIN' ? 0 : 1);
+  getDb().prepare(
+    'UPDATE ml_gatekeeper_log SET actual_outcome = ?, was_correct = ? WHERE id = ?'
+  ).run(actualOutcome, wasCorrect, row.id);
+  return row.id;
+}
+
 export function updateTradeStop(tradeId: string, newStop: number): void {
   // Read current stop first — only tighten (for longs: only goes UP)
   if (!_getStopStmt) {

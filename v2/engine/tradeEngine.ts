@@ -24,6 +24,7 @@ import {
   initV2Tables,
   insertTrade,
   closeTrade,
+  resolveGatekeeperByEntry,
   getOpenTrades,
   getOpenTradesByStrategy,
   getClosedTrades,
@@ -616,6 +617,18 @@ async function checkOpenExits(): Promise<void> {
         status: 'closed' as const,
       };
       analyzeClosedTrade(closedTrade);
+
+      // Wire the ML gatekeeper feedback loop: record whether its entry decision
+      // panned out (was NULL on every row before this — accuracy was unmeasurable).
+      // Use a sign-correct realized PnL (closedTrade.pnlNet above omits the short-side
+      // multiplier, so it would misclassify short wins as losses).
+      try {
+        const realizedPnl = (result.exitPrice - trade.entryPrice) * trade.quantity
+          * (trade.side === 'long' ? 1 : -1) - totalFees;
+        resolveGatekeeperByEntry(trade.ticker, trade.entryTime, realizedPnl > 0 ? 'WIN' : 'LOSS');
+      } catch (e) {
+        console.warn(`[V2] gatekeeper resolve failed for ${trade.ticker}: ${(e as Error).message}`);
+      }
 
       const pnlNet = closedTrade.pnlNet;
       console.log(`[V2] Trade closed: ${trade.ticker} @ $${result.exitPrice.toFixed(2)} reason=${result.exitReason} PnL=$${pnlNet.toFixed(2)}`);
