@@ -98,8 +98,9 @@ export function runAllStrategies(
     // Both strategies lose money in live execution despite backtest promise.
     // Re-enable only after fundamental rework of entry logic.
 
-    // --- SHORTS (any TF where TREND runs, same ADX>25 gate) ---
-    if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live' && STRATEGY_TIMEFRAMES.TREND?.includes(tf)) {
+    // --- SHORTS (4h only — see SHORT_TIMEFRAMES; 1h/30m shorts proven losers — same ADX gate) ---
+    if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live'
+        && STRATEGY_TIMEFRAMES.TREND?.includes(tf) && V2_CONFIG.SHORT_TIMEFRAMES.includes(tf)) {
       const shortScanResults = scanMarket(tfCandles, 'short');
       const passedShortScan = getPassedTickers(shortScanResults).filter(scan => {
         const candles = tfCandles.get(scan.ticker);

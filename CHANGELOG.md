@@ -37,6 +37,57 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-30 — R:R fix: $12 hard risk cap + shorts restricted to 4h — local-claude
+
+**Commits:** 16df9c0 (risk cap), <this commit> (shorts filter + changelog)
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/riskGate.ts`, `v2/engine/tradeEngine.ts`, `v2/engine/strategyRunner.ts`
+**Stats baseline reset:** YES — set after deploy (see deploy step). These change trade-level expected outcomes (position sizing + which shorts fire).
+
+**What changed:**
+Driven by a 522-trade counterfactual re-sizing backtest of the live trade history
+(model validated: realized stop losses = 0.836× predicted risk).
+
+1. **Hard $12 dollar-risk cap** (`MAX_RISK_PER_TRADE_USD: 12`). Effective per-trade
+   risk is now `min(equity × 1.5%, $12)`, applied at both sizing sites (riskGate
+   pre-ML, tradeEngine post-ML-multiplier). The % cap alone was a ceiling that
+   floated to ~$38 of risk on high-ATR names. Backtest: worst single loss
+   −$40→−$15, all 9 catastrophic tail losses (>$15) eliminated, per-trade
+   volatility −14%, max drawdown lower, net PnL flat-to-up. HIGH conviction
+   (pure mechanical tail removal, no curve-fitting).
+
+2. **Shorts restricted to 4h** (`SHORT_TIMEFRAMES: ['4h']`). 1h shorts ran 36% WR
+   /−$15.72; 30m shorts 40% WR/−$18.33; 4h shorts 76% WR. Dropping the 1h/30m
+   shorts added +$34 net and the best risk-adjusted return in the backtest.
+   LOWER conviction — only 16 trades in the dropped sample, could be noise.
+
+Backtest also REFUTED two ideas before they shipped: full risk-parity sizing
+(sizes up low-win-rate low-ATR trades → net negative, 2× drawdown) and dropping
+low-ATR churn (that bucket was quietly net-positive). Shrink-only capping is the
+correct sizing lever.
+
+**Why:**
+Every prior cohort showed the same arc (VPS-claude Cycle 68): small trailing wins
+(+$2–4) erased by a single −$12 to −$40 stop. Root cause was sizing, not entries:
+dollar-risk-at-stop scaled 6× with ATR ($2.80 avg at <1% ATR → $17.56 avg / $37.68
+max at ≥4%). The cap makes the downside uniform and small.
+
+**What to monitor / watch for:**
+- No single closed trade should lose more than ~$15 net. If one does, the cap
+  isn't binding — check `MAX_RISK_PER_TRADE_USD` is applied at both sites.
+- `[V2] ... RISK-CAPPED from $X` log lines should appear more often on high-ATR entries.
+- No new shorts should open on 1h/30m — only 4h. Existing pre-deploy positions run out on old config.
+- Expect lower per-trade $ swings and shallower drawdowns; net/trade expectancy is
+  still thin (~+$0.17 baseline) — sizing fixes survivability, not edge. Edge work is the next lever.
+- Rollback cap: revert 16df9c0 (or set MAX_RISK_PER_TRADE_USD high, e.g. 9999).
+  Rollback shorts filter: set SHORT_TIMEFRAMES to ['1h','4h'].
+
+**VPS deploy action needed:**
+```
+sqlite3 /opt/trading-bot/data/trading.db "INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));"
+```
+
+---
+
 ## 2026-06-30 — Fix XTER→TER asset-pair error in Kraken balance pricing — local-claude
 
 **Commits:** (this commit)
