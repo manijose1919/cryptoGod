@@ -37,6 +37,49 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-30 — Edge sprint pt2: decouple sizing from confidence + wire ML feedback loop — local-claude
+
+**Commits:** <confidence commit>, <ml commit>
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/riskGate.ts`, `v2/attribution/attributionStore.ts`, `v2/engine/tradeEngine.ts`
+**Stats baseline reset:** NO — continues 1782834161576 (still zero closed trades since the reset; one clean sprint).
+
+**What changed:**
+
+1. **Position sizing decoupled from confidence** (`SIZE_BY_CONFIDENCE: false`, flat 0.70).
+   The composite confidence score was proven NON-predictive across three independent
+   analyses: (a) out-of-sample AUC 0.44 (worse than coin-flip — slightly INVERSE);
+   (b) a corrected feature reweight only reached OOS AUC 0.51 (within noise); (c) the
+   live signal scorecard shows every signal's standalone edge in ±0.0035 (essentially
+   zero). So scaling bet size by confidence bet *more* on slightly-worse trades. The
+   flat 0.70 factor (= historical avg confidence) is exposure-neutral and, because the
+   profitable .60–.70 confidence band sits *below* average, slightly reallocates size
+   toward the better trades. NOT PnL-backtestable from the trade log (can't decompose
+   the historical size multiplier) — rests on the AUC evidence + variance argument.
+
+2. **ML gatekeeper feedback loop wired** (`resolveGatekeeperByEntry` in attributionStore,
+   called at trade close in tradeEngine). `ml_gatekeeper_log.actual_outcome`/`was_correct`
+   were NULL on all 20,757 rows — the gatekeeper's accuracy was never measured. Now each
+   closed trade resolves its matching PROCEED decision (sign-correct WIN/LOSS; the existing
+   closedTrade.pnlNet omits the short-side multiplier, so this path computes its own).
+   A one-time backfill populates history. Pure instrumentation — NO trading-behavior change.
+
+**Why / what the diagnosis found (NOT acted on — needs a real project):**
+The edge problem is NOT fixable by recalibration: the current single-timeframe entry
+signals (RSI/MACD/BB/TC/etc.) contain no recoverable predictive edge for these assets.
+Real edge needs NEW information (HTF context, volatility regime, order-flow). Also: the
+ML gatekeeper blocks 92% of signals, its ml_confidence is saturated (≥0.70 on all
+approvals), and approved-trade WR is 44% (≤ baseline) — no evidence it adds value, but
+block-RECALL is unmeasurable retroactively. **Recommended: run a forward A/B (gatekeeper
+on vs off) now that outcomes are tracked, before deciding whether to keep it.**
+
+**What to monitor / watch for:**
+- Position sizes should no longer vary with confidence; avg exposure ~unchanged.
+- `ml_gatekeeper_log`: `was_correct` should start populating on new closes. Query
+  `SELECT decision, COUNT(*), AVG(was_correct) FROM ml_gatekeeper_log WHERE actual_outcome IS NOT NULL GROUP BY decision;`
+- Rollback confidence: set `SIZE_BY_CONFIDENCE: true`. Rollback ML: revert the wiring commit (instrumentation only, safe to leave).
+
+---
+
 ## 2026-06-30 — Edge sprint: tighten regime gates (shorts→STRONG_DOWN, MOMENTUM→STRONG_UP) — local-claude
 
 **Commits:** <this commit>
