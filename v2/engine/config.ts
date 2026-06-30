@@ -76,6 +76,7 @@ export const V2_CONFIG = {
 
   // --- Short Selling ---
   SHORTS_ENABLED: true,                  // 2026-05-18: enabled for paper testing
+  SHORT_TIMEFRAMES: ['4h'] as readonly string[],  // 2026-06-30: shorts restricted to 4h. Backtest: 1h shorts 36% WR/-$15.72, 30m shorts 40% WR/-$18.33; 4h shorts 76% WR. Dropping 1h/30m shorts added +$34 net & best sharpe over 522 trades. Lower-conviction (16-trade sample) — revisit.
   SHORT_ALLOWED_REGIMES: ['STRONG_DOWN', 'DOWN'] as readonly string[],
   SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
   SHORT_STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-06: matched to long SL. ZEC short lost -$39.53 at 2.0x ATR (9% stop). At 1.5x would be ~-$28.
