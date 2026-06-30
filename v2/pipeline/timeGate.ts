@@ -23,12 +23,15 @@
 export const TIME_GATE_CONFIG = {
   ENABLED: true,
 
-  // Hard-block hours (UTC) — consistently worst across both training + v2 data
-  // 13 UTC: 43.7% WR, -$1128/trade training | -$0.85 avg v2
-  // 20 UTC: 33.8% WR, -$2087/trade training | -$1.28 avg v2
-  // 0  UTC: 43.5% WR, -$1359/trade training (small v2 sample +$0.18 — keeping conservative)
-  // 4  UTC: 44.7% WR, -$1019/trade training | -$1.52 avg v2
-  BLOCKED_HOURS: [0, 4, 13, 20] as readonly number[],
+  // Hard-block hours (UTC) — consistently worst across both training + v2 data.
+  // 2026-06-30 refresh (382 live TREND+MOMENTUM trades): the entire 0-7 UTC overnight
+  // window (Asian/pre-London low liquidity) is net-negative and — crucially — held
+  // out-of-sample in BOTH halves of history (1st half -$0.54/trade, 2nd half -$0.31).
+  // Backtest: blocking 0-7 UTC lifts net +$96->+$154 and MORE THAN DOUBLES per-trade
+  // expectancy (+$0.25 -> +$0.56). It also subsumes the apparent "Saturday is bad"
+  // effect (Saturday looked bad only because of its overnight hours). 13 & 20 UTC kept
+  // from the original training-data blocks (13: 44% WR; 20: 20% WR live).
+  BLOCKED_HOURS: [0, 1, 2, 3, 4, 5, 6, 7, 13, 20] as readonly number[],
 
   // Hard-block days (0=Sun, 1=Mon, ..., 5=Fri, 6=Sat)
   // Friday: 40.5% WR, -$938/trade training (worst day)
