@@ -37,6 +37,39 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-06-30 — New edge feature: block 0-7 UTC overnight entries — local-claude
+
+**Commits:** <this commit>
+**Files changed:** `v2/pipeline/timeGate.ts`
+**Stats baseline reset:** NO — continues 1782834161576 (zero closed trades since reset).
+
+**What changed:**
+`TIME_GATE_CONFIG.BLOCKED_HOURS` extended from [0,4,13,20] to [0,1,2,3,4,5,6,7,13,20]
+— i.e. the entire 0-7 UTC overnight window is now blocked for TREND+MOMENTUM entries.
+
+**Why (this is the new-feature-research win):**
+After proving the price-based entry signals contain no recoverable edge (OOS AUC 0.44),
+new-feature research found that ENTRY TIME does. On 382 live trades, the 0-7 UTC overnight
+window (Asian/pre-London low liquidity) is net-negative and held out-of-sample in BOTH
+halves of history (1st half -$0.54/trade, 2nd half -$0.31; good window +$0.71 then +$0.48).
+Backtest of the filter:
+  - baseline (all): 382 trades, 55% WR, +$96 net, +$0.25/trade
+  - skip 0-7 UTC:   273 trades, 59% WR, +$154 net, +$0.56/trade  <- MORE THAN 2x expectancy
+This subsumes an apparent "Saturday is bad" effect (Saturday was bad only in its overnight
+hours; skipping 0-7 alone beat skipping 0-7 + all of Saturday). Mechanistically sound
+(trend-following in illiquid overnight hours), which lowers overfitting risk. BTC market-
+regime feature was untestable — BTC candle data is stale at 2026-04-10.
+
+**What to monitor / watch for:**
+- No new entries should open 0-7 UTC (`pm2 logs | grep "blocked hour"`).
+- Trade frequency drops (10 of 24 hours now blocked + regime gates) — watch it doesn't
+  starve like the pre-loosening "1 trade in 9 days". If too sparse, relax 1,2,7 first
+  (the marginal hours within the window).
+- Per-trade expectancy on the new cohort should run noticeably above the +$0.25 baseline.
+- Rollback: restore BLOCKED_HOURS to [0,4,13,20].
+
+---
+
 ## 2026-06-30 — ML gatekeeper forward A/B harness — local-claude
 
 **Commits:** <this commit>
