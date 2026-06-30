@@ -59,6 +59,8 @@ export const V2_CONFIG = {
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
   BASE_POSITION_PERCENT: 0.40,  // 2026-05-18: 0.25→0.40. Backtest: PF 3.84→6.63, +$414→+$888 on $6K. Safe — max DD stays 0.2%.
   MAX_RISK_PER_TRADE_PERCENT: 0.015, // 2026-06-06: 0.03→0.015. Live: high-ATR trades (FET 4.5%, ZEC 3%) got $400+ positions with $40 max loss. Caps high-ATR smaller while low-ATR unaffected.
+  MAX_RISK_PER_TRADE_USD: 12,    // 2026-06-30: hard $ cap layered ON TOP of the % cap. The % cap is a CEILING that floated to $38 on high-ATR names (522-trade backtest). Capping at $12 cut worst loss -$40→-$15, eliminated all 9 tail losses (>$15), -14% volatility, while net rose +$91→+$105 (combined w/ short filter). Effective risk = min(equity×1.5%, $12). NOTE: scales as an absolute $; revisit upward as the account grows.
+
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
 
   // --- Re-entry Cooldown ---
