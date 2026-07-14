@@ -125,15 +125,21 @@ lines.push('# Audit Batch Progress Report (2026-06-09 fix batch)');
 lines.push(`**Generated:** ${fmtTime(Date.now())} | **Baseline:** ${BASELINE_MS} (${fmtTime(BASELINE_MS)})`);
 lines.push('');
 
-// Self-triggering reminder for VPS Claude: once the post-baseline cohort reaches
-// ~15-20 closed trades, run the backtest-vs-live comparison for the 2026-06-30
-// R:R + edge sprint and report to Joseph. Fires only inside the review window so it
-// doesn't nag forever. (Set by local-claude 2026-06-30.)
-if (post.n >= 15 && post.n <= 30) {
+// Self-triggering reminder for VPS Claude: from 15 post-baseline closed trades,
+// nag until the notes file contains the dismissal marker for the CURRENT baseline:
+//   <!-- sprint-review-done baseline=<BASELINE_MS> -->
+// Append the marker only when the review reaches a decision — a "wait for more
+// data" verdict leaves the banner up on purpose. The old 15-30 window let the
+// 2026-07-05 n=15 "wait" verdict expire silently; marker-based dismissal fixes
+// that. A baseline reset re-arms the banner automatically. (2026-07-14)
+const reviewDone = existsSync(NOTES_PATH) &&
+  readFileSync(NOTES_PATH, 'utf8').includes(`<!-- sprint-review-done baseline=${BASELINE_MS} -->`);
+if (post.n >= 15 && !reviewDone) {
   lines.push('> ## ⚠️ ACTION FOR VPS CLAUDE — run the 2026-06-30 sprint review');
   lines.push(`> The post-baseline cohort has **${post.n} closed trades** — enough to check the`);
   lines.push('> R:R + edge sprint against its backtests. Compare live vs expected and write the');
-  lines.push('> findings to `audit-batch-notes.md`, then ping Joseph. Check specifically:');
+  lines.push('> findings to `audit-batch-notes.md`, append `<!-- sprint-review-done baseline=' + BASELINE_MS + ' -->`');
+  lines.push('> once decided (leave it off to keep this banner for a follow-up), then ping Joseph. Check:');
   lines.push('> 1. **$12 risk cap:** no single closed trade should lose more than ~$15 net. Query the worst loss.');
   lines.push('> 2. **Per-trade expectancy:** should run well above the +$0.25 pre-sprint baseline (backtest implied ~+$0.5–0.6 with the time gate + regime gates). Compare avg pnl_net/trade.');
   lines.push('> 3. **Regime gates:** confirm no new MOMENTUM outside STRONG_UP and no shorts outside STRONG_DOWN.');
