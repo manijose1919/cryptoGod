@@ -79,7 +79,7 @@ export const V2_CONFIG = {
   TREND_MATURITY_MAX_PENALTY: 15,        // subtract up to 15 from composite score for exhausted trends
 
   // --- Short Selling ---
-  SHORTS_ENABLED: true,                  // 2026-05-18: enabled for paper testing
+  SHORTS_ENABLED: false,                 // 2026-07-14: disabled. All-time timeframed shorts −$54.45/37 trades, negative on EVERY timeframe (1h −$15.72/11, 30m −$18.33/5, 4h −$20.40/21); post-baseline 4h shorts −$17.99/4 @ 25% WR. No profitable sub-segment with n≥10. Rollback: set true (SHORT_TIMEFRAMES/SHORT_ALLOWED_REGIMES below retained for that case). Review: docs/reviews/2026-07-14-sprint-review.md
   SHORT_TIMEFRAMES: ['4h'] as readonly string[],  // 2026-06-30: shorts restricted to 4h. Backtest: 1h shorts 36% WR/-$15.72, 30m shorts 40% WR/-$18.33; 4h shorts 76% WR. Dropping 1h/30m shorts added +$34 net & best sharpe over 522 trades. Lower-conviction (16-trade sample) — revisit.
   SHORT_ALLOWED_REGIMES: ['STRONG_DOWN'] as readonly string[],  // 2026-06-30: dropped DOWN. Edge diagnosis (75 trades): STRONG_DOWN shorts 74% WR/+$36; DOWN shorts 65% WR/−$42. Shorts only work in strong downtrends; plain DOWN is chop-prone. Rollback: re-add 'DOWN'.
   SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
