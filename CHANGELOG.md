@@ -56,7 +56,7 @@ See `docs/reviews/2026-07-14-sprint-review.md` for full numbers. Cohort overall 
 **What to monitor / watch for:**
 - (a) Expectancy of the new post-baseline cohort > +$0.25/trade at the next 15-trade review.
 - (b) Zero `side='short'` TREND entries post-deploy.
-- (c) Branch A applies: 1h TREND `time_kill` exit count should drop vs the prior cohort (5 of 7 prior 1h TREND time_kill exits were premature per the review's recoverability check).
+- (c) Branch A applies: 1h TREND `time_kill` exit count should drop vs the prior cohort (3 of 5 prior 1h TREND `time_kill` exits were recoverable/premature per the review's recoverability check; 5 of the cohort's 7 time_kills were 1h TREND).
 - (d) Rollback: `git revert <task SHA>` for the relevant commit above + `bash scripts/push-deploy.sh master`.
 - **Next-sprint candidates flagged (not shipped) by the review — not acted on this batch:**
   - Time-gate leak: 3 entries during nominally-blocked hours 0-1 UTC (GROVE_USD x2, TAOUSD x1), all well after the timegate deploy (`afeecc4`) and the baseline reset — the gate is not fully blocking hour 0-1 for at least these tickers/strategies. Needs a root-cause investigation.
