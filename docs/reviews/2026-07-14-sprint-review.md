@@ -69,6 +69,8 @@ Recoverable: 3/5 = **60%**, exactly at the ≥0.6 decision threshold. This is a 
 
 **Decision rule applied:** recoverable_count/total = 0.6 ≥ 0.6 ⇒ **1H_TREND: extend-timekill-to-4-bars**. Flagged as a low-confidence call given n=5 and the exact-threshold margin — Task 3 and future monitoring should treat this as provisional and revisit once more 1h TREND time_kill trades accumulate.
 
+**Backtest caveat for the revisit:** the multi-strategy backtest uses its own exit params (`v2/backtest/multiStrategy/strategyRegistry.ts`, TREND `timeKillBars: 2`) and does NOT read `STRATEGY_EXIT_CONFIGS.timeKillBarsByTf` — a backtest run to re-validate this decision will silently model the OLD 2-bar kill on 1h unless its registry is updated to match. Compare live-vs-live cohorts, or port the override into the backtest registry first.
+
 Context: 1h TREND long overall is flat-to-negative post-baseline (n=14, −$2.17, −$0.155/trade) versus 4h TREND long (n=14, +$22.92, +$1.637/trade) and 4h TREND short (n=4, −$17.99, −$4.498/trade — see shorts section). The recoverability data suggests part of the 1h drag is trades getting timed out just before they would have cleared the trail-activation threshold, which is what the extend decision is meant to address.
 
 ### Per-ticker
