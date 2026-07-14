@@ -37,6 +37,34 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-14 — Profitability sprint: shorts off, 1h time-kill extended, reminder fix — local-claude
+
+**Commits:** `504f75d` (sprint re-review doc), `c95808d` (TREND shorts disabled), `d811c58` (1h time-kill 2→4 bars), `6e7d2cd` (marker-based reminder fix)
+**Files changed:** `docs/reviews/2026-07-14-sprint-review.md`, `v2/engine/config.ts`, `v2/pipeline/exitManager.ts`, `scripts/generate-audit-report.mjs`, `CHANGELOG.md`
+**Stats baseline reset:** yes — reset immediately after this deploy — see follow-up line below for the actual value.
+
+**What changed:**
+Four changes shipped together from the `docs/reviews/2026-07-14-sprint-review.md` re-review (baseline 1782834161576, n=38), which superseded the 2026-07-05 n=15 verdict:
+1. **Shorts disabled** (`c95808d`) — TREND shorts turned off; every timeframe/regime cell was net negative all-time (-$54 aggregate across the segments reviewed), and post-baseline TREND short 4h was the single worst segment (-$17.99/4).
+2. **1h TREND time-kill extended 2→4 bars** (`d811c58`) — Branch A chosen: added a new `timeKillBarsByTf` override so only 1h TREND extends from 2 to 4 bars; 4h TREND time-kill is unchanged, and `STRATEGY_TIMEFRAMES` was left untouched. Based on 3/5 post-baseline 1h TREND `time_kill` exits being recoverable within a 4-bar window (Kraken REST OHLC fallback, since `candle_history` doesn't cover the post-baseline period) — exactly at the 0.6 decision threshold, flagged in the review as low-confidence/provisional on n=5.
+3. **GATEKEEPER: defer** — no code change. PROCEED_AB n=5 is far below the n≥30 threshold to act; standard PROCEED path (n=537) remains ~49% win with no measurable edge. Revisit once PROCEED_AB accumulates more samples.
+4. **Sprint-review reminder fix** (`6e7d2cd`) — banner now dismisses via a baseline-scoped marker in `audit-batch-notes.md` instead of expiring silently at 30 trades.
+
+**Why:**
+See `docs/reviews/2026-07-14-sprint-review.md` for full numbers. Cohort overall expectancy was marginally positive (+$1.56/38, +$0.041/trade) but masked a reversal: trades 1-15 were -$19.44 (-$1.296/trade), trades 16-38 were +$21.00 (+$0.913/trade). Segment analysis on top of that trajectory drove the shorts and 1h decisions above.
+
+**What to monitor / watch for:**
+- (a) Expectancy of the new post-baseline cohort > +$0.25/trade at the next 15-trade review.
+- (b) Zero `side='short'` TREND entries post-deploy.
+- (c) Branch A applies: 1h TREND `time_kill` exit count should drop vs the prior cohort (5 of 7 prior 1h TREND time_kill exits were premature per the review's recoverability check).
+- (d) Rollback: `git revert <task SHA>` for the relevant commit above + `bash scripts/push-deploy.sh master`.
+- **Next-sprint candidates flagged (not shipped) by the review — not acted on this batch:**
+  - Time-gate leak: 3 entries during nominally-blocked hours 0-1 UTC (GROVE_USD x2, TAOUSD x1), all well after the timegate deploy (`afeecc4`) and the baseline reset — the gate is not fully blocking hour 0-1 for at least these tickers/strategies. Needs a root-cause investigation.
+  - MEAN_REVERSION shorts are not constrained to the STRONG_DOWN regime the way TREND/other shorts are (one instance: TAOUSD MEAN_REVERSION short in SIDEWAYS regime, -$4.22). Moot while shorts are globally disabled, but must be fixed before any short path is re-enabled.
+  - TAOUSD single-ticker drag (-$36.18/11, -$3.29/trade) — worth a dedicated ticker-level review.
+
+**Follow-up:** baseline value recorded in a subsequent `docs(changelog): record baseline <ms>` commit once the reset ran.
+
 ## 2026-07-14 — Project reference + standing rules restored into CLAUDE.md — user (via local-claude)
 
 **Commits:** <this commit>
