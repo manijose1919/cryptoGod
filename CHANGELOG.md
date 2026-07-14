@@ -37,6 +37,33 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-14 — CLAUDE.md replaced with general LLM coding guidelines — user (via local-claude)
+
+**Commits:** <this commit>
+**Files changed:** `CLAUDE.md`
+**Stats baseline reset:** NO — docs-only change, no trading behavior affected.
+
+**What changed:**
+At the user's direction, `CLAUDE.md` was replaced wholesale with a general LLM
+coding-discipline guide (read-before-write, simplicity, surgical diffs, verification,
+debugging, dependencies, communication). This applies on BOTH machines — the VPS copy at
+`/opt/trading-bot/CLAUDE.md` is this same repo file and updates on deploy.
+
+**Why:**
+User request. The new file encodes how Claude should write and change code in this repo.
+
+**What to monitor / watch for (IMPORTANT for VPS Claude):**
+- The former CLAUDE.md's project-specific content (architecture map, dev commands,
+  Canadian USD-pair compliance, fee thresholds, and the standing rules: stats-baseline
+  resets, git hygiene / dual-remote push via `scripts/push-deploy.sh`, and this
+  bidirectional changelog) is NO LONGER in CLAUDE.md. Last version with that content:
+  the commit before this one (previous CLAUDE.md edit was `3ef6574`); recover via
+  `git show <this-commit>^:CLAUDE.md`.
+- This changelog file itself still documents the changelog and baseline protocols in
+  its header — keep following them; the CLAUDE.md removal was not a revocation of the
+  deploy/changelog workflow, just a content swap in CLAUDE.md.
+- Rollback: `git revert` this commit and redeploy with `bash scripts/push-deploy.sh`.
+
 ## 2026-06-30 — New edge feature: block 0-7 UTC overnight entries — local-claude
 
 **Commits:** <this commit>
