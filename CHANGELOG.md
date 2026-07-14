@@ -41,7 +41,7 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 **Commits:** `504f75d` (sprint re-review doc), `c95808d` (TREND shorts disabled), `d811c58` (1h time-kill 2→4 bars), `6e7d2cd` (marker-based reminder fix)
 **Files changed:** `docs/reviews/2026-07-14-sprint-review.md`, `v2/engine/config.ts`, `v2/pipeline/exitManager.ts`, `scripts/generate-audit-report.mjs`, `CHANGELOG.md`
-**Stats baseline reset:** yes — reset immediately after this deploy — see follow-up line below for the actual value.
+**Stats baseline reset:** yes — new baseline = 1784063502985 (2026-07-14 21:11:42 UTC, reset immediately after this deploy).
 
 **What changed:**
 Four changes shipped together from the `docs/reviews/2026-07-14-sprint-review.md` re-review (baseline 1782834161576, n=38), which superseded the 2026-07-05 n=15 verdict:
@@ -63,7 +63,7 @@ See `docs/reviews/2026-07-14-sprint-review.md` for full numbers. Cohort overall 
   - MEAN_REVERSION shorts are not constrained to the STRONG_DOWN regime the way TREND/other shorts are (one instance: TAOUSD MEAN_REVERSION short in SIDEWAYS regime, -$4.22). Moot while shorts are globally disabled, but must be fixed before any short path is re-enabled.
   - TAOUSD single-ticker drag (-$36.18/11, -$3.29/trade) — worth a dedicated ticker-level review.
 
-**Follow-up:** baseline value recorded in a subsequent `docs(changelog): record baseline <ms>` commit once the reset ran.
+**Follow-up:** baseline recorded above (`1784063502985`) in the `docs(changelog): record baseline <ms>` commit, per the standing rule of a new commit rather than an amend.
 
 ## 2026-07-14 — Project reference + standing rules restored into CLAUDE.md — user (via local-claude)
 
