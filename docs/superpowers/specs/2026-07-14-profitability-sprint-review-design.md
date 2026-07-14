@@ -8,9 +8,15 @@
 
 The 2026-06-30 R:R + edge sprint shipped with a self-triggering review reminder
 (commit `840dc72`) that fires in the hourly audit report at 15–30 post-baseline
-closed trades. The cohort passed through that window unactioned — it now sits at
-38 closed trades and the banner has gone silent. No `audit-batch-notes.md` was
-ever written on the VPS.
+closed trades. **Correction (2026-07-14, supersedes the earlier draft of this
+section):** the review DID run — VPS Claude wrote it to
+`data/reports/audit-batch-notes.md` on 2026-07-05 at exactly 15 trades, verdict:
+expectancy −$1.30/trade (FAIL), "no config change recommended — signal quality,
+not configuration." The cohort has since grown to 38 trades and swung to +$1.56
+total: trades 16–38 made ≈ +$0.91/trade, at/above the backtest target. The
+July 5 "wait" verdict was never revisited because the reminder window closed at
+30 trades — a one-shot window can't request a follow-up look. That is the actual
+reminder defect this sprint fixes (not a missed review).
 
 Live cohort since baseline `1782834161576` (38 closed trades, as of 2026-07-14):
 
@@ -33,7 +39,9 @@ Lift live per-trade expectancy from +$0.04 toward the backtest-implied
 +$0.50–0.60 by cutting proven-negative segments and tuning exits.
 
 Deliverables:
-1. Written sprint review committed as `audit-batch-notes.md` (repo root).
+1. Written sprint review: appended to `data/reports/audit-batch-notes.md` on
+   the VPS (the runtime notes path the hourly report embeds) and committed to
+   the repo as `docs/reviews/2026-07-14-sprint-review.md`.
 2. One batched config change set (one logical change per commit).
 3. A single new `stats_baseline_time` after the change set deploys.
 4. CHANGELOG.md entry per the standing rule.
@@ -94,9 +102,11 @@ post-hoc:
 - Config-only edits in the V2 pipeline (strategy enables, timeframe lists,
   time_kill timers) — one logical change per commit.
 - Reminder fix in `scripts/generate-audit-report.mjs`: replace the hard
-  15–30 window with "fires from 15 trades until `audit-batch-notes.md`
-  contains a review for the current baseline" (or simplest equivalent), so
-  an unactioned review cannot silently expire.
+  15–30 window with marker-based dismissal — fires from 15 trades until the
+  notes file contains `<!-- sprint-review-done baseline=<BASELINE_MS> -->`,
+  which the reviewer appends when the review for that baseline is complete.
+  A review can't be silently skipped, and a "wait for more data" verdict
+  keeps the banner alive (append the marker only when done deciding).
 - Deploy via `bash scripts/push-deploy.sh` (both remotes, SHA verified).
 - After deploy: single `stats_baseline_time` reset on the VPS (per standing
   rule — one reset for the whole batch). Open pre-baseline positions keep
