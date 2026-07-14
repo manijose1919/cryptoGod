@@ -37,6 +37,23 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-14 — Project reference + standing rules restored into CLAUDE.md — user (via local-claude)
+
+**Commits:** <this commit>
+**Files changed:** `CLAUDE.md`
+**Stats baseline reset:** NO — docs-only change.
+
+**What changed:**
+Follow-up to the entry below: the project-specific content (architecture map, dev
+commands, Canadian USD-pair compliance, fee thresholds, and the three standing rules —
+stats-baseline resets, git hygiene / `push-deploy.sh`, bidirectional changelog) is
+back in `CLAUDE.md`, appended as a "Project Reference: CRYPTO_GOD" part after the new
+general coding guidelines. The guidelines part is unchanged.
+
+**What to monitor / watch for:**
+- Nothing operational. The "recover via git show" pointer in the entry below is now
+  moot — the standing rules are in CLAUDE.md again on both machines.
+
 ## 2026-07-14 — CLAUDE.md replaced with general LLM coding guidelines — user (via local-claude)
 
 **Commits:** <this commit>
