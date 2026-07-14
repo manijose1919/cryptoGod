@@ -65,6 +65,8 @@ See `docs/reviews/2026-07-14-sprint-review.md` for full numbers. Cohort overall 
 
 **Follow-up:** baseline recorded above (`1784063502985`) in the `docs(changelog): record baseline <ms>` commit, per the standing rule of a new commit rather than an amend.
 
+**In-flight legacy position (pre-baseline, untouched):** one open position, `60f2be49-ea52-4aad-9533-e090467e3ef0` — ZECUSD TREND long 4h, entered 2026-07-14 19:31 UTC (entry_time 1784057492533, before the new baseline). Left running on its original config per the standing rule — not force-closed. Track its outcome as background data, not part of the new post-baseline cohort.
+
 ## 2026-07-14 — Project reference + standing rules restored into CLAUDE.md — user (via local-claude)
 
 **Commits:** <this commit>
