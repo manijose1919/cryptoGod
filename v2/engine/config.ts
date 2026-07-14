@@ -162,6 +162,7 @@ export interface StrategyExitConfig {
   trailActivatePercent: number;
   trailGivebackPercent: number;
   timeKillBars: number;      // bars to hold before time-kill
+  timeKillBarsByTf?: Record<string, number>;  // per-timeframe override of timeKillBars (2026-07-14: lets 1h get a longer leash without touching 4h)
   timeKillMinMove: number;
   quickKillBars: number;     // bars before quick-kill tightens
   quickKillMinGain: number;
@@ -177,7 +178,7 @@ export const STRATEGY_EXIT_CONFIGS: Record<string, StrategyExitConfig> = {
     // since 2026-05-18 while live trades silently trailed at 2.5% (the backtest
     // that justified 0.01/0.015 claimed PF 1.67→3.71 from this one change).
     trailActivatePercent: 0.014, trailGivebackPercent: 0.03,  // 2026-06-19: 0.01→0.014 (~75% of 1.8% typical TP). At 1%, trail activated in noise zone — reversals still netted below breakeven after fees. At 1.4%, minimum locked-in gross is ~1.35%.
-    timeKillBars: 2, timeKillMinMove: 0.007,
+    timeKillBars: 2, timeKillBarsByTf: { '1h': 4 }, timeKillMinMove: 0.007,  // 2026-07-14: 1h kills at 2 bars were premature — ≥60% of killed 1h trades reached trail activation within 4h (see docs/reviews/2026-07-14-sprint-review.md). 4h keeps 2 bars.
     quickKillBars: 1, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
     useTrailing: true,
   },

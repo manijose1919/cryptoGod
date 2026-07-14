@@ -115,7 +115,9 @@ export async function checkExits(
     // Trades without a persisted timeframe (pre-2026-06-09 rows) fall back to
     // the global 6h/4h timers — the behavior they were opened under.
     const tfMs = trade.timeframe ? timeframeToMs(trade.timeframe) : null;
-    const cfgTimeKillMs = tfMs ? exitCfg.timeKillBars * tfMs : V2_CONFIG.TIME_KILL_MS;
+    const cfgTimeKillMs = tfMs
+      ? (exitCfg.timeKillBarsByTf?.[trade.timeframe!] ?? exitCfg.timeKillBars) * tfMs
+      : V2_CONFIG.TIME_KILL_MS;
     const cfgTimeKillMinMove = tfMs ? exitCfg.timeKillMinMove : V2_CONFIG.TIME_KILL_MIN_MOVE;
     const cfgQuickKillMs = tfMs ? exitCfg.quickKillBars * tfMs : V2_CONFIG.QUICK_KILL_AFTER_MS;
     const cfgQuickKillMinGain = tfMs ? exitCfg.quickKillMinGain : V2_CONFIG.QUICK_KILL_MIN_GAIN;
