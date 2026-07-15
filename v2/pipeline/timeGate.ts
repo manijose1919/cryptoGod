@@ -19,13 +19,13 @@
 // Implementation note: takes optional timestamp arg so backtests can pass
 // the candle's `time` (live engine omits → uses Date.now()).
 //
-// SCOPE (verified 2026-07-15 investigation): checkTimeGate is called from
-// signalGenerator.ts (TREND long+short), momentumSignal.ts, and scalpSignal.ts
-// ONLY. breakoutSignal.ts, meanReversionSignal.ts, and sniperSignal.ts do NOT
-// call it — entries from those strategies during blocked hours are by design,
-// not a gate malfunction (the 0-7 UTC edge analysis was run on TREND+MOMENTUM
-// trades only; see CHANGELOG 2026-06-30). If you extend coverage, update this
-// note and the strategy-scoped edge basis.
+// SCOPE (updated 2026-07-15): checkTimeGate is called from ALL entry detectors —
+// signalGenerator.ts (TREND long+short), momentumSignal.ts, scalpSignal.ts,
+// breakoutSignal.ts, meanReversionSignal.ts, and sniperSignal.ts. The last three
+// were ungated until 2026-07-15 (original 2026-06-30 scope was TREND+MOMENTUM,
+// whose 382-trade dataset produced the 0-7 UTC edge; extension to the others is
+// mechanistic, not data-backed — see CHANGELOG 2026-07-15 for the reasoning and
+// rollback).
 // ============================================
 
 export const TIME_GATE_CONFIG = {

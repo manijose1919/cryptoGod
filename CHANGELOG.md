@@ -37,6 +37,40 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-15 — TimeGate extended to MEAN_REVERSION, SNIPER, BREAKOUT — local-claude
+
+**Commits:** <this commit>
+**Files changed:** `v2/pipeline/meanReversionSignal.ts`, `v2/pipeline/sniperSignal.ts`, `v2/pipeline/breakoutSignal.ts`, `v2/pipeline/timeGate.ts` (scope comment), `CHANGELOG.md`
+**Stats baseline reset:** NO — keeps 1784063502985. Reasoning: this ships one day into the current cohort (n=1 closed trade), within the same tuning-sprint window per the standing rule's "baseline once at the end of a sprint, not per tweak." The change only removes rare entries (MR+SNIPER produced 4 trades total since 2026-06-30, BREAKOUT zero) and does not alter expected outcomes of the dominant TREND flow. Flag to Joseph if he prefers a reset.
+
+**What changed:**
+`checkTimeGate` is now called at the top of `detectMeanReversionEntry`,
+`detectSniperEntry`, and `detectBreakoutEntry` — same pattern as MOMENTUM
+(hard-block hours/days only, no scoreBoost, uses last-candle time so backtests
+gate historically). Every v2 entry path is now time-gated.
+
+**Why:**
+Follow-up to the investigation entry below. The 2026-07-14 sprint review
+expected blocked hours to block all entries; the gate covered only
+TREND/MOMENTUM/SCALP. Joseph opted to extend coverage. NOTE: the extension is
+mechanistic ("overnight low liquidity"), not data-backed — the 0-7 UTC edge was
+measured on TREND+MOMENTUM trades only, and the mechanism arguably fits mean
+reversion and new-listing sniping less well. The 3 ungated blocked-hour trades
+to date were collectively +$2.56 (n=3).
+
+**Verification:**
+- `npx tsc --noEmit` error count unchanged (155 pre-existing, 0 new).
+- Runtime script: checkTimeGate blocks hour 1 / allows hour 10; all three
+  detectors return null on candles ending in a blocked hour.
+- Candle time units audited: krakenAdapter emits ms (`c[0] * 1000`),
+  cryptoComAdapter passes through Crypto.com's native ms — no seconds-vs-ms
+  hazard that would false-block via a 1970 timestamp.
+
+**What to monitor / watch for:**
+- Zero MEAN_REVERSION / SNIPER / BREAKOUT entries during blocked hours (0-7, 13, 20 UTC) post-deploy.
+- SNIPER edge case: new listings during the 0-7 UTC window are now unsniped until 08:00 UTC; if a hot listing is missed overnight and that hurts, revisit whether SNIPER should be exempt.
+- Rollback: `git revert <this SHA>` + `bash scripts/push-deploy.sh master` (restores ungated behavior for the three strategies only).
+
 ## 2026-07-15 — Time-gate "leak" investigation resolved: scope gap, not malfunction — local-claude
 
 **Commits:** <this commit>

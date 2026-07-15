@@ -16,6 +16,7 @@
 import type { Candle, SignalResult } from './types.ts';
 import { computeSignals } from '../indicators/indicators.ts';
 import { SNIPER_CONFIG } from '../engine/config.ts';
+import { checkTimeGate } from './timeGate.ts';
 
 // Detector is JS — accessed via dynamic import in the engine and passed in.
 export interface NewCoinDetector {
@@ -34,6 +35,12 @@ export function detectSniperEntry(
   detector: NewCoinDetector,
 ): SignalResult | null {
   if (candles.length < SNIPER_CONFIG.MIN_CANDLES) return null;
+
+  // --- TimeGate (hour-of-day + day-of-week filter) ---
+  // Extended to SNIPER 2026-07-15 (see CHANGELOG). Hard-block only,
+  // no scoreBoost — same as MOMENTUM.
+  const tg = checkTimeGate(candles[candles.length - 1]?.time);
+  if (!tg.allow) return null;
 
   // --- Listing age + rug-pull screen ---
   const listings = detector.getActiveNewListings();
