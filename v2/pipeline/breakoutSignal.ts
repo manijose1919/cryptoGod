@@ -1,5 +1,6 @@
 import type { Candle, SignalResult } from './types.ts';
 import { computeSignals, detectRegime } from '../indicators/indicators.ts';
+import { checkTimeGate } from './timeGate.ts';
 
 const BREAKOUT_CONFIG = {
   ALLOWED_REGIMES: ['STRONG_UP', 'UP'], // Removed SIDEWAYS — live data: 4 SIDEWAYS entries, 0 wins, -$17.45. False breakouts in chop.
@@ -14,6 +15,12 @@ export function detectBreakoutEntry(
   ticker: string,
 ): SignalResult | null {
   if (candles.length < Math.max(BREAKOUT_CONFIG.MIN_CANDLES, BREAKOUT_CONFIG.LOOKBACK_BARS + 1)) return null;
+
+  // --- TimeGate (hour-of-day + day-of-week filter) ---
+  // Extended to BREAKOUT 2026-07-15 (see CHANGELOG). Hard-block only,
+  // no scoreBoost — same as MOMENTUM.
+  const tg = checkTimeGate(candles[candles.length - 1]?.time);
+  if (!tg.allow) return null;
 
   const { signals } = computeSignals(candles);
   const regimeResult = detectRegime(candles);

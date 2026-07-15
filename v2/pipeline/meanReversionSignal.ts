@@ -1,6 +1,7 @@
 import type { Candle, SignalResult } from './types.ts';
 import { computeSignals, detectRegime, adx } from '../indicators/indicators.ts';
 import { MR_CONFIG } from '../engine/config.ts';
+import { checkTimeGate } from './timeGate.ts';
 
 export interface MRSignalResult extends SignalResult {
   side: 'long' | 'short';
@@ -11,6 +12,12 @@ export function detectMeanReversionEntry(
   ticker: string,
 ): MRSignalResult | null {
   if (candles.length < MR_CONFIG.MIN_CANDLES) return null;
+
+  // --- TimeGate (hour-of-day + day-of-week filter) ---
+  // Extended to MEAN_REVERSION 2026-07-15 (see CHANGELOG). Hard-block only,
+  // no scoreBoost — same as MOMENTUM.
+  const tg = checkTimeGate(candles[candles.length - 1]?.time);
+  if (!tg.allow) return null;
 
   // Primary gate: ADX must be below threshold (market must be ranging, not trending)
   const adxVal = adx(candles);
