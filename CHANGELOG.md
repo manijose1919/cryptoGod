@@ -37,6 +37,32 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-15 — Time-gate "leak" investigation resolved: scope gap, not malfunction — local-claude
+
+**Commits:** <this commit>
+**Files changed:** `v2/pipeline/timeGate.ts` (comment only), `docs/reviews/2026-07-14-sprint-review.md`, `CHANGELOG.md`
+**Stats baseline reset:** NO — docs/comments only, no behavior change.
+
+**What changed:**
+Documentation only. Root-caused the sprint review's "time-gate leak" (3 entries during
+blocked hours 0-1 UTC): the gate is functioning correctly for everything it covers.
+The 3 trades were SNIPER_CRYPTOCOM ×2 (GROVE_USD) and MEAN_REVERSION ×1 (TAOUSD) —
+strategies whose entry detectors never call `checkTimeGate`. Gate call sites are
+signalGenerator.ts (TREND long+short), momentumSignal.ts, and scalpSignal.ts only;
+breakoutSignal.ts, meanReversionSignal.ts, and sniperSignal.ts are ungated. This
+matches the documented 2026-06-30 intent ("blocked for TREND+MOMENTUM entries") —
+the sprint review's expectation of a global block was the mismatch.
+
+**Verification details:**
+- Zero TREND/MOMENTUM entries during any blocked hour (0-7, 13, 20 UTC) since the
+  timegate deploy. 3 apparent TREND hits on 2026-06-30 (01:43, 03:08, 06:15 UTC,
+  all ZECUSD 1h) predate the 19:29 UTC deploy of `afeecc4`.
+- The 3 ungated blocked-hour trades were collectively +$2.56 (n=3, not meaningful).
+
+**What to monitor / watch for:**
+- Nothing from this entry. A follow-up commit extends gate coverage to the ungated
+  strategies — see the entry above this one once shipped.
+
 ## 2026-07-14 — Profitability sprint: shorts off, 1h time-kill extended, reminder fix — local-claude
 
 **Commits:** `504f75d` (sprint re-review doc), `c95808d` (TREND shorts disabled), `d811c58` (1h time-kill 2→4 bars), `6e7d2cd` (marker-based reminder fix)
