@@ -37,6 +37,40 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-15 — MR shorts disabled: closes gap left by sprint's shorts-off decision — local-claude
+
+**Commits:** <this commit>
+**Files changed:** `v2/engine/config.ts` (MR_CONFIG.SHORTS_ENABLED true→false), `CHANGELOG.md`
+**Stats baseline reset:** NO — this is a fix restoring the 2026-07-14 sprint's intended behavior (shorts off cohort-wide), which the standing rule says keeps continuous stats. Baseline stays 1784063502985.
+
+**What changed:**
+`MR_CONFIG.SHORTS_ENABLED: false`. Discovery during the queued "MR short regime
+constraint" task: the sprint's shorts-disable commit (`c95808d`) only flipped
+`V2_CONFIG.SHORTS_ENABLED` (TREND path). MR has its own flag, which stayed true —
+**MR shorts were still live post-sprint**, contrary to the sprint review's
+assumption that disabling shorts cohort-wide made the MR regime gap moot.
+
+This also resolves the queued regime-gap item: with no short path live anywhere,
+there is no unconstrained short entry left. The config comment documents the
+decision needed before any re-enable: MR's `ALLOWED_REGIMES` gate is shared by
+both sides (`['SIDEWAYS']`), so MR shorts fire in SIDEWAYS by design — which
+conflicts with the review's "all shorts are STRONG_DOWN-only" pre-registered
+check. A per-side regime policy must be designed first (fading overbought in a
+range is the MR thesis, but there's no supporting data; n=1 all-time, -$4.22).
+
+**Verification:**
+- Runtime import assert: `MR_CONFIG.SHORTS_ENABLED === false` and
+  `V2_CONFIG.SHORTS_ENABLED === false` — no short path enabled anywhere.
+- MR short history: 1 trade all-time (TAOUSD, SIDEWAYS, -$4.22). MR longs
+  unaffected (9 all-time, -$15.27 — MR's overall viability is a separate
+  question for a future review; out of scope here).
+
+**What to monitor / watch for:**
+- Zero `side='short'` entries of ANY strategy post-deploy (extends the sprint's
+  criterion (b) beyond TREND).
+- Rollback: set `MR_CONFIG.SHORTS_ENABLED: true` + redeploy — but read the
+  config comment first (per-side regime policy decision required).
+
 ## 2026-07-15 — TimeGate extended to MEAN_REVERSION, SNIPER, BREAKOUT — local-claude
 
 **Commits:** <this commit>
