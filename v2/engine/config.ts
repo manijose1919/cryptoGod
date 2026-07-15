@@ -401,7 +401,14 @@ export const MR_CONFIG = {
   BB_LONG_THRESHOLD: 0.15,       // %B < 0.15 (near lower band)
 
   // Short entry: overbought at upper Bollinger Band
-  SHORTS_ENABLED: true,
+  // 2026-07-15: disabled — closes the gap the 2026-07-14 sprint left open. The sprint
+  // turned off V2_CONFIG.SHORTS_ENABLED (TREND) assuming shorts were off cohort-wide,
+  // but this flag stayed true, so MR shorts remained live (1 all-time: -$4.22, SIDEWAYS).
+  // BEFORE re-enabling: MR's ALLOWED_REGIMES gate is shared by both sides (['SIDEWAYS']),
+  // so shorts fire in SIDEWAYS — the sprint review's pre-registered check assumes all
+  // shorts are STRONG_DOWN-only. Decide per-side regime policy first (fading overbought
+  // in a range IS the MR thesis, but it has no supporting data; n=1 all-time).
+  SHORTS_ENABLED: false,
   RSI_SHORT_THRESHOLD: 72,       // RSI > 72 = overbought
   BB_SHORT_THRESHOLD: 0.85,      // %B > 0.85 (near upper band)
 
