@@ -51,14 +51,21 @@ export function runAllStrategies(
     // Strategy lookups are null-safe (?.) — disabling a strategy by removing
     // its STRATEGY_TIMEFRAMES key is the documented kill switch and must not
     // crash the loop (2026-06-09: BREAKOUT removal did exactly that).
-    // --- TREND (4h only, ADX>25 gate) ---
+    // --- TREND (ADX gate + per-regime timeframe restriction) ---
     if (STRATEGY_TIMEFRAMES.TREND?.includes(tf) && passedScan.length > 0) {
       // ADX gate: only enter TREND when market is genuinely trending (ADX>25).
       // Root cause of prior losses: EMA regime called UP in ranging conditions.
+      const regimeTfRestrict = (V2_CONFIG as any).REGIME_TIMEFRAME_RESTRICT as Record<string, string[]> | undefined;
       const trendPassed = passedScan.filter(scan => {
         const candles = tfCandles.get(scan.ticker);
         if (!candles || candles.length < 30) return false;
-        return adx(candles) >= ADX_THRESHOLDS.TREND_MIN;
+        if (adx(candles) < ADX_THRESHOLDS.TREND_MIN) return false;
+        // 2026-07-21: UP+1h proven loser (n=25, 40% WR, -$1.05/trade).
+        // If regime has a timeframe restriction, enforce it.
+        if (regimeTfRestrict && scan.regime && regimeTfRestrict[scan.regime]) {
+          if (!regimeTfRestrict[scan.regime].includes(tf)) return false;
+        }
+        return true;
       });
       if (trendPassed.length > 0) {
         const trendSignals = generateSignals(trendPassed, tfCandles);

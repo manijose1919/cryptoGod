@@ -6,7 +6,7 @@ const BREAKOUT_CONFIG = {
   ALLOWED_REGIMES: ['STRONG_UP', 'UP'], // Removed SIDEWAYS — live data: 4 SIDEWAYS entries, 0 wins, -$17.45. False breakouts in chop.
   LOOKBACK_BARS: 30,
   VOLUME_MULTIPLIER: 2.0,
-  MIN_ATR_PERCENT: 0.3,
+  MIN_ATR_PERCENT: 1.0,  // 2026-07-21: aligned with V2_CONFIG. ATR<1% = 27.3% WR death zone.
   MIN_CANDLES: 50,
 };
 

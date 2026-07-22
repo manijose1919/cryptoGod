@@ -31,12 +31,15 @@ export const V2_CONFIG = {
     //   — diversify out of 3 correlated mid-cap alts all stuck in DOWN regime. Higher vol + different sectors.
   ],
   MIN_VOLUME_24H_USD: 500_000,
-  MIN_ATR_PERCENT: 0.3,  // Calibrated for 4h candles (0.05 was for 1m/15m)
+  MIN_ATR_PERCENT: 1.0,  // 2026-07-21: raised from 0.3. Data mining: ATR<1% = 27.3% WR (n=132), death zone. ATR 1-2% = 51.7% WR, 2-3% = 63.5%. Minimum 1% eliminates fee-dominated noise trades.
   MAX_ATR_PERCENT: 8.0,  // Widened for 4h — normal BTC 4h ATR% is 1-4%
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
   ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // 2026-06-27: UP restored. ADX gate (now 20) handles trend-strength filtering. STRONG_UP-only was too strict — 1 trade in 9 days. Fee-aware floor protects against sub-fee wins.
+  // 2026-07-21: UP+1h is a proven loser all-time (n=25, 40% WR, -$1.05/trade).
+  // STRONG_UP+1h works (60% WR, +$0.45/trade). Restrict UP to 4h only.
+  REGIME_TIMEFRAME_RESTRICT: { 'UP': ['4h'] } as Record<string, string[]>,
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
@@ -148,10 +151,11 @@ export const V2_CONFIG = {
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
   TREND:           ['1h', '4h'],  // 2026-06-27: 1h restored. Was 4h-only since Jun 19 (1 trade in 9 days). Fee-aware floor now protects 1h wins. 30m stays out (proven loser).
   MOMENTUM:        ['1h', '4h'],
-  // BREAKOUT disabled 2026-06-09 — live post-baseline: 2/12 wins (17%), -$50.28.
-  // Still losing after the 2026-06-01 executor-SL fix (Jun 8: 4 trades, -$7.69).
-  // Re-enable only after a walk-forward refit validates positive OOS expectancy.
-  // BREAKOUT:        ['15m', '30m', '1h'],
+  // 2026-07-21: BREAKOUT re-enabled on 1h/4h. All-time clean data: 60% WR, +$5.45/trade (n=10).
+  // Was disabled Jun 9 after a bad 12-trade stretch. Now has fee-aware floor + ATR>=1% gate
+  // that didn't exist before. 15m/30m removed (too noisy). Volume 2x + N-bar-high breakout
+  // is a structurally different signal from TREND's EMA/MACD scoring.
+  BREAKOUT:        ['1h', '4h'],
   // MEAN_REVERSION and SCALP disabled — live data: 0% and 22% WR respectively
 };
 
