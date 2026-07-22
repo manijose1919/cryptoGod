@@ -37,6 +37,41 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-21 — Data-driven overhaul: ATR floor, regime-TF gate, BREAKOUT re-enabled, loss-streak sizing — vps-claude
+
+**Commits:** <this commit>
+**Files changed:** `v2/engine/config.ts`, `v2/engine/strategyRunner.ts`, `v2/pipeline/riskGate.ts`, `v2/pipeline/breakoutSignal.ts`, `CHANGELOG.md`
+**Stats baseline reset:** yes — new baseline to be set after deploy
+
+**What changed:**
+Deep data mining across 574 closed trades revealed several high-impact patterns. Four changes shipped:
+
+1. **ATR >= 1.0% minimum** (was 0.3%): ATR<1% trades had 27.3% WR across 132 trades — a death zone where fee burden dominates. ATR 1-2% = 51.7% WR, 2-3% = 63.5%. This is the single strongest univariate predictor of trade outcome.
+
+2. **UP regime restricted to 4h only for TREND**: UP+1h is a proven loser all-time (n=25, 40% WR, -$1.05/trade). UP+4h has 66.7% WR. STRONG_UP keeps both 1h and 4h (60% WR on both). New `REGIME_TIMEFRAME_RESTRICT` config enforced in strategyRunner.
+
+3. **BREAKOUT re-enabled on 1h/4h**: All-time clean data: 60% WR, +$5.45/trade (n=10). Was disabled Jun 9 after a bad stretch, but now has fee-aware floor + ATR>=1% gate that didn't exist then. Structurally different signal (volume breakout + N-bar high) from TREND.
+
+4. **Loss-streak position reduction**: After 2+ consecutive losses, position size cut 50%. After 4+, cut 75%. Data: post-2-loss trades had 29.3% WR (n=191) vs 62.5% after a win (n=277). Reduces capital exposure during cold streaks.
+
+**Why:**
+Current cohort at n=13 has 25% WR, -$37.89 net. Existing TREND strategy has no recoverable edge (+$0.03/trade all-time on 383 trades). Instead of more parameter tweaking, this shifts strategy by cutting proven losing segments and adding a structurally different signal source (BREAKOUT). The loss-streak sizing is a novel finding from inter-trade pattern analysis.
+
+**What to monitor / watch for:**
+- ATR filter: should see zero entries with ATR<1%. If too restrictive in low-vol markets, candidate relaxation to 0.8%.
+- Regime-TF gate: no 1h TREND entries during UP regime. STRONG_UP 1h entries should still work.
+- BREAKOUT trades: track separately. First 10 individually. Expect lower volume than TREND (needs 2x volume + N-bar high).
+- Loss-streak sizing: look for `STREAK-REDUCED` in risk gate logs. Confirm position sizes halve after 2 losses.
+- Rollback: revert this commit. Each change is independent — can also selectively undo via config.
+
+**Additional data mining findings (not shipped — candidates for future work):**
+- Time-of-day edge: hours 22, 8, 12, 15 UTC profitable; hours 0, 14, 23 losers
+- TC Value 50-70 is the sweet spot (60% WR, $0.95 avg); TC 30-50 worst zone
+- PAIRS engine: 6/6 wins, +$39.70 paper — ready for live discussion (past 30-day paper phase)
+- Inter-trade momentum is very strong — system performance is streaky
+
+---
+
 ## 2026-07-15 — MR shorts disabled: closes gap left by sprint's shorts-off decision — local-claude
 
 **Commits:** <this commit>

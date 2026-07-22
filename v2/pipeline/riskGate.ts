@@ -7,7 +7,7 @@ import type { SignalResult, RiskResult, V2PortfolioState } from './types.ts';
 import { REGIME } from './types.ts';
 import type { Candle } from './types.ts';
 import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, getExchangeFees } from '../engine/config.ts';
-import { getRecentClosedByTicker } from '../attribution/attributionStore.ts';
+import { getRecentClosedByTicker, getClosedTrades } from '../attribution/attributionStore.ts';
 import { closesToReturns, pearsonCorrelation } from '../indicators/indicators.ts';
 
 // --- Fear & Greed (lazy-loaded from existing service) ---
@@ -61,6 +61,33 @@ function makeReject(signal: SignalResult, reason: string): RiskResult {
     expectedReturn: 0,
     reason,
   };
+}
+
+// --- Loss Streak Detection ---
+// 2026-07-21: Data mining found massive edge in streak awareness.
+// After 2+ consecutive losses: 29.3% WR, -$0.35/trade (n=191).
+// After a win: 62.5% WR, +$0.89/trade (n=277).
+// Reduce position size after consecutive losses to limit damage.
+
+let _cachedStreakCount = 0;
+let _cachedStreakTime = 0;
+
+function getConsecutiveLosses(): number {
+  // Cache for 60s to avoid repeated DB queries within the same loop
+  if (Date.now() - _cachedStreakTime < 60_000) return _cachedStreakCount;
+  try {
+    const recent = getClosedTrades(10);
+    let streak = 0;
+    for (const t of recent) {
+      if ((t.pnlNet ?? 0) <= 0) streak++;
+      else break;
+    }
+    _cachedStreakCount = streak;
+    _cachedStreakTime = Date.now();
+    return streak;
+  } catch {
+    return 0;
+  }
 }
 
 // --- Risk Evaluation ---
@@ -219,7 +246,12 @@ export function evaluateRisk(
     // bet size by it added variance and bet more on slightly-worse trades. Use an
     // exposure-neutral flat factor instead.
     const confFactor = V2_CONFIG.SIZE_BY_CONFIDENCE ? signal.confidence : V2_CONFIG.CONFIDENCE_SIZE_FLAT;
-    let positionSizeUsd = maxPositionUsd * confFactor * fgMultiplier * pullbackMult;
+    // 2026-07-21: Loss streak reduction. After 2+ consecutive losses, reduce
+    // position size by 50%. After 4+, reduce by 75%. Data: post-2-loss trades
+    // have 29.3% WR (n=191) — cutting size limits damage during cold streaks.
+    const lossStreak = getConsecutiveLosses();
+    const streakMult = lossStreak >= 4 ? 0.25 : lossStreak >= 2 ? 0.5 : 1.0;
+    let positionSizeUsd = maxPositionUsd * confFactor * fgMultiplier * pullbackMult * streakMult;
 
     // Risk-based cap: limit position so max loss (entry→stop) ≤ MAX_RISK_PER_TRADE of equity.
     // High-ATR assets (e.g. AKT 5% ATR → 10% stop) get smaller positions; low-ATR assets unaffected.
@@ -247,6 +279,7 @@ export function evaluateRisk(
 
     const pullbackNote = signal.regime === REGIME.PULLBACK_UP ? `, pullback=${pullbackMult}x` : '';
     const riskNote = riskCapped ? `, RISK-CAPPED from $${riskCapSizeUsd.toFixed(0)} (stop=${(stopDistPercent * 100).toFixed(1)}%)` : '';
+    const streakNote = streakMult < 1 ? `, STREAK-REDUCED ${streakMult}x (${lossStreak} consecutive losses)` : '';
     tickersApprovedThisBatch.add(signal.ticker);
     const sideNote = isShort ? ' [SHORT]' : '';
     results.push({
@@ -258,7 +291,7 @@ export function evaluateRisk(
       takeProfit,
       expectedReturn,
       side: signal.side,
-      reason: `APPROVED${sideNote}: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x${pullbackNote}${riskNote}`,
+      reason: `APPROVED${sideNote}: size=$${positionSizeUsd.toFixed(2)}, SL=${stopLoss.toFixed(2)}, TP=${takeProfit.toFixed(2)}, ER=${(expectedReturn * 100).toFixed(2)}%, F&G=${fgMultiplier}x${pullbackNote}${riskNote}${streakNote}`,
     });
   }
 
