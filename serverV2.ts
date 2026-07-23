@@ -104,6 +104,11 @@ app.get('/api/config/flags', async (_req, res) => {
   }
 });
 
+// Read-only monitoring dashboard. Served from public/ so it survives a failed vite build.
+app.get('/monitor', (_req, res) => {
+  res.sendFile(join(__dirname, 'public', 'monitor.html'));
+});
+
 // --- SPA catch-all ---
 app.get('*', (_req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'));

@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 
+import { buildMonitorSummary } from './monitorSummary.ts';
 import { getOpenTrades, getClosedTrades, getSignalScores, getOpenTradesByStrategy, getClosedTradesByStrategy } from '../attribution/attributionStore.ts';
 import { getScorecard } from '../attribution/signalScorecard.ts';
 import { recomputeAllScores } from '../attribution/postTradeAnalyzer.ts';
@@ -28,6 +29,77 @@ v2Router.get('/status', (_req: Request, res: Response) => {
   try {
     const status = getV2Status();
     res.json(status);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// Map a raw v2_trades row to the subset of V2Trade fields buildMonitorSummary reads.
+function mapTradeRow(r: Record<string, unknown>) {
+  return {
+    ticker: r.ticker as string,
+    strategy: (r.strategy as string) ?? 'UNKNOWN',
+    side: (r.side as string) ?? 'long',
+    entryPrice: r.entry_price as number,
+    exitPrice: (r.exit_price as number) ?? null,
+    entryTime: r.entry_time as number,
+    exitTime: (r.exit_time as number) ?? null,
+    pnlNet: (r.pnl_net as number) ?? 0,
+    exitReason: (r.exit_reason as string) ?? null,
+    quantity: (r.quantity as number) ?? 0,
+    initialStop: (r.initial_stop as number) ?? 0,
+    positionSizeUsd: (r.position_size_usd as number) ?? 0,
+    currentStop: (r.current_stop as number) ?? 0,
+    takeProfitTarget: (r.take_profit_target as number) ?? 0,
+  };
+}
+
+// --- GET /monitor/summary --- read-only composite for the monitoring GUI
+v2Router.get('/monitor/summary', (_req: Request, res: Response) => {
+  try {
+    const status = getV2Status();
+    const openTrades = getOpenTrades();
+
+    const db = getDb();
+    const baselineRow = db
+      .prepare("SELECT value FROM settings WHERE key = 'stats_baseline_time'")
+      .get() as { value?: string } | undefined;
+    const rawBaseline = baselineRow?.value;
+    const parsedBaseline = Number(rawBaseline);
+    // Treat absent, NULL, empty and non-numeric alike: Number(null) and Number('')
+    // are both 0 (finite), so Number.isFinite alone would silently report an
+    // all-time cohort as "since baseline" with no warning shown.
+    const baselineMissing =
+      rawBaseline == null || rawBaseline === '' || !Number.isFinite(parsedBaseline);
+    const baselineTs = baselineMissing ? 0 : parsedBaseline;
+
+    const cols = "ticker, strategy, side, entry_price, exit_price, entry_time, exit_time, " +
+      "pnl_net, exit_reason, quantity, initial_stop, position_size_usd, current_stop, take_profit_target ";
+
+    // TREND cohort — headline KPIs + equity curve (per standing rule + sniper/day-trading isolation).
+    const trendRows = db
+      .prepare(
+        "SELECT " + cols +
+        "FROM v2_trades WHERE status = 'closed' AND strategy = 'TREND' AND entry_time >= @baselineTs ORDER BY exit_time DESC"
+      )
+      .all({ baselineTs }) as Record<string, unknown>[];
+    const cohortClosedTrend = trendRows.map(mapTradeRow) as any;
+
+    // All-strategy recent closed — feeds the capped closed-trades table only.
+    // LIMIT must stay in sync with RECENT_CLOSED_LIMIT in monitorSummary.ts.
+    const recentRows = db
+      .prepare(
+        "SELECT " + cols +
+        "FROM v2_trades WHERE status = 'closed' AND entry_time >= @baselineTs ORDER BY exit_time DESC LIMIT 25"
+      )
+      .all({ baselineTs }) as Record<string, unknown>[];
+    const recentClosedAll = recentRows.map(mapTradeRow) as any;
+
+    const summary = buildMonitorSummary({
+      status, openTrades, cohortClosedTrend, recentClosedAll,
+      baselineTs, baselineMissing, now: Date.now(),
+    });
+    res.json(summary);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
