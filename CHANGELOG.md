@@ -37,6 +37,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-23 — htfRegimes fix, dashboard polish, ATR/shorts analysis (NO config change) — local-claude
+
+**Commits:** `6617d40`
+**Files changed:** `v2/engine/tradeEngine.ts`, `v2/dashboard/monitorSummary.ts`, `public/monitor.html`, `docs/reviews/2026-07-23-atr-floor-and-shorts-analysis.md` (new), `CHANGELOG.md`
+**Stats baseline reset:** no — no trading-config change.
+
+**What changed:**
+`stats.htfRegimes` was declared, typed, and returned by `getV2Status()` but **never assigned anywhere** — so every consumer read `{}` and reported regime `UNKNOWN`. Now populated from `scanResults` (which already carry a per-ticker regime). Additive only; no trading logic touched. If you consume `/api/v2/status`, `htfRegimes` is now non-empty and reflects per-ticker regime.
+
+Dashboard polish: tile values no longer misalign when a label wraps; empty-state table cells lose the row underline and are centred; the header shows the regime spread (e.g. `3×STRONG_DOWN 2×SIDEWAYS 1×DOWN`) instead of a single label — the old code looked up `htfRegimes['BTCUSD']`, but BTC isn't in `SCAN_TICKERS`.
+
+**Analysis shipped (no config change): `docs/reviews/2026-07-23-atr-floor-and-shorts-analysis.md`**
+- **ATR floor is NOT costing trades.** 396 regime-gate rejections vs **0** ATR rejections in the recent log window; 591 regime readings, none in `['STRONG_UP','UP']`. The ~2-day drought is a long-only strategy correctly sitting out a bearish tape. **Do not relax `MIN_ATR_PERCENT` to 0.8** — that band is 30% WR / −$1.70 per trade (n=10). This supersedes the "candidate relaxation to 0.8%" note in the 2026-07-21 entry.
+- **Do NOT re-enable STRONG_DOWN-only shorts.** Aggregate (+$18.35/27) hides an era split: 2026-05-23→06-04 was 82.4% WR/+$39.15 (n=17), but 2026-06-11→07-14 is 40% WR/**−$20.80** (n=10). All-shorts monthly: May +$5.26, Jun −$10.87, Jul −$22.22. The 2026-07-14 disable was correct and remains correct.
+- **Flagged, not shipped:** raise `MIN_ATR_PERCENT` toward 2.0% once trades resume (profit is concentrated in ATR 2–3%: +$77.47/90 @ 64.4%; the 1.0–2.0% band is ~breakeven at −$1.85/104). Also: shorts' recurring `trailing`-exit giveback, and that all six `SCAN_TICKERS` are correlated high-beta alts that gate out simultaneously.
+
+**What to monitor / watch for:**
+- `htfRegimes` non-empty in `/api/v2/status`; dashboard header shows a real regime spread, not `UNKNOWN`.
+- When regimes turn STRONG_UP/UP, confirm entries resume — that validates the "regime, not ATR" diagnosis.
+- **Rollback:** `git revert 6617d40`.
+
+---
+
 ## 2026-07-23 — Read-only monitoring dashboard + HTTPS URL — local-claude
 
 **Commits:** `a0ecf29`, `b08fb6b`, `a347106`, `8e5b307`, `f931561`, `aa0e196`, `dc0c890`, merge `672bac7`
