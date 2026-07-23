@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 
+import { buildMonitorSummary } from './monitorSummary.ts';
 import { getOpenTrades, getClosedTrades, getSignalScores, getOpenTradesByStrategy, getClosedTradesByStrategy } from '../attribution/attributionStore.ts';
 import { getScorecard } from '../attribution/signalScorecard.ts';
 import { recomputeAllScores } from '../attribution/postTradeAnalyzer.ts';
@@ -28,6 +29,56 @@ v2Router.get('/status', (_req: Request, res: Response) => {
   try {
     const status = getV2Status();
     res.json(status);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// --- GET /monitor/summary --- read-only composite for the monitoring GUI
+v2Router.get('/monitor/summary', (_req: Request, res: Response) => {
+  try {
+    const status = getV2Status();
+    const openTrades = getOpenTrades();
+
+    const db = getDb();
+    const baselineRow = db
+      .prepare("SELECT value FROM settings WHERE key = 'stats_baseline_time'")
+      .get() as { value?: string } | undefined;
+    const baselineMissing = !baselineRow || baselineRow.value == null;
+    const baselineTs = baselineMissing ? 0 : Number(baselineRow!.value);
+
+    // Cohort = closed v2_trades with entry_time >= baseline (per standing rule).
+    const rows = db
+      .prepare(
+        "SELECT ticker, strategy, side, entry_price, exit_price, entry_time, exit_time, " +
+        "pnl_net, exit_reason, quantity, initial_stop, position_size_usd, current_stop, take_profit_target " +
+        "FROM v2_trades WHERE status = 'closed' AND entry_time >= @baselineTs ORDER BY exit_time DESC"
+      )
+      .all({ baselineTs }) as Record<string, unknown>[];
+
+    // Map raw rows to the subset of V2Trade fields buildMonitorSummary reads.
+    const cohortClosed = rows.map((r) => ({
+      ticker: r.ticker as string,
+      strategy: (r.strategy as string) ?? 'TREND',
+      side: (r.side as string) ?? 'long',
+      entryPrice: r.entry_price as number,
+      exitPrice: (r.exit_price as number) ?? null,
+      entryTime: r.entry_time as number,
+      exitTime: (r.exit_time as number) ?? null,
+      pnlNet: (r.pnl_net as number) ?? 0,
+      exitReason: (r.exit_reason as string) ?? null,
+      quantity: (r.quantity as number) ?? 0,
+      initialStop: (r.initial_stop as number) ?? 0,
+      positionSizeUsd: (r.position_size_usd as number) ?? 0,
+      currentStop: (r.current_stop as number) ?? 0,
+      takeProfitTarget: (r.take_profit_target as number) ?? 0,
+    })) as any;
+
+    const summary = buildMonitorSummary({
+      status, openTrades, cohortClosed,
+      baselineTs, baselineMissing, now: Date.now(),
+    });
+    res.json(summary);
   } catch (e) {
     res.status(500).json({ error: (e as Error).message });
   }
