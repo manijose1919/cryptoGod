@@ -25,7 +25,8 @@ export interface MonitorSummary {
     isRunning: boolean;
     stale: boolean;
     lastLoopAt: number;
-    regime: string;
+    regime: string;                        // dominant regime across scanned tickers
+    regimes: Record<string, string>;       // per-ticker, so the page can show the spread
   };
   account: { balance: number; openPositionsCount: number };
   cohort: {
@@ -58,9 +59,18 @@ function outcomeOf(pnlNet: number): 'WIN' | 'LOSS' | 'BREAKEVEN' {
 export function buildMonitorSummary(deps: MonitorDeps): MonitorSummary {
   const { status, openTrades, cohortClosedTrend, recentClosedAll, baselineTs, baselineMissing, now } = deps;
 
-  const regime =
-    (status.htfRegimes && (status.htfRegimes['BTCUSD'] ?? Object.values(status.htfRegimes)[0])) ||
-    'UNKNOWN';
+  // Dominant regime across scanned tickers. A fixed BTCUSD lookup was wrong —
+  // BTC isn't in SCAN_TICKERS, so it always fell through to an arbitrary entry.
+  const regimes: Record<string, string> = status.htfRegimes ?? {};
+  const regimeCounts = new Map<string, number>();
+  for (const r of Object.values(regimes)) {
+    if (r) regimeCounts.set(r, (regimeCounts.get(r) ?? 0) + 1);
+  }
+  let regime = 'UNKNOWN';
+  let topCount = 0;
+  for (const [name, count] of regimeCounts) {
+    if (count > topCount) { regime = name; topCount = count; }
+  }
 
   // Cohort stats — TREND only
   const tradeCount = cohortClosedTrend.length;
@@ -111,6 +121,7 @@ export function buildMonitorSummary(deps: MonitorDeps): MonitorSummary {
       stale: !status.isRunning || (now - (status.lastLoopAt ?? 0)) > STALE_MS,
       lastLoopAt: status.lastLoopAt ?? 0,
       regime,
+      regimes,
     },
     account: { balance: status.portfolioCash ?? 0, openPositionsCount: openTrades.length },
     cohort: {
