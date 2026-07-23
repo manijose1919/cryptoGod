@@ -16,7 +16,7 @@ function trade(over: Record<string, unknown> = {}): any {
 }
 
 const baseStatus: any = {
-  mode: 'paper', isRunning: true, lastLoopTime: 5_000, loopCount: 3,
+  mode: 'paper', isRunning: true, lastLoopAt: 9_000, loopCount: 3,
   rejectedByScan: 0, rejectedBySignal: 0, rejectedByRisk: 0,
   htfRegimes: { BTCUSD: 'UP' }, openPositions: 0, totalTrades: 0,
   portfolioCash: 1000, totalPnlNet: 0,
@@ -24,7 +24,7 @@ const baseStatus: any = {
 
 function deps(over: Partial<MonitorDeps> = {}): MonitorDeps {
   return {
-    status: baseStatus, openTrades: [], cohortClosed: [],
+    status: baseStatus, openTrades: [], cohortClosedTrend: [], recentClosedAll: [],
     baselineTs: 1_784_740_967_690, baselineMissing: false, now: 9_999,
     ...over,
   } as MonitorDeps;
@@ -43,11 +43,11 @@ describe('buildMonitorSummary', () => {
   });
 
   it('computes winRate, netPnl and monotonic cumulative equity curve', () => {
-    const cohortClosed = [
+    const cohortClosedTrend = [
       trade({ pnlNet: 9, exitTime: 3_000, entryTime: 2_500 }),   // win
       trade({ pnlNet: -4, exitTime: 2_000, entryTime: 1_800 }),  // loss
     ];
-    const s = buildMonitorSummary(deps({ cohortClosed }));
+    const s = buildMonitorSummary(deps({ cohortClosedTrend, recentClosedAll: cohortClosedTrend }));
     expect(s.cohort.tradeCount).toBe(2);
     expect(s.cohort.netPnl).toBeCloseTo(5);
     expect(s.cohort.winRate).toBeCloseTo(0.5);
@@ -59,18 +59,39 @@ describe('buildMonitorSummary', () => {
 
   it('avgR uses risk = |entry-initialStop|*qty', () => {
     // risk = |100-90|*1 = 10; R = pnlNet/risk = 9/10 = 0.9
-    const s = buildMonitorSummary(deps({ cohortClosed: [trade({ pnlNet: 9 })] }));
+    const s = buildMonitorSummary(deps({ cohortClosedTrend: [trade({ pnlNet: 9 })] }));
     expect(s.cohort.avgR).toBeCloseTo(0.9);
   });
 
   it('recentClosed derives outcome from pnlNet and caps at 25 newest', () => {
     const many = Array.from({ length: 30 }, (_, i) =>
       trade({ pnlNet: i % 2 === 0 ? 5 : -5, exitTime: 1_000 + i }));
-    const s = buildMonitorSummary(deps({ cohortClosed: many }));
+    const s = buildMonitorSummary(deps({ recentClosedAll: many }));
     expect(s.recentClosed.length).toBe(25);
     // newest first (highest exitTime)
     expect(s.recentClosed[0].exitTs).toBe(1_029);
     expect(['WIN', 'LOSS', 'BREAKEVEN']).toContain(s.recentClosed[0].outcome);
+  });
+
+  it('cohort KPIs/equityCurve reflect TREND only; recentClosed includes non-TREND rows (reporting contract)', () => {
+    const trendTrades = [
+      trade({ pnlNet: 9, exitTime: 3_000, entryTime: 2_500, strategy: 'TREND' }),
+      trade({ pnlNet: -4, exitTime: 2_000, entryTime: 1_800, strategy: 'TREND' }),
+    ];
+    const sniperTrade = trade({
+      pnlNet: 1_000, exitTime: 4_000, entryTime: 3_900, strategy: 'SNIPER_KRAKEN',
+    });
+    const recentClosedAll = [...trendTrades, sniperTrade];
+    const s = buildMonitorSummary(deps({ cohortClosedTrend: trendTrades, recentClosedAll }));
+
+    // Cohort KPIs and equity curve must NOT be polluted by the sniper trade's huge pnl.
+    expect(s.cohort.tradeCount).toBe(2);
+    expect(s.cohort.netPnl).toBeCloseTo(5);
+    expect(s.equityCurve.map(p => p.cumPnl)).toEqual([-4, 5]);
+
+    // recentClosed (all-strategy table) includes the sniper row.
+    expect(s.recentClosed).toHaveLength(3);
+    expect(s.recentClosed.some(r => r.strategy === 'SNIPER_KRAKEN')).toBe(true);
   });
 
   it('maps open positions from openTrades', () => {
@@ -86,14 +107,40 @@ describe('buildMonitorSummary', () => {
     expect(s.account.openPositionsCount).toBe(1);
   });
 
+  it('account.openPositionsCount equals openTrades.length regardless of strategy mix; cohort has no openCount', () => {
+    const openTrades = [
+      trade({ status: 'open', ticker: 'ETHUSD', strategy: 'MOMENTUM' }),
+      trade({ status: 'open', ticker: 'BTCUSD', strategy: 'SNIPER_KRAKEN' }),
+    ];
+    const s = buildMonitorSummary(deps({ openTrades }));
+    expect(s.account.openPositionsCount).toBe(openTrades.length);
+    expect((s.cohort as any).openCount).toBeUndefined();
+  });
+
   it('regime falls back to first htfRegime then UNKNOWN', () => {
     expect(buildMonitorSummary(deps()).status.regime).toBe('UP');
     const noBtc = { ...baseStatus, htfRegimes: {} };
     expect(buildMonitorSummary(deps({ status: noBtc })).status.regime).toBe('UNKNOWN');
   });
 
-  it('flags stale engine when lastLoopTime is old', () => {
-    const s = buildMonitorSummary(deps({ now: 5_000 + 6 * 60_000 }));
+  it('flags stale engine when lastLoopAt (wall-clock heartbeat) is old, fresh when recent', () => {
+    const now = 10_000_000;
+    const fresh = buildMonitorSummary(deps({
+      status: { ...baseStatus, lastLoopAt: now - 1_000 }, now,
+    }));
+    expect(fresh.status.stale).toBe(false);
+
+    const old = buildMonitorSummary(deps({
+      status: { ...baseStatus, lastLoopAt: now - 10 * 60_000 }, now,
+    }));
+    expect(old.status.stale).toBe(true);
+  });
+
+  it('flags stale when engine is not running, even with a fresh lastLoopAt', () => {
+    const now = 10_000_000;
+    const s = buildMonitorSummary(deps({
+      status: { ...baseStatus, isRunning: false, lastLoopAt: now - 1_000 }, now,
+    }));
     expect(s.status.stale).toBe(true);
   });
 });

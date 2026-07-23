@@ -34,6 +34,26 @@ v2Router.get('/status', (_req: Request, res: Response) => {
   }
 });
 
+// Map a raw v2_trades row to the subset of V2Trade fields buildMonitorSummary reads.
+function mapTradeRow(r: Record<string, unknown>) {
+  return {
+    ticker: r.ticker as string,
+    strategy: (r.strategy as string) ?? 'UNKNOWN',
+    side: (r.side as string) ?? 'long',
+    entryPrice: r.entry_price as number,
+    exitPrice: (r.exit_price as number) ?? null,
+    entryTime: r.entry_time as number,
+    exitTime: (r.exit_time as number) ?? null,
+    pnlNet: (r.pnl_net as number) ?? 0,
+    exitReason: (r.exit_reason as string) ?? null,
+    quantity: (r.quantity as number) ?? 0,
+    initialStop: (r.initial_stop as number) ?? 0,
+    positionSizeUsd: (r.position_size_usd as number) ?? 0,
+    currentStop: (r.current_stop as number) ?? 0,
+    takeProfitTarget: (r.take_profit_target as number) ?? 0,
+  };
+}
+
 // --- GET /monitor/summary --- read-only composite for the monitoring GUI
 v2Router.get('/monitor/summary', (_req: Request, res: Response) => {
   try {
@@ -44,38 +64,34 @@ v2Router.get('/monitor/summary', (_req: Request, res: Response) => {
     const baselineRow = db
       .prepare("SELECT value FROM settings WHERE key = 'stats_baseline_time'")
       .get() as { value?: string } | undefined;
-    const baselineMissing = !baselineRow || baselineRow.value == null;
-    const baselineTs = baselineMissing ? 0 : Number(baselineRow!.value);
+    const rawBaseline = baselineRow?.value;
+    const parsedBaseline = Number(rawBaseline);
+    const baselineMissing = !Number.isFinite(parsedBaseline);
+    const baselineTs = baselineMissing ? 0 : parsedBaseline;
 
-    // Cohort = closed v2_trades with entry_time >= baseline (per standing rule).
-    const rows = db
+    const cols = "ticker, strategy, side, entry_price, exit_price, entry_time, exit_time, " +
+      "pnl_net, exit_reason, quantity, initial_stop, position_size_usd, current_stop, take_profit_target ";
+
+    // TREND cohort — headline KPIs + equity curve (per standing rule + sniper/day-trading isolation).
+    const trendRows = db
       .prepare(
-        "SELECT ticker, strategy, side, entry_price, exit_price, entry_time, exit_time, " +
-        "pnl_net, exit_reason, quantity, initial_stop, position_size_usd, current_stop, take_profit_target " +
-        "FROM v2_trades WHERE status = 'closed' AND entry_time >= @baselineTs ORDER BY exit_time DESC"
+        "SELECT " + cols +
+        "FROM v2_trades WHERE status = 'closed' AND strategy = 'TREND' AND entry_time >= @baselineTs ORDER BY exit_time DESC"
       )
       .all({ baselineTs }) as Record<string, unknown>[];
+    const cohortClosedTrend = trendRows.map(mapTradeRow) as any;
 
-    // Map raw rows to the subset of V2Trade fields buildMonitorSummary reads.
-    const cohortClosed = rows.map((r) => ({
-      ticker: r.ticker as string,
-      strategy: (r.strategy as string) ?? 'TREND',
-      side: (r.side as string) ?? 'long',
-      entryPrice: r.entry_price as number,
-      exitPrice: (r.exit_price as number) ?? null,
-      entryTime: r.entry_time as number,
-      exitTime: (r.exit_time as number) ?? null,
-      pnlNet: (r.pnl_net as number) ?? 0,
-      exitReason: (r.exit_reason as string) ?? null,
-      quantity: (r.quantity as number) ?? 0,
-      initialStop: (r.initial_stop as number) ?? 0,
-      positionSizeUsd: (r.position_size_usd as number) ?? 0,
-      currentStop: (r.current_stop as number) ?? 0,
-      takeProfitTarget: (r.take_profit_target as number) ?? 0,
-    })) as any;
+    // All-strategy recent closed — feeds the capped closed-trades table only.
+    const recentRows = db
+      .prepare(
+        "SELECT " + cols +
+        "FROM v2_trades WHERE status = 'closed' AND entry_time >= @baselineTs ORDER BY exit_time DESC LIMIT 25"
+      )
+      .all({ baselineTs }) as Record<string, unknown>[];
+    const recentClosedAll = recentRows.map(mapTradeRow) as any;
 
     const summary = buildMonitorSummary({
-      status, openTrades, cohortClosed,
+      status, openTrades, cohortClosedTrend, recentClosedAll,
       baselineTs, baselineMissing, now: Date.now(),
     });
     res.json(summary);

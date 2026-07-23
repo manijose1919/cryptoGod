@@ -54,6 +54,7 @@ const DECISION_HEARTBEAT_LOOPS = 30; // ~30 min on 60s BOT_LOOP_INTERVAL_MS
 
 const stats = {
   lastLoopTime: 0,
+  lastLoopAt: 0,
   loopCount: 0,
   rejectedByScan: 0,
   rejectedBySignal: 0,
@@ -69,6 +70,7 @@ export interface V2EngineStatus {
   mode: string;
   isRunning: boolean;
   lastLoopTime: number;
+  lastLoopAt: number;
   lastScanReasons?: { ticker: string; reason: string }[];
   candleCounts?: Record<string, number>;
   loopCount: number;
@@ -271,6 +273,7 @@ export function getV2Status(): V2EngineStatus {
     mode: V2_CONFIG.MODE,
     isRunning,
     lastLoopTime: stats.lastLoopTime,
+    lastLoopAt: stats.lastLoopAt,
     loopCount: stats.loopCount,
     rejectedByScan: stats.rejectedByScan,
     rejectedBySignal: stats.rejectedBySignal,
@@ -548,6 +551,7 @@ async function runLoop(): Promise<void> {
     if (err.stack) console.error(`[V2] Stack: ${err.stack.split('\n').slice(1, 4).join(' | ')}`);
     stats.lastLoopTime = Date.now() - loopStart;
   } finally {
+    stats.lastLoopAt = Date.now();
     loopInProgress = false;
   }
 }

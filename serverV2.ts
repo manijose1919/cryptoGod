@@ -104,7 +104,7 @@ app.get('/api/config/flags', async (_req, res) => {
   }
 });
 
-// Read-only monitoring dashboard (source-controlled; not part of the vite build)
+// Read-only monitoring dashboard. Served from public/ so it survives a failed vite build.
 app.get('/monitor', (_req, res) => {
   res.sendFile(join(__dirname, 'public', 'monitor.html'));
 });
