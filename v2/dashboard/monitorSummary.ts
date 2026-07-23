@@ -2,7 +2,7 @@
 // Monitor dashboard payload builder (pure).
 // No I/O — takes live + DB data, returns the display shape.
 // ============================================
-import type { V2Trade } from '../attribution/attributionStore.ts';
+import type { V2Trade } from '../pipeline/types.ts';
 import type { V2EngineStatus } from '../engine/tradeEngine.ts';
 
 const STALE_MS = 5 * 60_000;      // engine considered stale if no loop in 5 min
@@ -90,14 +90,14 @@ export function buildMonitorSummary(deps: MonitorDeps): MonitorSummary {
     .sort((a, b) => (b.exitTime ?? 0) - (a.exitTime ?? 0))
     .slice(0, RECENT_CLOSED_LIMIT)
     .map(t => ({
-      ticker: t.ticker, strategy: t.strategy, entry: t.entryPrice,
+      ticker: t.ticker, strategy: t.strategy ?? 'UNKNOWN', entry: t.entryPrice,
       exit: t.exitPrice ?? null, pnlNet: t.pnlNet ?? 0,
       outcome: outcomeOf(t.pnlNet ?? 0), reason: t.exitReason ?? null,
       exitTs: t.exitTime ?? null,
     }));
 
   const openPositions = openTrades.map(t => ({
-    ticker: t.ticker, strategy: t.strategy, side: t.side,
+    ticker: t.ticker, strategy: t.strategy ?? 'UNKNOWN', side: t.side,
     entry: t.entryPrice, positionSizeUsd: t.positionSizeUsd,
     stop: t.currentStop, target: t.takeProfitTarget,
     heldMs: Math.max(0, now - (t.entryTime ?? now)),
