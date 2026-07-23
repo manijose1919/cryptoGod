@@ -37,6 +37,40 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-23 — Read-only monitoring dashboard + HTTPS URL — local-claude
+
+**Commits:** `a0ecf29`, `b08fb6b`, `a347106`, `8e5b307`, `f931561`, `aa0e196`, `dc0c890`, merge `672bac7`
+**Files changed:** `v2/dashboard/monitorSummary.ts` (new), `v2/dashboard/monitorSummary.test.ts` (new), `v2/dashboard/attributionAPI.ts`, `public/monitor.html` (new), `serverV2.ts`, `v2/engine/tradeEngine.ts`, `vitest.config.ts`, `CHANGELOG.md`
+**Stats baseline reset:** no — monitoring/infra change, not a trading-config change.
+
+**What changed:**
+New read-only monitoring GUI at **https://31-97-7-138.sslip.io/monitor** (Let's Encrypt cert, HTTP basic-auth, user `admin`). Backed by `GET /api/v2/monitor/summary` on the existing `v2Router`. Single self-contained `public/monitor.html` polls it every 10s. No control actions — the endpoint only SELECTs.
+
+Scope split (deliberate): **headline KPI tiles + equity curve are TREND-only**, matching `getV2Status().portfolioCash` which is TREND-isolated, honoring the repo's contract that sniper P&L is never aggregated with day-trading P&L. **Open/closed trade tables show all strategies**, each row labelled. Cohort filtered by `entry_time >= stats_baseline_time` per the standing rule.
+
+**Engine change (additive only):** added `lastLoopAt` (wall-clock heartbeat) to `stats`, `V2EngineStatus`, and `getV2Status()`, stamped in `runLoop()`'s existing `finally`. `lastLoopTime` keeps its existing meaning (elapsed loop duration) — `scripts/v2-health.mjs`, `components/V2AttributionTab.tsx` and `monitor.sh` all depend on that. No trading logic touched.
+
+Why it was needed: the dashboard's staleness check originally used `lastLoopTime`, which is a *duration*, not a timestamp — so `now - lastLoopTime` always exceeded the 5-min threshold and the health dot would have been permanently red. Caught in final review before deploy.
+
+**VPS infra (one-time, not in repo):**
+- nginx reverse proxy, `auth_basic` + `/etc/nginx/.htpasswd` (user `admin`), `proxy_pass http://127.0.0.1:3033`.
+- Site file `/etc/nginx/sites-available/monitor`; includes an unauthenticated `location ^~ /.well-known/acme-challenge/ { auth_basic off; root /var/www/html; }` so cert renewal isn't 401'd. Certbot added the 443 block + 80→443 redirect.
+- Cert expires 2026-10-21; `certbot renew --dry-run` passes.
+- **ufw tightened:** removed public `3033`, `3000`, `3080`. Only `22`, `80`, `443` are internet-reachable. The old dev dashboard on `:3033` is no longer directly accessible — it is now reachable only through the password-gated HTTPS host.
+
+**Why:**
+A clean, password-gated monitoring surface without exposing the sprawling 40-panel dev dashboard or a raw `IP:port`. Read-only by design — no route can move money.
+
+**What to monitor / watch for:**
+- `https://31-97-7-138.sslip.io/monitor` prompts for password then loads; empty-cohort state renders (0 trades since the 2026-07-22 baseline as of writing).
+- Health dot should be GREEN when the engine is looping. If it goes red, check `lastLoopAt` freshness in `/api/v2/status` — that is now a real hang signal, not a display artifact.
+- Cert auto-renew before 2026-10-21.
+- **Rollback:** `ufw allow 3033/tcp` restores direct access; `rm /etc/nginx/sites-enabled/monitor && systemctl reload nginx` drops the proxy; `git revert 672bac7` removes the code.
+
+**Related observation (not addressed here):** zero entries since the 2026-07-22 baseline (~2 days) under the new ATR ≥ 1.0% floor, engine otherwise healthy. Candidate relaxation to 0.8% was already flagged in the 2026-07-21 entry.
+
+---
+
 ## 2026-07-21 — Data-driven overhaul: ATR floor, regime-TF gate, BREAKOUT re-enabled, loss-streak sizing — vps-claude
 
 **Commits:** <this commit>
