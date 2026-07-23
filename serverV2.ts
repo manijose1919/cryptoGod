@@ -104,6 +104,11 @@ app.get('/api/config/flags', async (_req, res) => {
   }
 });
 
+// Read-only monitoring dashboard (source-controlled; not part of the vite build)
+app.get('/monitor', (_req, res) => {
+  res.sendFile(join(__dirname, 'public', 'monitor.html'));
+});
+
 // --- SPA catch-all ---
 app.get('*', (_req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'));
