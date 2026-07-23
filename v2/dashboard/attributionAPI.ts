@@ -66,7 +66,11 @@ v2Router.get('/monitor/summary', (_req: Request, res: Response) => {
       .get() as { value?: string } | undefined;
     const rawBaseline = baselineRow?.value;
     const parsedBaseline = Number(rawBaseline);
-    const baselineMissing = !Number.isFinite(parsedBaseline);
+    // Treat absent, NULL, empty and non-numeric alike: Number(null) and Number('')
+    // are both 0 (finite), so Number.isFinite alone would silently report an
+    // all-time cohort as "since baseline" with no warning shown.
+    const baselineMissing =
+      rawBaseline == null || rawBaseline === '' || !Number.isFinite(parsedBaseline);
     const baselineTs = baselineMissing ? 0 : parsedBaseline;
 
     const cols = "ticker, strategy, side, entry_price, exit_price, entry_time, exit_time, " +
@@ -82,6 +86,7 @@ v2Router.get('/monitor/summary', (_req: Request, res: Response) => {
     const cohortClosedTrend = trendRows.map(mapTradeRow) as any;
 
     // All-strategy recent closed — feeds the capped closed-trades table only.
+    // LIMIT must stay in sync with RECENT_CLOSED_LIMIT in monitorSummary.ts.
     const recentRows = db
       .prepare(
         "SELECT " + cols +
