@@ -51,17 +51,17 @@
   <div class="grid" id="tiles"></div>
 
   <div class="panel">
-    <h2>Equity curve — current cohort (realized net PnL)</h2>
+    <h2>Equity curve — TREND only, current cohort (realized net PnL)</h2>
     <div id="equity"></div>
   </div>
 
   <div class="panel">
-    <h2>Open positions</h2>
+    <h2>Open positions — all strategies</h2>
     <div class="scroll"><table id="open"></table></div>
   </div>
 
   <div class="panel">
-    <h2>Recent closed — since baseline</h2>
+    <h2>Recent closed — all strategies, since baseline</h2>
     <div class="scroll"><table id="closed"></table></div>
   </div>
 </div>
@@ -78,12 +78,12 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 function tiles(s) {
   const c = s.cohort;
   const rows = [
-    ['Balance', '$' + fmtNum(s.account.balance), ''],
-    ['Net PnL (cohort)', fmtUsd(c.netPnl), cls(c.netPnl)],
-    ['Win rate', fmtPct(c.winRate), ''],
-    ['Trades', String(c.tradeCount), ''],
-    ['Open', String(c.openCount), ''],
-    ['Avg R', c.avgR==null?'—':fmtNum(c.avgR), c.avgR==null?'':cls(c.avgR)],
+    ['TREND cash', '$' + fmtNum(s.account.balance), ''],
+    ['Net PnL (TREND)', fmtUsd(c.netPnl), cls(c.netPnl)],
+    ['Win rate (TREND)', fmtPct(c.winRate), ''],
+    ['Trades (TREND)', String(c.tradeCount), ''],
+    ['Open (all)', String(s.account.openPositionsCount), ''],
+    ['Avg R (TREND)', c.avgR==null?'—':fmtNum(c.avgR), c.avgR==null?'':cls(c.avgR)],
   ];
   document.getElementById('tiles').innerHTML = rows.map(([k,v,cl]) =>
     `<div class="tile"><div class="k">${k}</div><div class="v ${cl}">${v}</div></div>`).join('');
@@ -101,10 +101,13 @@ function equity(curve) {
   const last = ys.at(-1);
   const color = last>=0 ? 'var(--green)' : 'var(--red)';
   const zeroY = y(0).toFixed(1);
+  const dot = curve.length === 1
+    ? `<circle cx="${x(0)}" cy="${y(ys[0])}" r="3" fill="${color}"/>` : '';
   el.innerHTML =
     `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
        <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="var(--line)"/>
        <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2"/>
+       ${dot}
      </svg>`;
 }
 
@@ -122,7 +125,7 @@ function closedTable(rows) {
   const t = document.getElementById('closed');
   if (!rows.length) { t.innerHTML = '<tr><td class="empty">No trades since baseline yet.</td></tr>'; return; }
   t.innerHTML =
-    '<tr><th>Ticker</th><th>Strategy</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Outcome</th><th>Reason</th><th>When</th></tr>' +
+    '<tr><th>Ticker</th><th>Strategy</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Outcome</th><th>Reason</th><th>When (UTC)</th></tr>' +
     rows.map(r=>`<tr><td>${esc(r.ticker)}</td><td>${esc(r.strategy)}</td>
       <td>${fmtNum(r.entry,4)}</td><td>${r.exit==null?'—':fmtNum(r.exit,4)}</td>
       <td class="${cls(r.pnlNet)}">${fmtUsd(r.pnlNet)}</td>
@@ -148,16 +151,26 @@ function render(s) {
 }
 
 async function tick() {
+  let data;
   try {
     const r = await fetch('/api/v2/monitor/summary', { cache:'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    render(await r.json());
+    data = await r.json();
   } catch (e) {
     const el = document.getElementById('err');
     el.textContent = 'Can\'t reach backend — retrying… (' + e.message + ')';
     el.style.display = 'block';
     document.getElementById('dot').className = 'dot bad';
     document.getElementById('health').textContent = 'disconnected';
+    return;
+  }
+  try {
+    render(data);
+  } catch (e) {
+    console.error(e);
+    const el = document.getElementById('err');
+    el.textContent = 'Display error — see console';
+    el.style.display = 'block';
   }
 }
 tick();
