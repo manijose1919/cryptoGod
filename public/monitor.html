@@ -79,7 +79,7 @@ function tiles(s) {
   const c = s.cohort;
   const rows = [
     ['TREND cash', '$' + fmtNum(s.account.balance), ''],
-    ['Net PnL (TREND)', fmtUsd(c.netPnl), cls(c.netPnl)],
+    ['Net PnL (TREND, cohort)', fmtUsd(c.netPnl), cls(c.netPnl)],
     ['Win rate (TREND)', fmtPct(c.winRate), ''],
     ['Trades (TREND)', String(c.tradeCount), ''],
     ['Open (all)', String(s.account.openPositionsCount), ''],
@@ -146,7 +146,9 @@ function render(s) {
     + ' · regime ' + s.status.regime;
   document.getElementById('asof').textContent =
     'updated ' + new Date(s.asOf).toISOString().slice(11,19) + ' UTC'
-    + (s.cohort.baselineMissing ? ' · ⚠ no baseline set' : '');
+    + ' · cohort since ' + (s.cohort.baselineMissing
+        ? '⚠ no baseline set'
+        : new Date(s.cohort.baselineTs).toISOString().slice(0,16).replace('T',' ') + ' UTC');
   tiles(s); equity(s.equityCurve); openTable(s.openPositions); closedTable(s.recentClosed);
 }
 
@@ -171,6 +173,8 @@ async function tick() {
     const el = document.getElementById('err');
     el.textContent = 'Display error — see console';
     el.style.display = 'block';
+    // Don't leave a green "healthy" dot next to an error banner.
+    document.getElementById('dot').className = 'dot bad';
   }
 }
 tick();
