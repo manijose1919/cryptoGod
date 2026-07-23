@@ -73,6 +73,7 @@ const fmtNum = (n,d=2) => n==null ? '—' : Number(n).toFixed(d);
 const ago = ms => { const s=Math.floor(ms/1000); if(s<60)return s+'s'; const m=Math.floor(s/60);
   if(m<60)return m+'m'; const h=Math.floor(m/60); return h+'h'+(m%60)+'m'; };
 const cls = n => n>0?'pos':n<0?'neg':'';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function tiles(s) {
   const c = s.cohort;
@@ -112,7 +113,7 @@ function openTable(rows) {
   if (!rows.length) { t.innerHTML = '<tr><td class="empty">No open positions.</td></tr>'; return; }
   t.innerHTML =
     '<tr><th>Ticker</th><th>Strategy</th><th>Side</th><th>Entry</th><th>Size $</th><th>Stop</th><th>Target</th><th>Held</th></tr>' +
-    rows.map(r=>`<tr><td>${r.ticker}</td><td>${r.strategy}</td><td>${r.side}</td>
+    rows.map(r=>`<tr><td>${esc(r.ticker)}</td><td>${esc(r.strategy)}</td><td>${esc(r.side)}</td>
       <td>${fmtNum(r.entry,4)}</td><td>${fmtNum(r.positionSizeUsd)}</td>
       <td>${fmtNum(r.stop,4)}</td><td>${fmtNum(r.target,4)}</td><td>${ago(r.heldMs)}</td></tr>`).join('');
 }
@@ -122,11 +123,11 @@ function closedTable(rows) {
   if (!rows.length) { t.innerHTML = '<tr><td class="empty">No trades since baseline yet.</td></tr>'; return; }
   t.innerHTML =
     '<tr><th>Ticker</th><th>Strategy</th><th>Entry</th><th>Exit</th><th>Net PnL</th><th>Outcome</th><th>Reason</th><th>When</th></tr>' +
-    rows.map(r=>`<tr><td>${r.ticker}</td><td>${r.strategy}</td>
+    rows.map(r=>`<tr><td>${esc(r.ticker)}</td><td>${esc(r.strategy)}</td>
       <td>${fmtNum(r.entry,4)}</td><td>${r.exit==null?'—':fmtNum(r.exit,4)}</td>
       <td class="${cls(r.pnlNet)}">${fmtUsd(r.pnlNet)}</td>
-      <td class="${r.outcome==='WIN'?'pos':r.outcome==='LOSS'?'neg':''}">${r.outcome}</td>
-      <td>${r.reason||'—'}</td>
+      <td class="${r.outcome==='WIN'?'pos':r.outcome==='LOSS'?'neg':''}">${esc(r.outcome)}</td>
+      <td>${esc(r.reason||'—')}</td>
       <td>${r.exitTs?new Date(r.exitTs).toISOString().slice(5,16).replace('T',' '):'—'}</td></tr>`).join('');
 }
 
