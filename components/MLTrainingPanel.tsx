@@ -225,7 +225,7 @@ export const MLTrainingPanel: React.FC<MLTrainingPanelProps> = ({ addLog }) => {
 
   const handleGenerateSamples = useCallback(async () => {
     setGenerating(true);
-    addLog?.('[ML Training] Starting synthetic sample generation...', 'info');
+    addLog?.('[ML Training] Starting synthetic sample generation...', 'INFO');
 
     try {
       const res = await fetch('/api/ml-training/generate-samples', {
@@ -237,14 +237,14 @@ export const MLTrainingPanel: React.FC<MLTrainingPanelProps> = ({ addLog }) => {
       const result = await res.json();
 
       if (result.error) {
-        addLog?.(`[ML Training] Error: ${result.error}`, 'error');
+        addLog?.(`[ML Training] Error: ${result.error}`, 'ERROR');
         setGenerating(false);
         return;
       }
 
-      addLog?.(`[ML Training] Job ${result.jobId} started (${result.totalPairs || '?'} pairs)`, 'success');
+      addLog?.(`[ML Training] Job ${result.jobId} started (${result.totalPairs || '?'} pairs)`, 'INFO');
     } catch (err) {
-      addLog?.(`[ML Training] Failed to start generation: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error');
+      addLog?.(`[ML Training] Failed to start generation: ${err instanceof Error ? err.message : 'Unknown error'}`, 'ERROR');
       setGenerating(false);
     }
   }, [addLog]);

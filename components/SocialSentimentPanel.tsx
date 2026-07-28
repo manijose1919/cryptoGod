@@ -106,11 +106,7 @@ export default function SocialSentimentPanel() {
                 <span className={`mt-0.5 ${SENTIMENT_COLORS[h.sentiment]}`}>
                   {h.sentiment === 'positive' ? '+' : h.sentiment === 'negative' ? '-' : '~'}
                 </span>
-                {h.url ? (
-                  <a href={h.url} target="_blank" rel="noopener noreferrer" className="text-slate-300 leading-tight hover:text-cyan-300 hover:underline transition-colors">{h.title}</a>
-                ) : (
-                  <span className="text-slate-300 leading-tight">{h.title}</span>
-                )}
+                <span className="text-slate-300 leading-tight">{h.title}</span>
                 <span className="text-slate-600 shrink-0">{h.source}</span>
               </div>
             ))}

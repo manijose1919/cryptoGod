@@ -550,7 +550,7 @@ export async function fetchSocialSentiment(symbol: string): Promise<SentimentDat
 
   const sentimentScore = Math.max(-50, Math.min(50, baseScore + pseudoRandom));
 
-  let overallSentiment: string;
+  let overallSentiment: SentimentData['overallSentiment'];
   if (sentimentScore > 30) overallSentiment = 'VERY_BULLISH';
   else if (sentimentScore > 10) overallSentiment = 'BULLISH';
   else if (sentimentScore > -10) overallSentiment = 'NEUTRAL';

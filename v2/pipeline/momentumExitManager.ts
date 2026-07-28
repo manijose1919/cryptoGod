@@ -126,11 +126,19 @@ export async function checkMomentumExits(
         if (!trade.trailingActivated) {
           trailingJustActivated = true;
         }
-        const peakGain = trade.peakPrice - trade.entryPrice;
-        const trailStop = trade.peakPrice - peakGain * MOM_EXIT.TRAIL_GIVEBACK;
-        if (trailStop > newStop) {
-          newStop = trailStop;
-          updateTradeStop(trade.id, newStop);
+        // peakPrice is set above (line 58-60) whenever currentPrice exceeds entryPrice,
+        // which is guaranteed here since pnlPercent >= TRAIL_ACTIVATE (> 0) implies
+        // currentPrice > entryPrice. TS can't see through the earlier conditional
+        // assignment across the intervening await/calls, so guard explicitly rather
+        // than asserting non-null — if it's ever genuinely absent, skip the trail
+        // update instead of computing against a substituted number.
+        if (trade.peakPrice != null) {
+          const peakGain = trade.peakPrice - trade.entryPrice;
+          const trailStop = trade.peakPrice - peakGain * MOM_EXIT.TRAIL_GIVEBACK;
+          if (trailStop > newStop) {
+            newStop = trailStop;
+            updateTradeStop(trade.id, newStop);
+          }
         }
       }
 
