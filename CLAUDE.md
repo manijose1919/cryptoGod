@@ -194,7 +194,7 @@ Everything above is how to work. Everything below is what you're working on — 
 npm run dev
 
 # Start backend only (port 3033)
-npm start    # or: node server.js
+npm start    # or: node --experimental-strip-types serverV2.ts
 
 # Start frontend only (port 3000, proxies /api to :3033)
 npx vite
@@ -206,12 +206,12 @@ npm run build
 npx tsc --noEmit
 ```
 
-**Note:** There is no linter or test runner configured. The project uses `"strict": true` in tsconfig but Vite does not enforce type-checking at build time.
+**Note:** There is no linter configured. The project uses `"strict": true` in tsconfig but Vite does not enforce type-checking at build time. Tests run via `npx vitest run`.
 
 ## Architecture
 
 ### Two-Process System
-- **Backend** (`server.js`, port 3033): Express server with pluggable exchange adapters (Kraken primary, Crypto.com secondary), serves built frontend from `dist/`, runs WebSocket market stream, signal scanner, circuit breaker, and bot loops
+- **Backend** (`serverV2.ts`, run via `node --experimental-strip-types`, port 3033): boots in order — SQLite → Telegram → on-chain pollers → Fear & Greed gate → Kraken WebSocket → ML → `bootV2()` → HTTP listen. The V2 engine pipeline lives under `v2/` (`engine/`, `pipeline/`, `exchange/`, `indicators/`, `attribution/`, `backtest/`, `pairs/`, `dashboard/`). It still imports shared backend services from `services/` (`database.js`, `fearGreedGate.js`, `krakenWebsocketService.js`, `telegramService.js`) and serves the built frontend from `dist/`, including a read-only monitoring dashboard at `/monitor`
 - **Frontend** (Vite, port 3000 in dev): React 18 + TypeScript SPA with TailwindCSS. Vite proxies `/api` requests to the backend
 
 ### Flat File Structure (no src/ directory)
