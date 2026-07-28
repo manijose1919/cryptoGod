@@ -2,7 +2,41 @@
 
 **Date:** 2026-07-28
 **Author:** local-claude (with Joseph)
-**Status:** Approved, pending implementation plan
+**Status:** Approved. Amended 2026-07-28 (see "Amendment: CI and type errors").
+**Plan:** `docs/superpowers/plans/2026-07-28-repo-documentation-and-cleanup.md`
+
+---
+
+## Amendment: CI and type errors (2026-07-28)
+
+Measuring the baseline gate revealed a condition this spec did not account for.
+**CI has been failing on every run** — the last five GitHub Actions runs are all
+`failure` — because `.github/workflows/ci.yml` runs `npx tsc --noEmit`, which exits 2
+with **157 type errors**. `npx vitest run` (18/18) and `npx vite build` both pass; only
+the type check fails.
+
+This breaks two things in the design as written. Success criterion 5 ("all three gates
+pass after every commit") is unmeetable, because they do not pass now. And Part 1's
+badge row would render a bright red CI badge on a portfolio repository — worse than no
+badge.
+
+The error inventory: 69 unused declarations (TS6133), 48 untyped `.js` import errors
+(TS7016), 22 other cosmetic errors, and **18 substantive ones** — possibly-`undefined`
+access and genuine type mismatches, including `trade.peakPrice` in
+`v2/pipeline/momentumExitManager.ts`, which is live exit logic.
+
+**Approved resolution: fix all 157 properly.** No `tsconfig` relaxation and no
+`continue-on-error` in CI — both would produce a green badge that no longer means the
+code type-checks. Ambient declarations are written for the untyped `services/*.js`
+modules, the substantive errors are investigated individually, and the cosmetic ones
+are cleared by removing dead declarations and annotating implicit parameters.
+
+Success criterion 5 is restated: **all three gates pass from Task 7 onward.** Tasks 1
+and 2 are measured against the 157-error baseline, not against zero.
+
+This does not alter the no-trading-change constraint. The `momentumExitManager` fix
+preserves existing behaviour for every trade that has `peakPrice` set; it only defines
+what happens in the case that was previously undefined.
 
 ---
 
