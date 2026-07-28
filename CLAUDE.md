@@ -202,11 +202,11 @@ npx vite
 # Build frontend for production
 npm run build
 
-# Type-check without emitting (no test suite exists)
+# Type-check without emitting
 npx tsc --noEmit
 ```
 
-**Note:** There is no linter configured. The project uses `"strict": true` in tsconfig but Vite does not enforce type-checking at build time. Tests run via `npx vitest run`.
+**Note:** The project uses `"strict": true` in tsconfig but Vite does not enforce type-checking at build time. Tests run via `npx vitest run`; lint via `npx eslint . --ext .ts,.tsx,.js` (config in `eslint.config.js`).
 
 ## Architecture
 
@@ -216,8 +216,8 @@ npx tsc --noEmit
 
 ### Flat File Structure (no src/ directory)
 All frontend source files live at the project root:
-- `index.tsx` - Entry point, React Router setup (`/` for crypto, `/stocks` for Questrade)
-- `App.tsx` - Main crypto dashboard (~2400 lines). Contains the bot loop, all state, indicator calculations, and the full render tree
+- `index.tsx` - Entry point, React Router setup (`/` for the main dashboard, plus `/performance`, `/backtest`, `/replay`, `/risk`, `/system`, `/training`)
+- `App.tsx` - Composition root (~194 lines). Wraps context providers (trading, settings, market data), wires up hooks (`useMarketData`, `useIndicators`, `useLearning`, `useScanner`, `useSessionActions`), and renders the panel containers (`NavBar`, `LeftPanel`, `CenterPanel`, `RightPanel`, `TabLayout`); the bot loop and indicator math now live in hooks/services, not in this file
 - `types.ts` - All TypeScript interfaces and type definitions
 - `constants.ts` - All configuration constants, thresholds, strategy info
 - `components/` - React components (TSX)
@@ -240,17 +240,12 @@ Backend services (`.js` in `services/`) run on Node:
 - `signalScanner.js` - Auto-scans 10 tickers across timeframes
 - `beastMode.js` - Regime detection, compound multipliers, dynamic targets
 - `circuitBreaker.js` - Loss protection, Kelly criterion
-- `questradeService.js` - Questrade OAuth2, order placement
-- `StrategyEngine.js` - Stock trading strategy engine (10 strategies)
-- `PaperTrader.js` - Paper trading wrapper for Questrade
 
 ### Backend Routes
 - `/api/market-data` - Candle data from active exchange (Kraken primary)
 - `/api/instruments` - Available trading pairs
 - `/api/db/*` - SQLite persistence CRUD (`routes/persistence.js`)
 - `/api/tradingview/*` - Signal injection (`routes/tradingview.js`)
-- `/api/questrade/*` - Questrade integration (auth, candles, orders, bot)
-- `/api/questrade/paper/*` - Paper trading for stocks
 
 ## Key Constraints
 
@@ -320,7 +315,7 @@ Then notify all reporters (VPS Claude, future Claude sessions): primary stats us
 **Why this exists:** the 3-day V2 engine crash (commit `2a96f56` brace bug) happened in part because changes shipped from one agent weren't visible to the other in a structured way. The changelog is a compounding investment — every entry makes the next handoff faster.
 
 ## Common Issues
-1. **Blank window / app won't load**: Backend crash. Check `node server.js` output for missing module errors
+1. **Blank window / app won't load**: Backend crash. Check `node --experimental-strip-types serverV2.ts` output for missing module errors
 2. **Port conflicts**: Kill node processes before restart (`taskkill /F /IM node.exe` on Windows)
 3. **Bot not trading**: Check confidence thresholds, aggressive mode settings, and candle count requirements (min 21)
 4. **USDC errors**: Must use USD pairs, not USDC/USDT
