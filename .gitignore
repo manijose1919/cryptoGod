@@ -136,3 +136,23 @@ metadata.json
 .cache/
 coverage/
 .nyc_output/
+
+# SQLite write-ahead artifacts
+*.db-shm
+*.db-wal
+
+# Archives and logs
+*.tar
+*.tar.gz
+*.log
+
+# Local scratch notes
+/code.txt
+/moresteps.txt
+/nextstep.txt
+/Command.txt
+/FireHorseProtocol.txt
+/gemini-spec-formatted.txt
+/next _step_evolution.txt
+/nul
+/txt/
