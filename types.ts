@@ -67,6 +67,21 @@ export interface Trade {
 
 export type TradingStrategy = 'TREND' | 'BREAKOUT' | 'WHALE' | 'CONFLUENCE' | 'MOMENTUM' | 'DIVERGENCE' | 'ADAPTIVE' | 'MA_CROSSOVER' | 'MEAN_REVERSION' | 'REVERSAL' | 'RANGE' | 'VWAP' | 'SWING';
 
+/**
+ * The seven strategies that predate the V2 expansion. Several lookup tables
+ * (adaptive weights, per-strategy stats, asset-affinity profiles) only ever
+ * carry entries for these. Typing those tables as Record<TradingStrategy, T>
+ * claimed twelve keys existed when only seven did.
+ */
+export type CoreTradingStrategy =
+  | 'TREND'
+  | 'BREAKOUT'
+  | 'WHALE'
+  | 'CONFLUENCE'
+  | 'MOMENTUM'
+  | 'DIVERGENCE'
+  | 'ADAPTIVE';
+
 export type TradingMode = 'SIMULATION' | 'REAL';
 
 export type ExchangeId = 'kraken' | 'crypto.com';

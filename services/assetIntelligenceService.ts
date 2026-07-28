@@ -5,7 +5,7 @@
  * and strategy-asset matching logic based on market research.
  */
 
-import type { TradingStrategy } from '../types';
+import type { TradingStrategy, CoreTradingStrategy } from '../types';
 
 // ============================================
 // TYPES
@@ -218,7 +218,7 @@ export const ASSET_PROFILES: Record<string, AssetProfile> = {
 // ============================================
 // STRATEGY-ASSET MATCHING
 // ============================================
-export const STRATEGY_ASSET_PREFERENCES: Record<TradingStrategy, {
+export const STRATEGY_ASSET_PREFERENCES: Record<CoreTradingStrategy, {
   preferredCategories: AssetProfile['category'][];
   minLiquidity: AssetProfile['liquidity'];
   volatilityPreference: 'LOW' | 'MEDIUM' | 'HIGH';
@@ -293,10 +293,21 @@ const LIQUIDITY_RANK: Record<AssetProfile['liquidity'], number> = {
 // ============================================
 
 /**
+ * STRATEGY_ASSET_PREFERENCES only carries the pre-V2 core strategies (see
+ * CoreTradingStrategy) — fall back to ADAPTIVE's profile for the newer
+ * strategy types, same convention as hooks/useIndicators.ts.
+ */
+function toCoreStrategy(strategy: TradingStrategy): CoreTradingStrategy {
+  return (['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'] as const).includes(strategy as any)
+    ? strategy as CoreTradingStrategy
+    : 'ADAPTIVE';
+}
+
+/**
  * Get assets suitable for a specific strategy
  */
 export function getAssetsForStrategy(strategy: TradingStrategy): AssetProfile[] {
-  const prefs = STRATEGY_ASSET_PREFERENCES[strategy];
+  const prefs = STRATEGY_ASSET_PREFERENCES[toCoreStrategy(strategy)];
   const minLiquidityRank = LIQUIDITY_RANK[prefs.minLiquidity];
 
   return Object.values(ASSET_PROFILES).filter(asset => {
@@ -405,7 +416,7 @@ export function isAssetTradeable(symbol: string, strategy: TradingStrategy): {
     return { tradeable: true, reason: 'Unknown asset - using default parameters' };
   }
 
-  const prefs = STRATEGY_ASSET_PREFERENCES[strategy];
+  const prefs = STRATEGY_ASSET_PREFERENCES[toCoreStrategy(strategy)];
   const minLiquidityRank = LIQUIDITY_RANK[prefs.minLiquidity];
 
   // Check liquidity

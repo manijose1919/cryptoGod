@@ -10,7 +10,7 @@
  * Uses local statistical analysis - no external API needed.
  */
 
-import type { Trade, TradingStrategy, Candle } from '../types';
+import type { Trade, TradingStrategy, CoreTradingStrategy, Candle } from '../types';
 // Persistence stubs — persistenceService was removed (backend SQLite handles real persistence).
 // These no-ops keep aiLearningService functional with in-memory-only storage.
 const saveTradeMemory = async (_data: Record<string, unknown>) => {};
@@ -59,9 +59,9 @@ export interface LearningState {
   avgWinPercent: number;
   avgLossPercent: number;
   profitFactor: number;
-  bestStrategy: TradingStrategy | null;
-  worstStrategy: TradingStrategy | null;
-  strategyStats: Record<TradingStrategy, {
+  bestStrategy: CoreTradingStrategy | null;
+  worstStrategy: CoreTradingStrategy | null;
+  strategyStats: Record<CoreTradingStrategy, {
     trades: number;
     wins: number;
     winRate: number;
@@ -104,7 +104,7 @@ export interface ParameterAdjustments {
   confidenceThreshold: number;
 
   // Strategy weights (higher = preferred)
-  strategyWeights: Record<TradingStrategy, number>;
+  strategyWeights: Record<CoreTradingStrategy, number>;
 
   // Aggressiveness (0-100)
   aggressiveness: number;
@@ -450,7 +450,7 @@ function updateLearningState(): void {
   learningState.profitFactor = totalLossAmount > 0 ? Math.min(999, totalWinAmount / totalLossAmount) : totalWinAmount > 0 ? 999 : 0;
 
   // Update strategy stats
-  const strategies: TradingStrategy[] = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];
+  const strategies: CoreTradingStrategy[] = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];
 
   let bestWinRate = 0;
   let worstWinRate = 100;
@@ -503,7 +503,7 @@ function adjustParametersFromLearning(): void {
   }
 
   // Adjust strategy weights based on performance
-  for (const strat of Object.keys(learningState.strategyStats) as TradingStrategy[]) {
+  for (const strat of Object.keys(learningState.strategyStats) as CoreTradingStrategy[]) {
     const stats = learningState.strategyStats[strat];
     if (stats.trades >= 15) {
       // Boost successful strategies, reduce unsuccessful ones (need 15+ for significance)
@@ -611,15 +611,15 @@ function applyAIRecommendations(analysis: string): void {
         const advice = recommendations.strategyAdvice;
         if (advice.boost) {
           for (const strat of advice.boost) {
-            if (learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy]) {
-              learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy] *= 1.3;
+            if (learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy]) {
+              learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy] *= 1.3;
             }
           }
         }
         if (advice.reduce) {
           for (const strat of advice.reduce) {
-            if (learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy]) {
-              learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy] *= 0.7;
+            if (learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy]) {
+              learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy] *= 0.7;
             }
           }
         }
@@ -670,8 +670,13 @@ export function shouldTakeTrade(
 ): { take: boolean; reason: string; adjustedConfidence: number } {
   const params = learningState.parameterAdjustments;
 
-  // Apply strategy weight
-  const strategyWeight = params.strategyWeights[strategy];
+  // Apply strategy weight. strategyWeights only carries the pre-V2 core
+  // strategies (see CoreTradingStrategy) — fall back to ADAPTIVE's weight
+  // for the newer strategy types, same convention as hooks/useIndicators.ts.
+  const coreStrategy = (['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'] as const).includes(strategy as any)
+    ? strategy as CoreTradingStrategy
+    : 'ADAPTIVE';
+  const strategyWeight = params.strategyWeights[coreStrategy];
   const adjustedConfidence = indicators.confidence * strategyWeight;
 
   // Check if similar past trades were profitable
