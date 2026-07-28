@@ -13,7 +13,6 @@ APP_DIR="/opt/trading-bot"
 APP_USER="tradingbot"
 NODE_VERSION="20"
 PYTHON_VERSION="3.12"
-VENV_DIR="$APP_DIR/venv"
 BARE_REPO="/opt/trading-bot.git"
 SWAP_SIZE="4G"
 
@@ -243,33 +242,6 @@ chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 echo "  Directories created and owned by $APP_USER"
 
 # ============================================
-# 9. Python Virtual Environment & Dependencies
-# ============================================
-echo ""
-echo "[9/12] Setting up Python virtual environment..."
-
-if [ ! -d "$VENV_DIR" ]; then
-    $PYTHON_BIN -m venv "$VENV_DIR"
-    echo "  Created venv at $VENV_DIR using $PYTHON_BIN"
-else
-    echo "  Venv already exists at $VENV_DIR"
-fi
-
-source "$VENV_DIR/bin/activate"
-pip install --upgrade pip setuptools wheel
-
-# Install Python requirements
-if [ -f "$APP_DIR/canuck-trader-pro/backend/requirements.txt" ]; then
-    pip install -r "$APP_DIR/canuck-trader-pro/backend/requirements.txt"
-    echo "  Python dependencies installed from requirements.txt"
-else
-    echo "  No requirements.txt found yet (will install on first deploy)"
-fi
-deactivate
-
-chown -R "$APP_USER:$APP_USER" "$VENV_DIR"
-
-# ============================================
 # 10. Firewall (UFW)
 # ============================================
 echo ""
@@ -315,73 +287,10 @@ echo "  Current swap:"
 swapon --show 2>&1 | head -5
 
 # ============================================
-# 12. Systemd Service + PM2 + Git Bare Repo
+# 12. Git Bare Repo
 # ============================================
 echo ""
-echo "[12/12] Configuring services and git repo..."
-
-# --- Systemd service ---
-cat > /etc/systemd/system/trading-bot.service << SVCEOF
-[Unit]
-Description=Canuck Trader Pro - Python Trading Engine + FastAPI
-After=network.target redis-server.service
-Wants=redis-server.service
-
-[Service]
-Type=simple
-User=$APP_USER
-WorkingDirectory=$APP_DIR/canuck-trader-pro/backend
-ExecStart=$VENV_DIR/bin/python main.py
-Restart=always
-RestartSec=5
-Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=$APP_DIR/.env
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=trading-bot
-
-# Resource limits
-LimitNOFILE=65535
-MemoryMax=16G
-
-[Install]
-WantedBy=multi-user.target
-SVCEOF
-
-systemctl daemon-reload
-systemctl enable trading-bot
-echo "  systemd service created and enabled"
-
-# --- PM2 ecosystem config ---
-cat > "$APP_DIR/ecosystem.config.cjs" << 'PM2EOF'
-module.exports = {
-  apps: [
-    {
-      name: 'trading-bot',
-      script: 'canuck-trader-pro/backend/main.py',
-      interpreter: '/opt/trading-bot/venv/bin/python3',
-      cwd: '/opt/trading-bot',
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '8G',
-      env: {
-        PYTHONUNBUFFERED: '1',
-        HTTP_PORT: 3033,
-      },
-      error_file: '/opt/trading-bot/logs/error.log',
-      out_file: '/opt/trading-bot/logs/output.log',
-      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
-      merge_logs: true,
-      exp_backoff_restart_delay: 1000,
-      max_restarts: 50,
-      restart_delay: 3000,
-    }
-  ]
-};
-PM2EOF
-chown "$APP_USER:$APP_USER" "$APP_DIR/ecosystem.config.cjs"
-echo "  PM2 ecosystem config created"
+echo "[12/12] Configuring git repo..."
 
 # --- Bare Git Repo with Post-Receive Hook ---
 if [ ! -d "$BARE_REPO" ]; then
@@ -399,7 +308,6 @@ cat > "${BARE_REPO}/hooks/post-receive" << 'HOOKEOF'
 set -e
 
 APP_DIR="/opt/trading-bot"
-VENV_DIR="$APP_DIR/venv"
 LOG_FILE="$APP_DIR/logs/deploy.log"
 
 mkdir -p "$APP_DIR/logs"
@@ -419,14 +327,6 @@ mkdir -p "$APP_DIR/logs"
         echo "Installing Node.js dependencies..."
         cd $APP_DIR
         npm install --production 2>&1 | tail -5
-    fi
-
-    # Install Python dependencies
-    if [ -d "$VENV_DIR" ] && [ -f "$APP_DIR/canuck-trader-pro/backend/requirements.txt" ]; then
-        echo "Installing Python dependencies..."
-        source $VENV_DIR/bin/activate
-        pip install -r canuck-trader-pro/backend/requirements.txt 2>&1 | tail -5
-        deactivate
     fi
 
     # Restart the Node.js bot via PM2 (primary) or systemd (fallback)
@@ -525,7 +425,6 @@ echo "    Swap       : $(swapon --show --noheadings --bytes 2>/dev/null | awk '{
 echo ""
 echo "  Paths:"
 echo "    App Dir    : $APP_DIR"
-echo "    Venv       : $VENV_DIR"
 echo "    Git Repo   : $BARE_REPO"
 echo "    Logs       : $APP_DIR/logs/"
 echo "    Database   : $APP_DIR/data/"
@@ -541,8 +440,8 @@ echo "       .\\deploy\\deploy.ps1 -Mode git          # git push mode"
 echo "       .\\deploy\\deploy.ps1 -Mode docker       # docker mode"
 echo ""
 echo "    3. Start the bot:"
-echo "       systemctl start trading-bot             # systemd (recommended)"
-echo "       journalctl -u trading-bot -f            # view logs"
+echo "       pm2 start ecosystem.config.cjs           # PM2 (recommended)"
+echo "       pm2 logs canuck-node                    # view logs"
 echo ""
 echo "    4. Or with Docker:"
 echo "       cd $APP_DIR && docker-compose up -d     # start all services"

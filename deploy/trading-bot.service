@@ -1,15 +1,14 @@
 [Unit]
-Description=Canuck Trader Pro - Python Trading Engine + FastAPI
+Description=Canuck Trader Pro - Node.js Trading Engine
 After=network.target
 
 [Service]
 Type=simple
 User=tradingbot
-WorkingDirectory=/opt/trading-bot/canuck-trader-pro/backend
-ExecStart=/opt/trading-bot/venv/bin/python main.py
+WorkingDirectory=/opt/trading-bot
+ExecStart=/usr/bin/node --experimental-strip-types serverV2.ts
 Restart=always
 RestartSec=5
-Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/opt/trading-bot/.env
 
 [Install]

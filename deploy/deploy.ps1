@@ -315,13 +315,6 @@ if ($Mode -eq "archive") {
 cd $RemoteDir
 npm install --production 2>&1 | tail -5
 
-# Install Python dependencies
-if [ -d /opt/trading-bot/venv ]; then
-    source /opt/trading-bot/venv/bin/activate
-    pip install -r canuck-trader-pro/backend/requirements.txt 2>&1 | tail -5
-    echo 'Python dependencies installed'
-fi
-
 echo 'All dependencies installed'
 "@
     }
@@ -402,7 +395,6 @@ cat > ${BareRepoPath}/hooks/post-receive << 'HOOKEOF'
 set -e
 
 APP_DIR="/opt/trading-bot"
-VENV_DIR="`$APP_DIR/venv"
 LOG_FILE="/opt/trading-bot/logs/deploy.log"
 
 echo "========================================"
@@ -416,14 +408,6 @@ GIT_WORK_TREE=`$APP_DIR git checkout -f main 2>&1 | tee -a `$LOG_FILE
 echo "Installing Node.js dependencies..."
 cd `$APP_DIR
 npm install --production 2>&1 | tail -5 | tee -a `$LOG_FILE
-
-# Install Python dependencies
-if [ -d "`$VENV_DIR" ]; then
-    echo "Installing Python dependencies..."
-    source `$VENV_DIR/bin/activate
-    pip install -r canuck-trader-pro/backend/requirements.txt 2>&1 | tail -5 | tee -a `$LOG_FILE
-    deactivate
-fi
 
 # Restart the bot
 if systemctl is-active --quiet trading-bot 2>/dev/null; then
