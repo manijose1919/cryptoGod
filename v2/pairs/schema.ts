@@ -1,7 +1,6 @@
 // SQLite schema for pairs trading. One row per pair-trade (containing BOTH
 // legs). Separate from v2_trades to keep the single-asset attribution clean.
 
-// @ts-expect-error JS module without .d.ts; project tsconfig allows it elsewhere
 import { getDb } from '../../services/database.js';
 
 export function initPairsTables(): void {

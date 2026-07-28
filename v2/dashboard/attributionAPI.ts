@@ -17,7 +17,6 @@ import { getSniperStatus, getKrakenSniperStatus, getCryptocomSniperStatus } from
 import { initKrakenAdapter, krakenV2 } from '../exchange/krakenAdapter.ts';
 import { initCryptoComAdapter, cryptoComV2 } from '../exchange/cryptoComV2Adapter.ts';
 import { getPairsStatus, forceClosePairsTrade } from '../pairs/pairsEngine.ts';
-// @ts-expect-error JS module without types
 import { getDb } from '../../services/database.js';
 // @ts-expect-error JS module without types
 import { requireAdminAuth } from '../../middleware/adminAuth.js';
