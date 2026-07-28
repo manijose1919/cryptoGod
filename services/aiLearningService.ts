@@ -11,6 +11,7 @@
  */
 
 import type { Trade, TradingStrategy, CoreTradingStrategy, Candle } from '../types';
+import { isCoreTradingStrategy, CORE_TRADING_STRATEGIES } from '../types';
 // Persistence stubs — persistenceService was removed (backend SQLite handles real persistence).
 // These no-ops keep aiLearningService functional with in-memory-only storage.
 const saveTradeMemory = async (_data: Record<string, unknown>) => {};
@@ -503,7 +504,7 @@ function adjustParametersFromLearning(): void {
   }
 
   // Adjust strategy weights based on performance
-  for (const strat of Object.keys(learningState.strategyStats) as CoreTradingStrategy[]) {
+  for (const strat of CORE_TRADING_STRATEGIES) {
     const stats = learningState.strategyStats[strat];
     if (stats.trades >= 15) {
       // Boost successful strategies, reduce unsuccessful ones (need 15+ for significance)
@@ -611,15 +612,15 @@ function applyAIRecommendations(analysis: string): void {
         const advice = recommendations.strategyAdvice;
         if (advice.boost) {
           for (const strat of advice.boost) {
-            if (learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy]) {
-              learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy] *= 1.3;
+            if (isCoreTradingStrategy(strat) && learningState.parameterAdjustments.strategyWeights[strat]) {
+              learningState.parameterAdjustments.strategyWeights[strat] *= 1.3;
             }
           }
         }
         if (advice.reduce) {
           for (const strat of advice.reduce) {
-            if (learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy]) {
-              learningState.parameterAdjustments.strategyWeights[strat as CoreTradingStrategy] *= 0.7;
+            if (isCoreTradingStrategy(strat) && learningState.parameterAdjustments.strategyWeights[strat]) {
+              learningState.parameterAdjustments.strategyWeights[strat] *= 0.7;
             }
           }
         }
@@ -672,10 +673,8 @@ export function shouldTakeTrade(
 
   // Apply strategy weight. strategyWeights only carries the pre-V2 core
   // strategies (see CoreTradingStrategy) — fall back to ADAPTIVE's weight
-  // for the newer strategy types, same convention as hooks/useIndicators.ts.
-  const coreStrategy = (['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'] as const).includes(strategy as any)
-    ? strategy as CoreTradingStrategy
-    : 'ADAPTIVE';
+  // for the newer strategy types.
+  const coreStrategy = isCoreTradingStrategy(strategy) ? strategy : 'ADAPTIVE';
   const strategyWeight = params.strategyWeights[coreStrategy];
   const adjustedConfidence = indicators.confidence * strategyWeight;
 

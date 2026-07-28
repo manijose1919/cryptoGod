@@ -6,6 +6,7 @@
  */
 
 import type { TradingStrategy, CoreTradingStrategy } from '../types';
+import { isCoreTradingStrategy } from '../types';
 
 // ============================================
 // TYPES
@@ -295,12 +296,10 @@ const LIQUIDITY_RANK: Record<AssetProfile['liquidity'], number> = {
 /**
  * STRATEGY_ASSET_PREFERENCES only carries the pre-V2 core strategies (see
  * CoreTradingStrategy) — fall back to ADAPTIVE's profile for the newer
- * strategy types, same convention as hooks/useIndicators.ts.
+ * strategy types.
  */
 function toCoreStrategy(strategy: TradingStrategy): CoreTradingStrategy {
-  return (['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'] as const).includes(strategy as any)
-    ? strategy as CoreTradingStrategy
-    : 'ADAPTIVE';
+  return isCoreTradingStrategy(strategy) ? strategy : 'ADAPTIVE';
 }
 
 /**

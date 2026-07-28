@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import type { TradingStrategy, CoreTradingStrategy, SystemEvent, TradingMode } from '../types';
+import { CORE_TRADING_STRATEGIES } from '../types';
 import { STRATEGY_INFO, DEFAULT_PROFIT_GOALS, MICRO_TRADING } from '../constants';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -91,7 +92,7 @@ function calculateOptimalSettings(budget: number, sessionGoal: number, userRiskA
 
   // Ensure minimum profit goals
   const minProfitGoal = Math.max(10, budget * 0.005); // At least $10 or 0.5% of budget
-  for (const key of Object.keys(profitGoals) as CoreTradingStrategy[]) {
+  for (const key of CORE_TRADING_STRATEGIES) {
     profitGoals[key] = Math.max(minProfitGoal, profitGoals[key]);
   }
 
@@ -195,7 +196,7 @@ export const TradingControls: React.FC<TradingControlsProps> = ({
     setUseTrailingStop(true);
 
     // Apply profit goals for all strategies
-    for (const strat of Object.keys(optimized.profitGoals) as CoreTradingStrategy[]) {
+    for (const strat of CORE_TRADING_STRATEGIES) {
       setProfitGoals(strat, optimized.profitGoals[strat]);
     }
 

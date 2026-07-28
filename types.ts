@@ -82,6 +82,14 @@ export type CoreTradingStrategy =
   | 'DIVERGENCE'
   | 'ADAPTIVE';
 
+export const CORE_TRADING_STRATEGIES = [
+  'TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE',
+] as const satisfies readonly CoreTradingStrategy[];
+
+export function isCoreTradingStrategy(s: TradingStrategy): s is CoreTradingStrategy {
+  return (CORE_TRADING_STRATEGIES as readonly string[]).includes(s);
+}
+
 export type TradingMode = 'SIMULATION' | 'REAL';
 
 export type ExchangeId = 'kraken' | 'crypto.com';
