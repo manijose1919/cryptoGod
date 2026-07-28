@@ -6,7 +6,7 @@
 
 **Architecture:** Config-only trading changes in `v2/engine/config.ts` (gates verified in `v2/engine/strategyRunner.ts:101-116` and `v2/pipeline/exitManager.ts:117-118`), one script fix in `scripts/generate-audit-report.mjs`, diagnostics run read-only against the VPS SQLite DB over SSH. Spec: `docs/superpowers/specs/2026-07-14-profitability-sprint-review-design.md`.
 
-**Tech Stack:** TypeScript (V2 engine), Node ESM script + better-sqlite3 (audit report), sqlite3 CLI over SSH (`root@31.97.7.138`, DB `/opt/trading-bot/data/trading.db`), `bash scripts/push-deploy.sh` for deploys.
+**Tech Stack:** TypeScript (V2 engine), Node ESM script + better-sqlite3 (audit report), sqlite3 CLI over SSH (`root@VPS_HOST_REDACTED`, DB `/opt/trading-bot/data/trading.db`), `bash scripts/push-deploy.sh` for deploys.
 
 ## Global Constraints
 
@@ -70,7 +70,7 @@ FROM ml_gatekeeper_log WHERE actual_outcome IS NOT NULL
 AND decision LIKE 'PROCEED%' GROUP BY decision;
 ```
 
-Run: `scp check1-5.sql root@31.97.7.138:/tmp/ && ssh root@31.97.7.138 'sqlite3 -column /opt/trading-bot/data/trading.db < /tmp/check1-5.sql'`
+Run: `scp check1-5.sql root@VPS_HOST_REDACTED:/tmp/ && ssh root@VPS_HOST_REDACTED 'sqlite3 -column /opt/trading-bot/data/trading.db < /tmp/check1-5.sql'`
 Expected: worst loss ≥ −$15 (cap PASS); expectancy ≈ +$0.04 overall with trades_16_plus strongly positive; zero regime/timegate violations; PROCEED_AB sample count (if <30 → gatekeeper decision is `defer`).
 
 - [ ] **Step 2: Shorts viability (decision input for Task 2)**
@@ -101,7 +101,7 @@ AND strategy='TREND' AND timeframe='1h' AND side='long' AND exit_reason='time_ki
 ```
 
 For each trade, recoverable ⇔ some 1h candle high in `(entry_time, entry_time + 4h]` reaches `entry_price × 1.014` (TREND `trailActivatePercent: 0.014` from `v2/engine/config.ts:179`; kill window = `timeKillBars: 2` × 1h, 2× window = 4h). Candle source, in order of preference:
-1. VPS `candle_history` table — first run `ssh root@31.97.7.138 'sqlite3 /opt/trading-bot/data/trading.db ".schema candle_history"'` and adapt column names; filter to the trade's ticker + 1h interval and the 4h window.
+1. VPS `candle_history` table — first run `ssh root@VPS_HOST_REDACTED 'sqlite3 /opt/trading-bot/data/trading.db ".schema candle_history"'` and adapt column names; filter to the trade's ticker + 1h interval and the 4h window.
 2. If that table lacks the window, Kraken public REST (no auth): `curl "https://api.kraken.com/0/public/OHLC?pair=<TICKER>&interval=60&since=<entry_time_seconds>"` — `result.<pair>` rows are `[time, open, high, low, close, vwap, volume, count]`; check `high` of the first 4 rows after entry. (1h history covers ~30 days back — all post-baseline trades qualify as of 2026-07-14.)
 
 Record per trade: ticker, entry, activation price (entry × 1.014), max high in window, recoverable yes/no.
@@ -152,11 +152,11 @@ GATEKEEPER: <remove|defer>
 - [ ] **Step 6: Append the same review + dismissal marker to the VPS notes file**
 
 ```bash
-scp docs/reviews/2026-07-14-sprint-review.md root@31.97.7.138:/tmp/review.md
-ssh root@31.97.7.138 'printf "\n---\n\n" >> /opt/trading-bot/data/reports/audit-batch-notes.md && cat /tmp/review.md >> /opt/trading-bot/data/reports/audit-batch-notes.md && printf "\n<!-- sprint-review-done baseline=1782834161576 -->\n" >> /opt/trading-bot/data/reports/audit-batch-notes.md'
+scp docs/reviews/2026-07-14-sprint-review.md root@VPS_HOST_REDACTED:/tmp/review.md
+ssh root@VPS_HOST_REDACTED 'printf "\n---\n\n" >> /opt/trading-bot/data/reports/audit-batch-notes.md && cat /tmp/review.md >> /opt/trading-bot/data/reports/audit-batch-notes.md && printf "\n<!-- sprint-review-done baseline=1782834161576 -->\n" >> /opt/trading-bot/data/reports/audit-batch-notes.md'
 ```
 
-Verify: `ssh root@31.97.7.138 'tail -5 /opt/trading-bot/data/reports/audit-batch-notes.md'` shows the marker. (The marker format must match Task 4's regex exactly: `<!-- sprint-review-done baseline=1782834161576 -->`.)
+Verify: `ssh root@VPS_HOST_REDACTED 'tail -5 /opt/trading-bot/data/reports/audit-batch-notes.md'` shows the marker. (The marker format must match Task 4's regex exactly: `<!-- sprint-review-done baseline=1782834161576 -->`.)
 
 - [ ] **Step 7: Commit**
 
@@ -432,7 +432,7 @@ Expected: both pushes succeed, `[push-deploy] OK — deployed SHA matches: <sha>
 - [ ] **Step 3: Reset the stats baseline (the batch's ONE reset) and record it**
 
 ```bash
-ssh root@31.97.7.138 'sqlite3 /opt/trading-bot/data/trading.db "INSERT OR REPLACE INTO settings (key, value) VALUES (CHAR(115,116,97,116,115,95,98,97,115,101,108,105,110,101,95,116,105,109,101), CAST(strftime(CHAR(37,115),CHAR(110,111,119))*1000 AS INTEGER));" && sqlite3 /opt/trading-bot/data/trading.db "SELECT value FROM settings WHERE key LIKE (CHAR(37)||CHAR(98,97,115,101,108,105,110,101)||CHAR(37));"'
+ssh root@VPS_HOST_REDACTED 'sqlite3 /opt/trading-bot/data/trading.db "INSERT OR REPLACE INTO settings (key, value) VALUES (CHAR(115,116,97,116,115,95,98,97,115,101,108,105,110,101,95,116,105,109,101), CAST(strftime(CHAR(37,115),CHAR(110,111,119))*1000 AS INTEGER));" && sqlite3 /opt/trading-bot/data/trading.db "SELECT value FROM settings WHERE key LIKE (CHAR(37)||CHAR(98,97,115,101,108,105,110,101)||CHAR(37));"'
 ```
 
 (If the CHAR() quoting workaround is unnecessary in your shell, the plain form is `INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));` run inside the ssh session — use whichever executes cleanly, and verify the SELECT echoes a fresh epoch-ms value.)
@@ -441,21 +441,21 @@ Then update the CHANGELOG entry's baseline number with the actual value, amend? 
 - [ ] **Step 4: Post-deploy verification**
 
 ```bash
-ssh root@31.97.7.138 'cd /opt/trading-bot && node -e "import(\"./v2/engine/config.ts\").catch(()=>0)" 2>/dev/null; pm2 list | grep canuck-node; tail -20 logs/deploy.log 2>/dev/null'
+ssh root@VPS_HOST_REDACTED 'cd /opt/trading-bot && node -e "import(\"./v2/engine/config.ts\").catch(()=>0)" 2>/dev/null; pm2 list | grep canuck-node; tail -20 logs/deploy.log 2>/dev/null'
 ```
 
 Minimum bar: pm2 shows `canuck-node` online; then confirm behavior over the next loop cycles:
 
 ```bash
-ssh root@31.97.7.138 'pm2 logs canuck-node --lines 100 --nostream | grep -iE "short|1h" | head -20'
+ssh root@VPS_HOST_REDACTED 'pm2 logs canuck-node --lines 100 --nostream | grep -iE "short|1h" | head -20'
 ```
 
-Expected: no new short signal generation; if branch B, no 1h TREND scans. Also re-run the hourly report once (`ssh root@31.97.7.138 'cd /opt/trading-bot && node scripts/generate-audit-report.mjs'`) and confirm the banner is ABSENT (n=0 on the new baseline) and the report header shows the new baseline.
+Expected: no new short signal generation; if branch B, no 1h TREND scans. Also re-run the hourly report once (`ssh root@VPS_HOST_REDACTED 'cd /opt/trading-bot && node scripts/generate-audit-report.mjs'`) and confirm the banner is ABSENT (n=0 on the new baseline) and the report header shows the new baseline.
 
 - [ ] **Step 5: Confirm open pre-baseline positions are untouched**
 
 ```bash
-ssh root@31.97.7.138 'sqlite3 -column /opt/trading-bot/data/trading.db "SELECT id, ticker, side, strategy, timeframe FROM v2_trades WHERE status = (SELECT CHAR(111,112,101,110));"'
+ssh root@VPS_HOST_REDACTED 'sqlite3 -column /opt/trading-bot/data/trading.db "SELECT id, ticker, side, strategy, timeframe FROM v2_trades WHERE status = (SELECT CHAR(111,112,101,110));"'
 ```
 
 Any open positions keep running on their original config (standing rule) — do NOT force-close them; note them in the changelog entry as in-flight legacy if any exist.

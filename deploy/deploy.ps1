@@ -7,7 +7,7 @@
 #   docker            - build image, transfer, docker-compose up
 #
 # Usage:
-#   .\deploy\deploy.ps1                                          # archive mode (default), VPS=31.97.7.138
+#   .\deploy\deploy.ps1                                          # archive mode (default), VPS=$env:VPS_HOST
 #   .\deploy\deploy.ps1 -Mode git                                # git-based deploy
 #   .\deploy\deploy.ps1 -Mode docker                             # docker image deploy
 #   .\deploy\deploy.ps1 -Mode git -Rollback                      # rollback to previous commit
@@ -17,7 +17,8 @@
 # ============================================
 
 param(
-    [string]$VpsIp = "31.97.7.138",
+    # Host is not committed. Set $env:VPS_HOST or pass -VpsIp explicitly.
+    [string]$VpsIp = $(if ($env:VPS_HOST) { $env:VPS_HOST } else { throw "VPS_HOST is not set - export it or pass -VpsIp" }),
 
     [string]$User = "root",
 

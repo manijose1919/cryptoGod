@@ -356,7 +356,7 @@ bash scripts/push-deploy.sh
 After deploy confirms healthy (`pm2 status` shows `canuck-node online`):
 
 ```bash
-ssh root@31.97.7.138 "sqlite3 /opt/trading-bot/data/trading.db \"INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));\""
+ssh root@VPS_HOST_REDACTED "sqlite3 /opt/trading-bot/data/trading.db \"INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));\""
 ```
 
 Expected: no output (successful insert).
@@ -882,13 +882,13 @@ bash scripts/push-deploy.sh
 - [ ] **Step 5: Reset stats baseline on VPS**
 
 ```bash
-ssh root@31.97.7.138 "sqlite3 /opt/trading-bot/data/trading.db \"INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));\""
+ssh root@VPS_HOST_REDACTED "sqlite3 /opt/trading-bot/data/trading.db \"INSERT OR REPLACE INTO settings (key, value) VALUES ('stats_baseline_time', $(date -u +%s%3N));\""
 ```
 
 - [ ] **Step 6: Confirm MR engine running on VPS**
 
 ```bash
-ssh root@31.97.7.138 "sudo pm2 logs canuck-node --lines 50 --nostream 2>/dev/null | grep '\[MR\]'"
+ssh root@VPS_HOST_REDACTED "sudo pm2 logs canuck-node --lines 50 --nostream 2>/dev/null | grep '\[MR\]'"
 ```
 
 Expected: `[MR] Mean Reversion engine initialized` and `[MR] Loop #1:` lines.

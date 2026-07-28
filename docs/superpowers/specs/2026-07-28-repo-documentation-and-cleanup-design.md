@@ -111,8 +111,8 @@ committed. There are no `sk-ant-` keys and no Kraken secrets. The single
 `TELEGRAM_BOT_TOKEN=` match in history is `.env.example` carrying the placeholder
 value `your_telegram_bot_token`. The `.gitignore` did its job.
 
-The one real exposure is the VPS address `31.97.7.138`, including the form
-`root@31.97.7.138`, present in 10 tracked files and 10 commits. An IP is not a
+The one real exposure is the VPS address `VPS_HOST_REDACTED`, including the form
+`root@VPS_HOST_REDACTED`, present in 10 tracked files and 10 commits. An IP is not a
 credential, but publishing "the root SSH box running a money-handling bot is at this
 address" is an invitation to brute-force scanning.
 
@@ -194,8 +194,8 @@ Git history retains both stacks, so this is recoverable.
 Ordered last, so that everything else is committed and pushed before any SHA changes.
 
 1. `git bundle create ../cryptogod-backup-2026-07-28.bundle --all` — full recoverable backup
-2. `git filter-repo --replace-text` mapping `31.97.7.138` to the literal token
-   `VPS_HOST_REDACTED`, applied to both the bare address and the `root@31.97.7.138` form
+2. `git filter-repo --replace-text` mapping `VPS_HOST_REDACTED` to the literal token
+   `VPS_HOST_REDACTED`, applied to both the bare address and the `root@VPS_HOST_REDACTED` form
 3. Re-add `origin` and `vps` remotes — `git filter-repo` removes remotes by design
 4. Force-push both
 5. Verify the VPS deploy recovered and the API is serving

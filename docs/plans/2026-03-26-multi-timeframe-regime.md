@@ -635,7 +635,7 @@ git push origin master && git push vps master
 **Step 3: Verify VPS status**
 
 ```bash
-curl -s http://31.97.7.138:3033/api/v2/status | jq '.htfRegimes'
+curl -s http://VPS_HOST_REDACTED:3033/api/v2/status | jq '.htfRegimes'
 ```
 
 Expected: JSON object with 4h regimes for each ticker, e.g.:
@@ -650,7 +650,7 @@ Expected: JSON object with 4h regimes for each ticker, e.g.:
 **Step 4: Verify scan reasons show MTF info**
 
 ```bash
-curl -s http://31.97.7.138:3033/api/v2/status | jq '.lastScanReasons'
+curl -s http://VPS_HOST_REDACTED:3033/api/v2/status | jq '.lastScanReasons'
 ```
 
 Expected: Rejection messages now include `4h=<regime>` info when MTF is checked.

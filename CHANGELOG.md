@@ -67,7 +67,7 @@ Dashboard polish: tile values no longer misalign when a label wraps; empty-state
 **Stats baseline reset:** no — monitoring/infra change, not a trading-config change.
 
 **What changed:**
-New read-only monitoring GUI at **https://31-97-7-138.sslip.io/monitor** (Let's Encrypt cert, HTTP basic-auth, user `admin`). Backed by `GET /api/v2/monitor/summary` on the existing `v2Router`. Single self-contained `public/monitor.html` polls it every 10s. No control actions — the endpoint only SELECTs.
+New read-only monitoring GUI at **https://VPS-HOST-REDACTED.sslip.io/monitor** (Let's Encrypt cert, HTTP basic-auth, user `admin`). Backed by `GET /api/v2/monitor/summary` on the existing `v2Router`. Single self-contained `public/monitor.html` polls it every 10s. No control actions — the endpoint only SELECTs.
 
 Scope split (deliberate): **headline KPI tiles + equity curve are TREND-only**, matching `getV2Status().portfolioCash` which is TREND-isolated, honoring the repo's contract that sniper P&L is never aggregated with day-trading P&L. **Open/closed trade tables show all strategies**, each row labelled. Cohort filtered by `entry_time >= stats_baseline_time` per the standing rule.
 
@@ -85,7 +85,7 @@ Why it was needed: the dashboard's staleness check originally used `lastLoopTime
 A clean, password-gated monitoring surface without exposing the sprawling 40-panel dev dashboard or a raw `IP:port`. Read-only by design — no route can move money.
 
 **What to monitor / watch for:**
-- `https://31-97-7-138.sslip.io/monitor` prompts for password then loads; empty-cohort state renders (0 trades since the 2026-07-22 baseline as of writing).
+- `https://VPS-HOST-REDACTED.sslip.io/monitor` prompts for password then loads; empty-cohort state renders (0 trades since the 2026-07-22 baseline as of writing).
 - Health dot should be GREEN when the engine is looping. If it goes red, check `lastLoopAt` freshness in `/api/v2/status` — that is now a real hang signal, not a display artifact.
 - Cert auto-renew before 2026-10-21.
 - **Rollback:** `ufw allow 3033/tcp` restores direct access; `rm /etc/nginx/sites-enabled/monitor && systemctl reload nginx` drops the proxy; `git revert 672bac7` removes the code.

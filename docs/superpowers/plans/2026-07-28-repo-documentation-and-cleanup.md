@@ -794,7 +794,7 @@ git grep -l '31\.97\.7\.138'
 ```
 Expected: 8 files after Task 2's deletions (`canuck-trader-pro/*` are gone).
 
-Replace every occurrence of `31.97.7.138` with `VPS_HOST_REDACTED` and `root@31.97.7.138` with `root@VPS_HOST_REDACTED`.
+Replace every occurrence of `VPS_HOST_REDACTED` with `VPS_HOST_REDACTED` and `root@VPS_HOST_REDACTED` with `root@VPS_HOST_REDACTED`.
 
 `monitor.sh` and `scripts/push-deploy.sh` are executable and need the value at runtime. Change them to read from the environment with a clear failure:
 
@@ -952,7 +952,7 @@ Everything valuable must be landed and running before the history rewrite.
 - [ ] **Step 1: Export `VPS_HOST` for the now-parameterised deploy script**
 
 ```bash
-export VPS_HOST=31.97.7.138
+export VPS_HOST=VPS_HOST_REDACTED
 ```
 
 - [ ] **Step 2: Push to both remotes and verify**
@@ -1022,18 +1022,18 @@ Commit it now — it must be part of the history being rewritten.
 
 ```bash
 cat > /tmp/replacements.txt <<'EOF'
-31.97.7.138==>VPS_HOST_REDACTED
+VPS_HOST_REDACTED==>VPS_HOST_REDACTED
 EOF
 
 git filter-repo --replace-text /tmp/replacements.txt --force
 ```
 
-The bare-address rule also covers `root@31.97.7.138`, since the replacement is a substring match.
+The bare-address rule also covers `root@VPS_HOST_REDACTED`, since the replacement is a substring match.
 
 - [ ] **Step 6: Verify the purge**
 
 ```bash
-git log --all -S'31.97.7.138' --oneline | wc -l
+git log --all -S'VPS_HOST_REDACTED' --oneline | wc -l
 git grep -c '31\.97\.7\.138' $(git rev-list --all) 2>/dev/null | wc -l
 ```
 Expected: both **0**.
@@ -1123,8 +1123,8 @@ bash scripts/push-deploy.sh
 - [ ] `npx vitest run` — 18/18 pass
 - [ ] `npx vite build` exits 0
 - [ ] `gh run list --limit 1` — success
-- [ ] `git grep -c '31.97.7.138'` — no matches
-- [ ] `git log --all -S'31.97.7.138' --oneline | wc -l` — 0
+- [ ] `git grep -c 'VPS_HOST_REDACTED'` — no matches
+- [ ] `git log --all -S'VPS_HOST_REDACTED' --oneline | wc -l` — 0
 - [ ] `curl http://$VPS_HOST:3033/api/health` — `ok: true`
 - [ ] `README.md` contains no AI Studio or Gemini references
 - [ ] Every relative link in `README.md` and `docs/README.md` resolves

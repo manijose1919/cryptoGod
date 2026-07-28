@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a clean, read-only monitoring GUI for the Phoenix V2 trading bot, served by the running `serverV2.ts` process and reachable at `https://31-97-7-138.sslip.io` behind a Let's Encrypt cert and an HTTP basic-auth password.
+**Goal:** Ship a clean, read-only monitoring GUI for the Phoenix V2 trading bot, served by the running `serverV2.ts` process and reachable at `https://VPS-HOST-REDACTED.sslip.io` behind a Let's Encrypt cert and an HTTP basic-auth password.
 
 **Architecture:** One new read-only endpoint `GET /api/v2/monitor/summary` on the already-mounted `v2Router`, backed by a pure, unit-tested `buildMonitorSummary()` helper. A single self-contained `public/monitor.html` (modern CSS + vanilla JS + inline SVG chart) polls that endpoint every 10s. nginx terminates TLS and enforces basic-auth, proxying to `localhost:3033`; public port 3033 is then closed.
 
@@ -633,9 +633,9 @@ Claude-Session: https://claude.ai/code/session_01W4aHCMZyXSsnw5mjCzEUws"
 
 **Interfaces:**
 - Consumes: Node listening on `127.0.0.1:3033` (already does, on `*:3033`).
-- Produces: `https://31-97-7-138.sslip.io` (TLS + basic-auth) → proxy to `:3033`.
+- Produces: `https://VPS-HOST-REDACTED.sslip.io` (TLS + basic-auth) → proxy to `:3033`.
 
-> Run these over SSH: `ssh root@31.97.7.138`. This task ships no repo code — verify each step's output before the next.
+> Run these over SSH: `ssh root@VPS_HOST_REDACTED`. This task ships no repo code — verify each step's output before the next.
 
 - [ ] **Step 1: Install nginx + certbot**
 
@@ -658,7 +658,7 @@ Expected: `Adding password for user admin`.
 cat > /etc/nginx/sites-available/monitor <<'NGINX'
 server {
     listen 80;
-    server_name 31-97-7-138.sslip.io;
+    server_name VPS-HOST-REDACTED.sslip.io;
     location / {
         auth_basic "CRYPTO_GOD Monitor";
         auth_basic_user_file /etc/nginx/.htpasswd;
@@ -679,15 +679,15 @@ Expected: `nginx -t` → syntax ok / test successful.
 - [ ] **Step 4: Verify HTTP proxy + auth works before TLS**
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://31-97-7-138.sslip.io/monitor            # expect 401
-curl -s -o /dev/null -w "%{http_code}\n" -u admin:PASSWORD http://31-97-7-138.sslip.io/monitor  # expect 200
+curl -s -o /dev/null -w "%{http_code}\n" http://VPS-HOST-REDACTED.sslip.io/monitor            # expect 401
+curl -s -o /dev/null -w "%{http_code}\n" -u admin:PASSWORD http://VPS-HOST-REDACTED.sslip.io/monitor  # expect 200
 ```
 Expected: `401` then `200`.
 
 - [ ] **Step 5: Issue the Let's Encrypt cert (certbot rewrites the site to 443 + redirect)**
 
 ```bash
-certbot --nginx -d 31-97-7-138.sslip.io --non-interactive --agree-tos -m manijose1919@gmail.com --redirect
+certbot --nginx -d VPS-HOST-REDACTED.sslip.io --non-interactive --agree-tos -m manijose1919@gmail.com --redirect
 nginx -t && systemctl reload nginx
 ```
 Expected: "Successfully received certificate"; certbot adds the `listen 443 ssl` block and an 80→443 redirect. `auth_basic` lines are preserved in the server block.
@@ -695,9 +695,9 @@ Expected: "Successfully received certificate"; certbot adds the `listen 443 ssl`
 - [ ] **Step 6: Verify HTTPS + trusted cert + auth**
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://31-97-7-138.sslip.io/monitor            # 401
-curl -s -o /dev/null -w "%{http_code}\n" -u admin:PASSWORD https://31-97-7-138.sslip.io/monitor  # 200
-curl -s -u admin:PASSWORD https://31-97-7-138.sslip.io/api/v2/monitor/summary | head -c 200      # JSON
+curl -s -o /dev/null -w "%{http_code}\n" https://VPS-HOST-REDACTED.sslip.io/monitor            # 401
+curl -s -o /dev/null -w "%{http_code}\n" -u admin:PASSWORD https://VPS-HOST-REDACTED.sslip.io/monitor  # 200
+curl -s -u admin:PASSWORD https://VPS-HOST-REDACTED.sslip.io/api/v2/monitor/summary | head -c 200      # JSON
 ```
 Expected: `401`, `200`, then JSON beginning `{"asOf":`.
 
@@ -733,7 +733,7 @@ Add at the TOP of `CHANGELOG.md` (below the `---` after "How to use"), using the
 **Stats baseline reset:** no — monitoring/infra change, not a trading-config change.
 
 **What changed:**
-New read-only monitoring GUI at https://31-97-7-138.sslip.io (Let's Encrypt cert, HTTP basic-auth). Backed by GET /api/v2/monitor/summary on the existing v2Router — engine status/balance/regime from getV2Status(), open positions from getOpenTrades(), and current-cohort KPIs/equity/closed-log from v2_trades filtered by entry_time >= stats_baseline_time. Single self-contained public/monitor.html polls every 10s.
+New read-only monitoring GUI at https://VPS-HOST-REDACTED.sslip.io (Let's Encrypt cert, HTTP basic-auth). Backed by GET /api/v2/monitor/summary on the existing v2Router — engine status/balance/regime from getV2Status(), open positions from getOpenTrades(), and current-cohort KPIs/equity/closed-log from v2_trades filtered by entry_time >= stats_baseline_time. Single self-contained public/monitor.html polls every 10s.
 
 VPS infra (one-time, not in repo): nginx reverse proxy on 443 with auth_basic → 127.0.0.1:3033; ufw now closes public 3033/3000/3080, leaving only 22/80/443. nginx site file content:
 <paste final /etc/nginx/sites-available/monitor here>
@@ -742,7 +742,7 @@ VPS infra (one-time, not in repo): nginx reverse proxy on 443 with auth_basic �
 Provide a clean, professional, password-gated monitoring surface without exposing the sprawling dev dashboard or a raw IP:port. Read-only by design — no route can move money.
 
 **What to monitor / watch for:**
-- https://31-97-7-138.sslip.io/monitor prompts for password, then loads; empty-cohort renders (cohort is currently 0 trades since 2026-07-22 baseline).
+- https://VPS-HOST-REDACTED.sslip.io/monitor prompts for password, then loads; empty-cohort renders (cohort is currently 0 trades since 2026-07-22 baseline).
 - /api/v2/monitor/summary returns JSON; balance matches getV2Status().portfolioCash.
 - Cert auto-renew: `certbot renew --dry-run` succeeds.
 - Rollback: `ufw allow 3033/tcp` to restore direct access; `rm /etc/nginx/sites-enabled/monitor && systemctl reload nginx` to drop the proxy; `git revert` the code commits.
@@ -767,11 +767,11 @@ Expected: pushes to `origin` + `vps`, VPS hook runs `npm install` + `npx vite bu
 
 ```bash
 # from local:
-curl -s -u admin:PASSWORD https://31-97-7-138.sslip.io/api/v2/monitor/summary | head -c 300
+curl -s -u admin:PASSWORD https://VPS-HOST-REDACTED.sslip.io/api/v2/monitor/summary | head -c 300
 ```
-Then open `https://31-97-7-138.sslip.io/monitor` in a browser: confirm padlock (trusted cert), password prompt, dashboard loads, mode badge reads "PAPER", empty-cohort states render (not blank), health dot reflects engine state.
+Then open `https://VPS-HOST-REDACTED.sslip.io/monitor` in a browser: confirm padlock (trusted cert), password prompt, dashboard loads, mode badge reads "PAPER", empty-cohort states render (not blank), health dot reflects engine state.
 
-Cross-check one number: `ssh root@31.97.7.138 "sqlite3 /opt/trading-bot/data/trading.db \"SELECT COUNT(*) FROM v2_trades WHERE status='closed' AND entry_time >= 1784740967690;\""` should equal the dashboard's "Trades" tile.
+Cross-check one number: `ssh root@VPS_HOST_REDACTED "sqlite3 /opt/trading-bot/data/trading.db \"SELECT COUNT(*) FROM v2_trades WHERE status='closed' AND entry_time >= 1784740967690;\""` should equal the dashboard's "Trades" tile.
 
 - [ ] **Step 5: Confirm done**
 
