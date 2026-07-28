@@ -1,7 +1,7 @@
 /**
  * PortfolioRiskPanel — Visualizes correlation risk, VaR/CVaR, Kelly, and position heat.
  */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 interface RiskData {
   correlation: {

@@ -15,7 +15,7 @@ const getColor = (value: number): string => {
   return 'bg-purple-500/60';
 };
 
-export const CorrelationMatrix: React.FC<Props> = ({ tickers }) => {
+export const CorrelationMatrix: React.FC<Props> = () => {
   const [data, setData] = useState<CorrMatrix | null>(null);
   const [loading, setLoading] = useState(false);
 

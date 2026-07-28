@@ -2,7 +2,7 @@
  * StakingPanel — Shows staking status, positions, and auto-stake toggle.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 
 interface StakingStatus {
   enabled: boolean;

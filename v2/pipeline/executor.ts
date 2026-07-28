@@ -163,8 +163,6 @@ export async function executeTrade(
     const liveExitCfg = STRATEGY_EXIT_CONFIGS[liveStrategy] ?? STRATEGY_EXIT_CONFIGS.TREND;
     const bestBid = await exchange.getBestBid(signal.ticker);
     const quantity = risk.positionSizeUsd / bestBid;
-    const stopLoss = bestBid - atr * liveExitCfg.slAtrMult;
-    const takeProfit = bestBid + atr * liveExitCfg.tpAtrMult;
 
     // Place maker buy at best bid
     const orderResult = await exchange.placeMakerBuy(signal.ticker, bestBid, quantity);

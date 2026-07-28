@@ -59,13 +59,10 @@ const SLIPPAGE_BUFFER = 0.001; // 0.10% slippage per side
 // ─── Arbitrage Engine ────────────────────────────────────────
 
 class ArbitrageEngine {
-  private prices: Map<string, Map<string, PriceSnapshot>> = new Map(); // ticker → exchange → snapshot
   private enabled = true;
-  private scanIntervalMs = 2000; // Check every 2 seconds
   private timer: ReturnType<typeof setInterval> | null = null;
   private opportunities: ArbOpportunity[] = [];
   private maxOpportunityAge = 30000; // 30 seconds max
-  private minTradeUsd = 50; // Minimum $50 per arb trade
   private simTradeSize = 200; // $200 per simulated arb
 
   // Adapters for execution
@@ -114,6 +111,8 @@ class ArbitrageEngine {
     // re-enable checklist. start() is a no-op so callers don't need to be
     // touched, and the existing scan/execute code remains in the file as
     // a reference implementation for the eventual rewrite.
+    // (Referenced, not invoked, so tsc doesn't flag it as dead code.)
+    void this.scan;
     console.log('[ArbitrageEngine] DISABLED — see file header for re-enable checklist');
   }
 

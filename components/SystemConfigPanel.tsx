@@ -2,7 +2,7 @@
  * SystemConfigPanel — Toggle all 56 feature flags from systemConfig.js.
  * Groups flags by category with toggle switches and numeric inputs.
  */
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface FlagGroup {
   title: string;

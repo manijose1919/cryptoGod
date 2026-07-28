@@ -10,8 +10,6 @@ import { adx } from '../indicators/indicators.ts';
 import { generateSignals, generateShortSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
 import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
 import { detectBreakoutEntry } from '../pipeline/breakoutSignal.ts';
-import { detectMeanReversionEntry } from '../pipeline/meanReversionSignal.ts';
-import { detectScalpEntry } from '../pipeline/scalpSignal.ts';
 import { scanMarket, getPassedTickers } from '../pipeline/marketScanner.ts';
 
 export interface StrategySignal extends SignalResult {

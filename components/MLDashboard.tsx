@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface MLDashboardProps {
   ticker: string;
@@ -274,7 +274,6 @@ export function MLDashboard({ ticker, isVisible = true }: MLDashboardProps) {
   const maxImportance = Math.max(...featureImportance.map(f => f.importance), 0.01);
 
   const isCollecting = collectionStatus?.isRunning || false;
-  const snapshots = collectionStatus?.totalSnapshots || 0;
   const sources = [
     { name: 'Binance', active: isCollecting && (collectionStatus?.cacheStats?.exchangeData || 0) > 0 },
     { name: 'OKX', active: isCollecting && (collectionStatus?.cacheStats?.derivatives || 0) > 0 },

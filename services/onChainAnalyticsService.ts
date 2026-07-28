@@ -60,7 +60,6 @@ export interface HolderBehaviorSignal {
 // CONSTANTS
 // ============================================
 const WHALE_VOLUME_THRESHOLD = 2.5;  // 2.5x average = potential whale
-const LARGE_CANDLE_THRESHOLD = 2.0;  // 2x average range = large move
 
 // ============================================
 // WHALE ACTIVITY DETECTION
@@ -418,7 +417,7 @@ export function getOnChainTradingAdjustment(signals: OnChainSignals): {
   shouldTrade: boolean;
   reason: string;
 } {
-  const { overallSignal, whaleActivity, exchangeFlow, holderBehavior, confidence } = signals;
+  const { overallSignal, whaleActivity, exchangeFlow, holderBehavior } = signals;
 
   let confidenceBoost = 0;
   let positionSizeMultiplier = 1;

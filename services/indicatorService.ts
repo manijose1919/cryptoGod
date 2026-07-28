@@ -1,5 +1,5 @@
 import type { Candle, TrendDashboardData, SRLevels, DivergenceData, MomentumData, VolumeProfileData, SignalScore, IndicatorData, AdaptiveData, HeatMapEntry, CorrelationData, MultiAssetAnalysis, MarketRegime, GapData, OpportunityScore, DynamicTradingParams, SessionAnalytics, TradingStrategy, SlowMarketResult } from '../types';
-import { INDICATOR_PARAMS, SIGNAL_THRESHOLDS, ADAPTIVE_ASSET_PARAMS, PROBABILITY_THRESHOLDS } from '../constants';
+import { INDICATOR_PARAMS, ADAPTIVE_ASSET_PARAMS, PROBABILITY_THRESHOLDS } from '../constants';
 
 // ============================================
 // MEMOIZATION CACHE FOR INDICATOR CALCULATIONS
@@ -267,11 +267,11 @@ function calculateTCSeriesInternal(candles: Candle[]): number[] {
     // Trendline 1: Volume-weighted directional flow (period 8)
     const ohlc4Change = ohlc4.map((d, i) => i > 0 ? d - ohlc4[i - 1] : 0);
     const toptrend = movingSum(
-        candles.map((c, i) => ohlc4Change[i] > 0 ? ohlc4[i] * volumes[i] : 0),
+        candles.map((_c, i) => ohlc4Change[i] > 0 ? ohlc4[i] * volumes[i] : 0),
         INDICATOR_PARAMS.TC_TRENDLINE_PERIOD
     );
     const lowertrend = movingSum(
-        candles.map((c, i) => ohlc4Change[i] < 0 ? Math.abs(ohlc4[i] * volumes[i]) : 0),
+        candles.map((_c, i) => ohlc4Change[i] < 0 ? Math.abs(ohlc4[i] * volumes[i]) : 0),
         INDICATOR_PARAMS.TC_TRENDLINE_PERIOD
     );
 
@@ -286,11 +286,11 @@ function calculateTCSeriesInternal(candles: Candle[]): number[] {
     // Trendline 2: Close-based directional flow (period 20)
     const closeChange = closes.map((d, i) => i > 0 ? d - closes[i - 1] : 0);
     const toptrend2 = movingSum(
-        candles.map((c, i) => closeChange[i] > 0 ? closes[i] * volumes[i] : 0),
+        candles.map((_c, i) => closeChange[i] > 0 ? closes[i] * volumes[i] : 0),
         INDICATOR_PARAMS.TC_TRENDLINE2_PERIOD
     );
     const lowertrend2 = movingSum(
-        candles.map((c, i) => closeChange[i] < 0 ? Math.abs(closes[i] * volumes[i]) : 0),
+        candles.map((_c, i) => closeChange[i] < 0 ? Math.abs(closes[i] * volumes[i]) : 0),
         INDICATOR_PARAMS.TC_TRENDLINE2_PERIOD
     );
 
@@ -351,7 +351,7 @@ function calculateBreakoutDetectorSeriesInternal(
     });
     const sumGkTerms = movingSum(gkTerms, volatilityLength);
 
-    const priceVolatility = sumGkTerms.map((s, i) =>
+    const priceVolatility = sumGkTerms.map((s, _i) =>
         isNaN(s) ? NaN : Math.sqrt(Math.max(0, s / volatilityLength))
     );
 
@@ -405,11 +405,11 @@ function calculateWhaleMoneyFlowSeriesInternal(
     // Money strength (MFI-style): already in [0, 100] range
     const closeChanges = closes.map((c, i) => i > 0 ? c - closes[i - 1] : 0);
     const upper = movingSum(
-        candles.map((c, i) => closeChanges[i] > 0 ? closes[i] * volumes[i] : 0),
+        candles.map((_c, i) => closeChanges[i] > 0 ? closes[i] * volumes[i] : 0),
         mfiLength
     );
     const lower = movingSum(
-        candles.map((c, i) => closeChanges[i] < 0 ? Math.abs(closes[i] * volumes[i]) : 0),
+        candles.map((_c, i) => closeChanges[i] < 0 ? Math.abs(closes[i] * volumes[i]) : 0),
         mfiLength
     );
 
@@ -1181,22 +1181,16 @@ export function calculateAdaptiveTCSeries(candles: Candle[], ticker: string): nu
     const volumes = candles.map(c => c.volume);
     const ohlc4 = candles.map(c => (c.open + c.high + c.low + c.close) / 4);
 
-    // Core calculation from PineScript: calc_tc function
-    const calc = candles.map((c, i) => {
-        if (c.high === c.low) return 0;
-        return ((2 * ohlc4[i] - c.low - c.high) / (c.high - c.low)) * volumes[i];
-    });
-
     // Calculate top (bullish volume) and lower (bearish volume)
     const ohlc4Change = ohlc4.map((d, i) => i > 0 ? d - ohlc4[i - 1] : 0);
 
     const topSum = movingSum(
-        candles.map((c, i) => ohlc4Change[i] <= 0 ? 0 : ohlc4[i] * volumes[i]),
+        candles.map((_c, i) => ohlc4Change[i] <= 0 ? 0 : ohlc4[i] * volumes[i]),
         lookback
     );
 
     const lowerSum = movingSum(
-        candles.map((c, i) => ohlc4Change[i] >= 0 ? 0 : ohlc4[i] * volumes[i]),
+        candles.map((_c, i) => ohlc4Change[i] >= 0 ? 0 : ohlc4[i] * volumes[i]),
         lookback
     );
 
@@ -1729,9 +1723,7 @@ export function calculateOpportunityScore(
     const cached = getCachedIndicators(candles);
     const tcValue = cached.tcSeries[cached.tcSeries.length - 1] || 50;
     const momentumValue = cached.momentumSeries[cached.momentumSeries.length - 1] || 50;
-    const whaleValue = cached.whaleSeries[cached.whaleSeries.length - 1] || 50;
     const trendDashboard = cached.trendDashboard;
-    const divergence = cached.divergence;
 
     // Detect market regime and gaps
     const regime = detectMarketRegime(candles);
@@ -1958,7 +1950,6 @@ export function calculateSessionAnalytics(
     // Calculate win/loss stats
     const sellTrades = trades.filter(t => t.type === 'SELL' && t.pnl !== undefined);
     const wins = sellTrades.filter(t => (t.pnl || 0) > 0);
-    const losses = sellTrades.filter(t => (t.pnl || 0) <= 0);
     const winRate = sellTrades.length > 0 ? (wins.length / sellTrades.length) * 100 : 0;
 
     // Calculate consecutive wins/losses

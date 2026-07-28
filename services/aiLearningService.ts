@@ -10,7 +10,7 @@
  * Uses local statistical analysis - no external API needed.
  */
 
-import type { Trade, TradingStrategy, CoreTradingStrategy, Candle } from '../types';
+import type { TradingStrategy, CoreTradingStrategy } from '../types';
 import { isCoreTradingStrategy, CORE_TRADING_STRATEGIES } from '../types';
 // Persistence stubs — persistenceService was removed (backend SQLite handles real persistence).
 // These no-ops keep aiLearningService functional with in-memory-only storage.
@@ -172,8 +172,6 @@ let learningState: LearningState = {
 // ============================================
 // PERSISTENCE INTEGRATION
 // ============================================
-let persistenceInitialized = false;
-
 /**
  * Restore learning state from SQLite database.
  * Call this once on app startup to recover from previous sessions.
@@ -220,7 +218,6 @@ export async function restoreFromDatabase(): Promise<{ tradesLoaded: number; pat
     console.warn('[AI Learning] Could not restore parameters from DB:', e);
   }
 
-  persistenceInitialized = true;
   console.log(`[AI Learning] Restored: ${tradesLoaded} trades, ${patternsLoaded} patterns, params=${paramsRestored}`);
   return { tradesLoaded, patternsLoaded, paramsRestored };
 }
@@ -300,8 +297,6 @@ function localAnalyze(): string {
 
   const bestStrat = Object.entries(stratPerf)
     .sort((a, b) => b[1].pnl - a[1].pnl)[0];
-  const worstStrat = Object.entries(stratPerf)
-    .sort((a, b) => a[1].pnl - b[1].pnl)[0];
 
   // Identify market condition patterns
   const winConditions = wins.map(t => t.marketConditions?.volatility).filter(Boolean);
@@ -544,34 +539,6 @@ export async function requestAIAnalysis(): Promise<string> {
   if (recentTrades.length < 5) {
     return 'Need at least 5 trades for AI analysis';
   }
-
-  const prompt = `You are an expert crypto trading analyst. Analyze these recent trades and provide specific, actionable recommendations.
-
-TRADING PERFORMANCE:
-- Total Trades: ${learningState.totalTrades}
-- Win Rate: ${learningState.winRate.toFixed(1)}%
-- Average Win: ${learningState.avgWinPercent.toFixed(2)}%
-- Average Loss: ${learningState.avgLossPercent.toFixed(2)}%
-- Profit Factor: ${learningState.profitFactor.toFixed(2)}
-
-STRATEGY BREAKDOWN:
-${Object.entries(learningState.strategyStats)
-  .filter(([_, stats]) => stats.trades > 0)
-  .map(([strat, stats]) => `- ${strat}: ${stats.trades} trades, ${stats.winRate.toFixed(1)}% win rate, $${stats.totalPnl.toFixed(2)} total`)
-  .join('\n')}
-
-RECENT 10 TRADES:
-${recentTrades.slice(-10).map(t =>
-  `${t.outcome} | ${t.strategy} | ${t.ticker} | ${t.pnlPercent.toFixed(2)}% | TC:${t.indicators.tcValue.toFixed(0)} | ${t.marketConditions.volatility} vol`
-).join('\n')}
-
-Based on this data, provide:
-1. What patterns are working? What's failing?
-2. Specific parameter changes (entry thresholds, stop loss, etc.)
-3. Which strategies should be prioritized or avoided?
-4. Risk management adjustments
-
-Be specific with numbers. Format as JSON with keys: patterns, parameterChanges, strategyAdvice, riskAdvice`;
 
   const analysis = localAnalyze();
   learningState.lastAIAnalysis = analysis;

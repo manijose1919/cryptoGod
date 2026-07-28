@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import type { TradingStrategy, CoreTradingStrategy, SystemEvent, TradingMode } from '../types';
 import { CORE_TRADING_STRATEGIES } from '../types';
-import { STRATEGY_INFO, DEFAULT_PROFIT_GOALS, MICRO_TRADING } from '../constants';
+import { STRATEGY_INFO, MICRO_TRADING } from '../constants';
 import { SettingsPanel } from './SettingsPanel';
 
 /**

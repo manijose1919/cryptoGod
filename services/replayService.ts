@@ -27,8 +27,6 @@ export class ReplayEngine {
   private stateStack: ReplayState[] = [];
   private currentIndex = 0;
   private trades: ReplayState['trades'] = [];
-  private cash = 1000;
-  private initialCash = 1000;
   private positionQty = 0;
   private positionEntry = 0;
   isPlaying = false;
@@ -36,10 +34,8 @@ export class ReplayEngine {
   private speed = 500; // ms per step
   private onUpdate: ((state: ReplayState) => void) | null = null;
 
-  load(candles: ReplayCandle[], initialCash = 1000) {
+  load(candles: ReplayCandle[], _initialCash = 1000) {
     this.candles = candles;
-    this.initialCash = initialCash;
-    this.cash = initialCash;
     this.currentIndex = Math.min(30, candles.length - 1); // Start with some history
     this.trades = [];
     this.positionQty = 0;

@@ -9,7 +9,6 @@
  */
 
 import tradingBus from './eventBus.ts';
-import type { ExitEvent } from './eventBus.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -74,7 +73,7 @@ class ShortSellingEngine {
   evaluateShortEntry(
     ticker: string,
     exchange: 'kraken' | 'crypto.com',
-    currentPrice: number,
+    _currentPrice: number,
     regime: string,
     mlConfidence: number,
     tcScore: number,
@@ -245,7 +244,7 @@ class ShortSellingEngine {
    * Check all open shorts for exit conditions.
    */
   checkExits(priceMap: Map<string, number>): void {
-    for (const [id, pos] of this.positions) {
+    for (const [_id, pos] of this.positions) {
       const currentPrice = priceMap.get(`${pos.exchange}:${pos.ticker}`);
       if (!currentPrice) continue;
 

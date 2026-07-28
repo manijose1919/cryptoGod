@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import LastUpdated from './LastUpdated';
 import AnimatedNumber from './AnimatedNumber';
 import SkeletonPanel from './SkeletonPanel';

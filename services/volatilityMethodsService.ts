@@ -629,7 +629,6 @@ export function getVolatilityAdjustedParams(
   reasoning: string;
 } {
   const ensemble = calculateEnsembleVolatility(candles);
-  const atr = calculateATR(candles);
 
   let stopMultiplier = 1;
   let profitMultiplier = 1;

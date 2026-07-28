@@ -2,7 +2,7 @@
  * RegimeDashboard — Shows current regime per ticker, Fear & Greed, derivatives sentiment.
  */
 
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface RegimeInfo {
   ticker: string;
@@ -84,7 +84,7 @@ export default function RegimeDashboard() {
       {derivs && (() => {
         // Filter out non-ticker metadata keys (e.g. "ticker", "error", "enabled")
         const tickerEntries = Object.entries(derivs).filter(
-          ([key, val]) => val && typeof val === 'object' && 'signal' in (val as Record<string, unknown>)
+          ([_key, val]) => val && typeof val === 'object' && 'signal' in (val as Record<string, unknown>)
         );
         return tickerEntries.length > 0 ? (
           <div className="mt-3 pt-3 border-t border-slate-700/50">
