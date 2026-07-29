@@ -1,5 +1,15 @@
 # Changelog
 
+> **⚠️ History rewrite — 2026-07-29.** Git history was rewritten on this date to remove the VPS
+> host address from all commits. **Every commit SHA created before 2026-07-29 changed.** SHAs cited
+> in entries below no longer resolve against this repository; they are retained as a record of what
+> shipped together, not as usable references. A pre-rewrite backup exists as
+> `cryptogod-backup-2026-07-29.bundle` (verified complete, kept outside the repo) — clone it with
+> `git clone cryptogod-backup-2026-07-29.bundle` if you need to resolve an old SHA.
+>
+> If you have an existing local clone from before this date, its history has diverged and cannot be
+> fast-forwarded. Re-clone rather than attempting to merge.
+
 Bidirectional change log between local Claude (developer machine) and VPS Claude (live trading host). Both agents must add an entry to this file for every material change they ship, and read this file before making changes when accessing the repo on the VPS.
 
 **Why this file exists:** Both agents work on the same code from different machines, with different views of the live trading state. Without a shared change log, drift accumulates: code changes happen in one place that the other doesn't see, monitoring criteria get out of sync, and miscommunications cause regressions (e.g., the 3-day V2 engine crash from commit `2a96f56` that local Claude initially flagged as "non-blocking").
