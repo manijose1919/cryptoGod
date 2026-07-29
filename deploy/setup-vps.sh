@@ -309,7 +309,10 @@ mkdir -p "$APP_DIR/logs"
         echo "Bot restarted via PM2 (trading-bot)"
     else
         echo "Starting bot via PM2..."
-        cd $APP_DIR && pm2 start server.js --name canuck-node --update-env
+        # Start from the ecosystem file, not a bare script path: it carries the
+        # interpreter flags (--experimental-strip-types, required to run the
+        # TypeScript entrypoint), the env vars, and the restart policy.
+        cd $APP_DIR && pm2 start ecosystem.config.cjs --update-env
         pm2 save
         echo "Bot started via PM2 (canuck-node)"
     fi

@@ -109,6 +109,16 @@ app.get('/monitor', (_req, res) => {
   res.sendFile(join(__dirname, 'public', 'monitor.html'));
 });
 
+// --- Unmatched API routes: 404 JSON, never the SPA shell ---
+// Without this, the catch-all below answers /api/anything with 200 + index.html.
+// Callers then get HTML where they expected JSON, res.json() throws, and the
+// component's catch block swallows it — a missing route looks identical to a
+// working one. Many frontend endpoints are not served by this V2 server; this
+// makes that visible instead of silent.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found', path: req.originalUrl });
+});
+
 // --- SPA catch-all ---
 app.get('*', (_req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'));
