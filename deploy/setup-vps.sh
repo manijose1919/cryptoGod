@@ -329,16 +329,13 @@ mkdir -p "$APP_DIR/logs"
         npm install --production 2>&1 | tail -5
     fi
 
-    # Restart the Node.js bot via PM2 (primary) or systemd (fallback)
+    # Restart the Node.js bot via PM2
     if pm2 describe canuck-node > /dev/null 2>&1; then
         cd $APP_DIR && pm2 restart canuck-node --update-env
         echo "Bot restarted via PM2 (canuck-node)"
     elif pm2 describe trading-bot > /dev/null 2>&1; then
         cd $APP_DIR && pm2 restart trading-bot --update-env
         echo "Bot restarted via PM2 (trading-bot)"
-    elif systemctl is-active --quiet trading-bot 2>/dev/null; then
-        systemctl restart trading-bot
-        echo "Bot restarted via systemd"
     else
         echo "Starting bot via PM2..."
         cd $APP_DIR && pm2 start server.js --name canuck-node --update-env
