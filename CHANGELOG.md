@@ -47,6 +47,35 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-29 — Cleanup follow-ups: stale comments, dead deploy paths, /api 404 masking (NO trading change) — local-claude
+
+**Commits:** squash `c1241b5` (PR #2)
+**Files changed:** `serverV2.ts`, `v2/index.ts`, `core/arbitrageEngine.ts`, `types/services.d.ts`, `deploy/deploy.ps1`, `deploy/setup-vps.sh`
+**Stats baseline reset:** **no** — no strategy, threshold, gate, sizing rule, or config value altered.
+
+**What changed:**
+
+*`/api/*` no longer masks missing routes.* The SPA catch-all `app.get('*')` in `serverV2.ts` answered every unmatched path with `200` + `dist/index.html`, including `/api/*`. Callers expecting JSON got HTML, `res.json()` threw, and component `catch` blocks swallowed it — a missing API route was indistinguishable from a working one. An `app.use('/api', ...)` guard now returns `404 {error, path}`, registered after every real API route and before the catch-all.
+
+*Momentum comment corrected.* `v2/index.ts` said "Default disabled (MOMENTUM_CONFIG.ENABLED=false) — flip to true when ready to ship live". `engine/config.ts:257` has had `ENABLED: true` since 2026-05-18. **Momentum has been trading while the code comment said it was off.** Backtest figures preserved.
+
+*`core/arbitrageEngine.ts`.* `scan()` is retained as the reference implementation for the eventual rewrite, but `private` made tsc flag it unused, previously silenced with `void this.scan;`. Now `protected` — the error goes away honestly and the method is no longer bait for deletion. Engine remains a no-op.
+
+*Deploy scripts.* `deploy.ps1` lost its `docker` mode (it built the deleted `canuck-trader-pro/backend/Dockerfile`); `archive` and `git` modes untouched. `setup-vps.sh` lost an unreachable `systemctl is-active trading-bot` branch, stale docker help text, and a Python 3.12 install step; provisioning steps renumbered to a contiguous 1-10 (previously mislabelled, skipping 9). **`pm2 start server.js` → `pm2 start ecosystem.config.cjs`** — `server.js` was deleted, and the ecosystem file carries the `--experimental-strip-types` flag the TypeScript entrypoint requires. The old line would have failed on a fresh VPS provision.
+
+**Why:**
+These were logged as follow-ups during the 2026-07-29 cleanup. The `/api` masking was found while investigating why `SocialSentimentPanel` showed "Sentiment data unavailable".
+
+**What to monitor / watch for:**
+- **Verified live post-deploy (`c1241b5`):** `/api/health`, `/api/v2/status`, `/api/v2/monitor/summary`, `/api/config/flags` all 200; `/api/sentiment/dashboard` 404 JSON; SPA route `/performance` 200; engine running, paper mode.
+- **Expect frontend errors to surface that were previously silent.** Any dashboard panel calling an unimplemented endpoint now gets a 404 instead of HTML. This is the intended effect — the failure was already happening, just invisibly.
+- **Rollback:** `git revert c1241b5`.
+
+**Known and NOT fixed — needs a decision:**
+**66 of the 79 distinct `/api` endpoints the frontend calls are not served by `serverV2.ts`.** The entire `routes/` directory (17 files) is never mounted — it was written for the deleted `server.js`. Only `/api/v2/*`, `/api/health`, and `/api/config/*` are real. Options: mount `routes/` (integration work, those files reference services that may no longer exist), or trim the dashboard to what V2 actually serves. The read-only `/monitor` page is unaffected — it only calls `/api/v2/monitor/summary`.
+
+---
+
 ## 2026-07-29 — Repository documentation, cleanup, green CI, history rewrite (NO trading change) — local-claude
 
 **Commits:** squash `b2230a5` (PR #1, 12 task commits) + `1f8b237`, rewritten to `b7e951f` + `fd834d6`
