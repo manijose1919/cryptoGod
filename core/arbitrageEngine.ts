@@ -111,8 +111,6 @@ class ArbitrageEngine {
     // re-enable checklist. start() is a no-op so callers don't need to be
     // touched, and the existing scan/execute code remains in the file as
     // a reference implementation for the eventual rewrite.
-    // (Referenced, not invoked, so tsc doesn't flag it as dead code.)
-    void this.scan;
     console.log('[ArbitrageEngine] DISABLED — see file header for re-enable checklist');
   }
 
@@ -126,7 +124,11 @@ class ArbitrageEngine {
   /**
    * Scan for arbitrage opportunities across exchanges.
    */
-  private async scan(): Promise<void> {
+  // `protected`, not `private`, deliberately: the engine is a no-op (H10) so
+  // nothing calls this, but it is retained as the reference implementation for
+  // the eventual rewrite. `private` would make tsc flag it as unused and invite
+  // someone to delete it.
+  protected async scan(): Promise<void> {
     if (!this.enabled || this.commonTickers.length === 0) return;
 
     for (const ticker of this.commonTickers) {
