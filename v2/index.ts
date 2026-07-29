@@ -50,7 +50,7 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
     // Re-enable when strategy is reworked
     console.log('[V2] Breakout engine disabled (unprofitable in backtest)');
 
-    // Momentum engine v2 (rebuilt 2026-05-06)
+    // Momentum engine v2 (rebuilt 2026-05-06, enabled 2026-05-18)
     // Original (1h, 1.5x histogram-ratio entry, histogram_decay exit):
     //   0% WR over 7 trades — entry math compared macd-hist (price-acceleration)
     //   to abs price-changes (different scales, near-random output).
@@ -58,10 +58,10 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
     //     percent-giveback trail, 3x ATR TP, swing-low stop):
     //   PF 1.70 / 90d, 1.85 / 60d, 1.92 / 30d on
     //   ZECUSD,RUNEUSD,FLOWUSD,ENAUSD,KASUSD,ICPUSD,WIFUSD
-    // Default disabled (MOMENTUM_CONFIG.ENABLED=false) — flip to true when
-    // ready to ship live. Single-strategy backtest validates before flipping.
-    // MOMENTUM now routes through the main TREND pipeline (Stage 2b in tradeEngine).
-    // No separate engine loop. MOMENTUM_CONFIG.ENABLED gates signal detection in tradeEngine.
+    // ENABLED since 2026-05-18 (MOMENTUM_CONFIG.ENABLED=true in engine/config.ts).
+    // MOMENTUM routes through the main TREND pipeline (Stage 2b in tradeEngine),
+    // reusing the same riskGate and exitManager — there is no separate engine loop.
+    // MOMENTUM_CONFIG.ENABLED gates signal detection in tradeEngine.
     if (MOMENTUM_CONFIG.ENABLED) {
       console.log('[V2] Momentum signals enabled (routed through main pipeline, not separate engine)');
     } else {

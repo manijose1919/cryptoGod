@@ -12,7 +12,6 @@ set -e  # Exit on any error
 APP_DIR="/opt/trading-bot"
 APP_USER="tradingbot"
 NODE_VERSION="20"
-PYTHON_VERSION="3.12"
 BARE_REPO="/opt/trading-bot.git"
 SWAP_SIZE="4G"
 
@@ -25,7 +24,6 @@ echo ""
 echo "  App Dir   : $APP_DIR"
 echo "  User      : $APP_USER"
 echo "  Node      : v$NODE_VERSION LTS"
-echo "  Python    : $PYTHON_VERSION"
 echo "  Swap      : $SWAP_SIZE"
 echo ""
 
@@ -33,7 +31,7 @@ echo ""
 # 1. System Updates & Base Packages
 # ============================================
 echo ""
-echo "[1/12] Updating system packages..."
+echo "[1/10] Updating system packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
@@ -49,37 +47,10 @@ apt-get install -y \
 echo "  System packages installed"
 
 # ============================================
-# 2. Install Python 3.12
+# 2. Install Node.js 20 LTS
 # ============================================
 echo ""
-echo "[2/12] Installing Python ${PYTHON_VERSION}..."
-
-# Add deadsnakes PPA for Python 3.12
-if ! python3.12 --version &>/dev/null; then
-    add-apt-repository -y ppa:deadsnakes/ppa 2>/dev/null || true
-    apt-get update -y
-    apt-get install -y python3.12 python3.12-venv python3.12-dev python3.12-distutils 2>/dev/null || \
-    apt-get install -y python3 python3-pip python3-venv python3-dev
-fi
-
-# Ensure pip is available
-if command -v python3.12 &>/dev/null; then
-    PYTHON_BIN="python3.12"
-    curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 2>/dev/null || true
-else
-    PYTHON_BIN="python3"
-    apt-get install -y python3-pip
-fi
-
-PYTHON_INSTALLED=$($PYTHON_BIN --version 2>&1)
-echo "  Python: $PYTHON_INSTALLED"
-echo "  Pip: $(pip3 --version 2>&1 | head -c 40)"
-
-# ============================================
-# 3. Install Node.js 20 LTS
-# ============================================
-echo ""
-echo "[3/12] Installing Node.js v${NODE_VERSION} LTS..."
+echo "[2/10] Installing Node.js v${NODE_VERSION} LTS..."
 if ! command -v node &>/dev/null || [[ "$(node -v)" != v${NODE_VERSION}* ]]; then
     # Remove old Node.js if present
     apt-get remove -y nodejs 2>/dev/null || true
@@ -96,10 +67,10 @@ echo "  Node: $(node -v)"
 echo "  NPM: $(npm -v)"
 
 # ============================================
-# 4. Install Docker & Docker Compose
+# 3. Install Docker & Docker Compose
 # ============================================
 echo ""
-echo "[4/12] Installing Docker & Docker Compose..."
+echo "[3/10] Installing Docker & Docker Compose..."
 if ! command -v docker &>/dev/null; then
     # Add Docker's official GPG key
     install -m 0755 -d /etc/apt/keyrings
@@ -136,10 +107,10 @@ echo "  Docker: $(docker --version 2>&1 | head -c 40)"
 echo "  Compose: $(docker compose version 2>&1 | head -c 40)"
 
 # ============================================
-# 5. Install Redis
+# 4. Install Redis
 # ============================================
 echo ""
-echo "[5/12] Installing Redis..."
+echo "[4/10] Installing Redis..."
 if ! command -v redis-server &>/dev/null; then
     apt-get install -y redis-server
     # Configure Redis
@@ -154,10 +125,10 @@ else
 fi
 
 # ============================================
-# 6. Install Nginx
+# 5. Install Nginx
 # ============================================
 echo ""
-echo "[6/12] Installing Nginx..."
+echo "[5/10] Installing Nginx..."
 if ! command -v nginx &>/dev/null; then
     apt-get install -y nginx
     systemctl enable nginx
@@ -200,18 +171,18 @@ else
 fi
 
 # ============================================
-# 7. Install PM2
+# 6. Install PM2
 # ============================================
 echo ""
-echo "[7/12] Installing PM2 process manager..."
+echo "[6/10] Installing PM2 process manager..."
 npm install -g pm2
 echo "  PM2: $(pm2 --version 2>&1)"
 
 # ============================================
-# 8. Create Application User & Directories
+# 7. Create Application User & Directories
 # ============================================
 echo ""
-echo "[8/12] Setting up application user and directories..."
+echo "[7/10] Setting up application user and directories..."
 
 # Create app user
 if ! id "$APP_USER" &>/dev/null; then
@@ -242,10 +213,10 @@ chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 echo "  Directories created and owned by $APP_USER"
 
 # ============================================
-# 10. Firewall (UFW)
+# 8. Firewall (UFW)
 # ============================================
 echo ""
-echo "[10/12] Configuring firewall..."
+echo "[8/10] Configuring firewall..."
 ufw --force enable
 ufw allow 22/tcp     comment 'SSH'
 ufw allow 80/tcp     comment 'HTTP / Nginx'
@@ -258,10 +229,10 @@ echo "  Firewall rules:"
 ufw status numbered 2>&1 | head -20
 
 # ============================================
-# 11. Swap Space (4GB)
+# 9. Swap Space (4GB)
 # ============================================
 echo ""
-echo "[11/12] Configuring swap space (${SWAP_SIZE})..."
+echo "[9/10] Configuring swap space (${SWAP_SIZE})..."
 if [ ! -f /swapfile ]; then
     fallocate -l $SWAP_SIZE /swapfile
     chmod 600 /swapfile
@@ -287,10 +258,10 @@ echo "  Current swap:"
 swapon --show 2>&1 | head -5
 
 # ============================================
-# 12. Git Bare Repo
+# 10. Git Bare Repo
 # ============================================
 echo ""
-echo "[12/12] Configuring git repo..."
+echo "[10/10] Configuring git repo..."
 
 # --- Bare Git Repo with Post-Receive Hook ---
 if [ ! -d "$BARE_REPO" ]; then
@@ -329,19 +300,19 @@ mkdir -p "$APP_DIR/logs"
         npm install --production 2>&1 | tail -5
     fi
 
-    # Restart the Node.js bot via PM2 (primary) or systemd (fallback)
+    # Restart the Node.js bot via PM2
     if pm2 describe canuck-node > /dev/null 2>&1; then
         cd $APP_DIR && pm2 restart canuck-node --update-env
         echo "Bot restarted via PM2 (canuck-node)"
     elif pm2 describe trading-bot > /dev/null 2>&1; then
         cd $APP_DIR && pm2 restart trading-bot --update-env
         echo "Bot restarted via PM2 (trading-bot)"
-    elif systemctl is-active --quiet trading-bot 2>/dev/null; then
-        systemctl restart trading-bot
-        echo "Bot restarted via systemd"
     else
         echo "Starting bot via PM2..."
-        cd $APP_DIR && pm2 start server.js --name canuck-node --update-env
+        # Start from the ecosystem file, not a bare script path: it carries the
+        # interpreter flags (--experimental-strip-types, required to run the
+        # TypeScript entrypoint), the env vars, and the restart policy.
+        cd $APP_DIR && pm2 start ecosystem.config.cjs --update-env
         pm2 save
         echo "Bot started via PM2 (canuck-node)"
     fi
@@ -415,7 +386,6 @@ echo "  VPS Setup Complete!"
 echo "================================================"
 echo ""
 echo "  Installed:"
-echo "    Python     : $($PYTHON_BIN --version 2>&1)"
 echo "    Node.js    : $(node -v 2>&1)"
 echo "    Docker     : $(docker --version 2>&1 | head -c 40)"
 echo "    Redis      : $(redis-server --version 2>&1 | head -c 30)"
@@ -437,17 +407,12 @@ echo ""
 echo "    2. Deploy code (from Windows):"
 echo "       .\\deploy\\deploy.ps1                    # archive mode"
 echo "       .\\deploy\\deploy.ps1 -Mode git          # git push mode"
-echo "       .\\deploy\\deploy.ps1 -Mode docker       # docker mode"
 echo ""
 echo "    3. Start the bot:"
 echo "       pm2 start ecosystem.config.cjs           # PM2 (recommended)"
 echo "       pm2 logs canuck-node                    # view logs"
 echo ""
-echo "    4. Or with Docker:"
-echo "       cd $APP_DIR && docker-compose up -d     # start all services"
-echo "       docker-compose logs -f bot              # view logs"
-echo ""
-echo "    5. Health check:"
+echo "    4. Health check:"
 echo "       curl http://localhost:3033/api/health"
 echo ""
 echo "================================================"

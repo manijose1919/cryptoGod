@@ -1,17 +1,14 @@
 # ============================================
 # Trading Bot Deployment Script (Windows -> VPS)
 #
-# Three deployment modes:
+# Two deployment modes:
 #   archive (default) - tar + scp + extract
 #   git               - push to VPS bare repo, post-receive hook
-#   docker            - build image, transfer, docker-compose up
 #
 # Usage:
 #   .\deploy\deploy.ps1                                          # archive mode (default), VPS=$env:VPS_HOST
 #   .\deploy\deploy.ps1 -Mode git                                # git-based deploy
-#   .\deploy\deploy.ps1 -Mode docker                             # docker image deploy
 #   .\deploy\deploy.ps1 -Mode git -Rollback                      # rollback to previous commit
-#   .\deploy\deploy.ps1 -Mode docker -Rollback                   # rollback to previous docker image
 #   .\deploy\deploy.ps1 -FirstTime                               # initial VPS setup + archive deploy
 #   .\deploy\deploy.ps1 -VpsIp "10.0.0.1" -User "deploy"        # custom VPS
 # ============================================
@@ -24,7 +21,7 @@ param(
 
     [string]$SshKey = "",
 
-    [ValidateSet("archive", "git", "docker")]
+    [ValidateSet("archive", "git")]
     [string]$Mode = "archive",
 
     [switch]$FirstTime,
@@ -39,8 +36,6 @@ $ProjectDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Pat
 $RemoteDir = "/opt/trading-bot"
 $GitRemoteName = "vps"
 $BareRepoPath = "/opt/trading-bot.git"
-$DockerImage = "canuck-trader:latest"
-$DockerImageFile = "canuck-trader.tar.gz"
 $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 # ============================================
@@ -106,7 +101,6 @@ function Get-ElapsedTime {
 $ModeLabel = switch ($Mode) {
     "archive" { "Archive (tar+scp)" }
     "git"     { "Git Push" }
-    "docker"  { "Docker Image" }
 }
 if ($Rollback) { $ModeLabel += " [ROLLBACK]" }
 
@@ -163,24 +157,6 @@ if ($Rollback) {
 
             Write-Step "2/2" "Verifying rollback on VPS..."
             Run-Ssh -Cmd "cd $RemoteDir && git log --oneline -3"
-        }
-        "docker" {
-            Write-Step "1/2" "Rolling back Docker to previous image..."
-            Run-Ssh -Cmd @"
-cd $RemoteDir
-# Tag current as rollback-target, restore previous
-if docker image inspect canuck-trader:previous >/dev/null 2>&1; then
-    docker tag canuck-trader:latest canuck-trader:failed || true
-    docker tag canuck-trader:previous canuck-trader:latest
-    docker-compose up -d --force-recreate bot
-    echo 'Rolled back to canuck-trader:previous'
-else
-    echo 'ERROR: No previous image found. Cannot rollback.'
-    exit 1
-fi
-"@
-            Write-Step "2/2" "Checking container status..."
-            Run-Ssh -Cmd "docker ps --filter name=canuck-trader-bot --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'"
         }
         "archive" {
             Write-Warn "Archive mode rollback: restoring from backup..."
@@ -457,107 +433,6 @@ echo 'Post-receive hook installed'
 }
 
 # ============================================
-# MODE: DOCKER
-# ============================================
-if ($Mode -eq "docker") {
-
-    # --- Step 1: Build Docker image ---
-    Write-Step "1/5" "Building Docker image..."
-
-    Push-Location $ProjectDir
-    try {
-        # Tag previous image for rollback
-        Write-Info "Tagging previous image as canuck-trader:previous..."
-        & docker tag canuck-trader:latest canuck-trader:previous 2>$null
-        # Ignore errors if no previous image exists
-
-        Write-Info "Building canuck-trader:latest..."
-        & docker build -t "${DockerImage}" -f canuck-trader-pro/backend/Dockerfile .
-        if ($LASTEXITCODE -ne 0) { throw "Docker build failed" }
-        Write-Ok "Docker image built successfully"
-    } finally {
-        Pop-Location
-    }
-
-    # --- Step 2: Save and compress image ---
-    Write-Step "2/5" "Saving Docker image to archive..."
-
-    $DockerImagePath = Join-Path $ProjectDir "deploy" $DockerImageFile
-    if (Test-Path $DockerImagePath) { Remove-Item $DockerImagePath -Force }
-
-    & docker save $DockerImage | & "$env:SystemRoot\System32\cmd.exe" /c "gzip > `"$DockerImagePath`""
-    if (-not (Test-Path $DockerImagePath)) {
-        # Fallback: save without pipe
-        $RawPath = Join-Path $ProjectDir "deploy" "canuck-trader.tar"
-        & docker save -o $RawPath $DockerImage
-        & "$env:SystemRoot\System32\tar.exe" -czf $DockerImagePath -C (Split-Path $RawPath) (Split-Path -Leaf $RawPath)
-        Remove-Item $RawPath -Force -ErrorAction SilentlyContinue
-    }
-
-    $ImageSizeMB = [math]::Round((Get-Item $DockerImagePath).Length / 1MB, 2)
-    Write-Ok "Image saved: ${ImageSizeMB}MB"
-
-    # --- Step 3: Transfer image to VPS ---
-    Write-Step "3/5" "Uploading Docker image to VPS..."
-
-    Run-Scp -Src $DockerImagePath -Dst "${SshTarget}:/tmp/${DockerImageFile}"
-    Write-Ok "Image uploaded"
-
-    # --- Step 4: Load image and deploy on VPS ---
-    Write-Step "4/5" "Loading image and deploying on VPS..."
-
-    # Also ensure docker-compose.yml is on the VPS
-    $ComposeFile = Join-Path $ProjectDir "docker-compose.yml"
-    if (Test-Path $ComposeFile) {
-        Run-Scp -Src $ComposeFile -Dst "${SshTarget}:${RemoteDir}/docker-compose.yml"
-        Write-Info "docker-compose.yml uploaded"
-    }
-
-    Run-Ssh -Cmd @"
-# Tag current image as previous for rollback
-docker tag canuck-trader:latest canuck-trader:previous 2>/dev/null || true
-
-# Load new image
-echo 'Loading Docker image...'
-gunzip -c /tmp/${DockerImageFile} | docker load
-rm -f /tmp/${DockerImageFile}
-echo 'Image loaded'
-
-# Deploy with docker-compose
-cd $RemoteDir
-if [ -f docker-compose.yml ]; then
-    docker-compose up -d --force-recreate bot
-    echo 'Services started via docker-compose'
-else
-    # Fallback: run container directly
-    docker stop canuck-trader-bot 2>/dev/null || true
-    docker rm canuck-trader-bot 2>/dev/null || true
-    docker run -d \
-        --name canuck-trader-bot \
-        --restart always \
-        -p 3033:3033 \
-        --env-file ${RemoteDir}/.env \
-        -v trading-data:/app/data \
-        -v trading-models:/app/models \
-        -v trading-logs:/app/logs \
-        ${DockerImage}
-    echo 'Container started directly'
-fi
-"@
-
-    Write-Ok "Docker deployment complete"
-
-    # --- Step 5: Verify containers ---
-    Write-Step "5/5" "Verifying containers..."
-    Start-Sleep -Seconds 5
-
-    Run-Ssh -Cmd "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | head -10"
-
-    # Cleanup local image archive
-    Remove-Item -Force $DockerImagePath -ErrorAction SilentlyContinue
-}
-
-# ============================================
 # Health Check (all modes)
 # ============================================
 Write-Step "HC" "Running health check..."
@@ -583,7 +458,6 @@ try {
     Write-Err "Health check failed. Check logs:"
     Write-Info "  ssh $User@$VpsIp 'journalctl -u trading-bot --lines 30'"
     Write-Info "  ssh $User@$VpsIp 'pm2 logs trading-bot --lines 20'"
-    Write-Info "  ssh $User@$VpsIp 'docker logs canuck-trader-bot --tail 30'"
 }
 
 # ============================================
@@ -611,12 +485,6 @@ switch ($Mode) {
         Write-Info "    ssh $User@$VpsIp 'cd $RemoteDir && git log --oneline -5'  # Recent deploys"
         Write-Info "    ssh $User@$VpsIp 'journalctl -u trading-bot -f'           # View logs"
         Write-Info "    .\deploy\deploy.ps1 -Mode git -Rollback                   # Rollback 1 commit"
-    }
-    "docker" {
-        Write-Info "    ssh $User@$VpsIp 'docker logs -f canuck-trader-bot'       # View logs"
-        Write-Info "    ssh $User@$VpsIp 'docker-compose -f $RemoteDir/docker-compose.yml restart bot'  # Restart"
-        Write-Info "    ssh $User@$VpsIp 'docker ps'                              # Container status"
-        Write-Info "    .\deploy\deploy.ps1 -Mode docker -Rollback                # Rollback"
     }
 }
 Write-Host ""

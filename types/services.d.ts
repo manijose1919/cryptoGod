@@ -18,6 +18,16 @@
 // `declare module` blocks joined by `export * from`, it also carries
 // `default` exports correctly (`export * from` never re-exports `default`).
 //
+// Accepted trade-off of the wildcard form: `*/services/x.js` matches ANY
+// specifier ending in that suffix, so a future dependency exposing e.g.
+// `some-package/services/database.js` would silently pick up these types
+// instead of its own. That risk was weighed and accepted — the suffixes here
+// are specific to this codebase (`whaleFlowTracker.js`, `krakenAdapter.js`,
+// `fearGreedGate.js`, …), and this is an application, not a published library
+// whose consumers could be affected. If a collision ever does occur, the fix
+// is to convert the colliding module to TypeScript rather than to widen this
+// file further.
+//
 // Types are derived from each module's actual exports (read directly from
 // the .js source), not guessed. Where a function is not called from any
 // currently type-checked file, or its real return shape is data read out of
