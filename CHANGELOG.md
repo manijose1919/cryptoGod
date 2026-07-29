@@ -47,6 +47,42 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-07-29 — Repository documentation, cleanup, green CI, history rewrite (NO trading change) — local-claude
+
+**Commits:** squash `b2230a5` (PR #1, 12 task commits) + `1f8b237`, rewritten to `b7e951f` + `fd834d6`
+**Files changed:** `README.md`, `LICENSE` (new), `docs/ARCHITECTURE.md` (new), `docs/README.md` (new), `types/services.d.ts` (new), `package.json`, `CLAUDE.md`, `.gitignore`, `.env.example`, `monitor.sh`, `scripts/push-deploy.sh`, `deploy/*`, `docker-compose.yml`, `prometheus/prometheus.yml`, ~40 source files; deleted `server.js`, `server-indicator-service.js`, `canuck-trader-pro/`
+**Stats baseline reset:** **no** — no strategy, threshold, gate, sizing rule, or config value was altered.
+
+**What changed:**
+
+*Dead stacks retired (−41,989 lines).* `server.js` (8,141 lines) and `server-indicator-service.js` were imported by nothing — every reference to them was a comment. The Python `canuck-trader-pro/` backend is not run by PM2 and no Node module imports it. `services/` is untouched and remains live; `serverV2.ts` imports it directly.
+
+*157 pre-existing TypeScript errors fixed; CI is green for the first time.* CI had been failing on every run since it was added, because `npx tsc --noEmit` exited 2. Fixed properly — no `tsconfig` relaxation, no `continue-on-error` — so the README's CI badge means what it says. Breakdown: `@types/express`+`@types/cors` (4, plus 10 more via transitive `@types/node`); `types/services.d.ts` ambient declarations for 13 plain-JS `services/` modules (44); `CoreTradingStrategy` for lookup tables typed `Record<TradingStrategy, T>` that define only the original 7 strategies (6); 20 substantive errors; 73 dead declarations.
+
+*Documentation.* `README.md` was unmodified Google AI Studio scaffolding — stock banner, `GEMINI_API_KEY`, wrong project. Replaced. New `LICENSE` (proprietary), `docs/ARCHITECTURE.md`, `docs/README.md`. Every performance figure is quoted from an in-repo source and labelled backtest or paper-trading.
+
+*Drift fixed.* `ecosystem.config.cjs`, `package.json`, and `CLAUDE.md` now agree that the entry point is `serverV2.ts`. Previously all three disagreed.
+
+*Security.* VPS host removed from tracked files **and purged from all 501 commits** via `git filter-repo`; both remotes force-pushed. `monitor.sh`, `scripts/push-deploy.sh`, `deploy/deploy.ps1` now read `$VPS_HOST` from the environment and fail loudly when unset. No credentials were ever committed (verified across the full history).
+
+**Why:**
+The repository is being prepared for portfolio / public-facing use. It could not be shown to anyone in its prior state: the README described a different project, three sources disagreed about how to start the system, CI was visibly red, and the live host address was committed.
+
+**What to monitor / watch for:**
+- `pm2 status canuck-node` online and `/api/health` returning `ok: true` — **verified post-rewrite** (deployed SHA `fd834d6`, bot restarted cleanly, paper mode, engine running).
+- CI should stay green. If `npx tsc --noEmit` ever fails again, it is a real regression now, not background noise.
+- **Every commit SHA before 2026-07-29 changed.** SHAs cited in entries below do not resolve. Backup: `cryptogod-backup-2026-07-29.bundle` (verified, outside the repo).
+- **`VPS_HOST` must be exported** before running `scripts/push-deploy.sh` or `monitor.sh` — they now fail fast instead of using a hardcoded address.
+- **Rollback:** `git clone cryptogod-backup-2026-07-29.bundle` restores pre-rewrite history in full.
+
+**Follow-ups found, not fixed:**
+- `v2/index.ts:61-62` says momentum is disabled; `config.ts:257` has `ENABLED: true` (flipped 2026-05-18). Docs follow the executing config. **Momentum is live and a code comment says otherwise.**
+- `SocialSentimentPanel` calls `/api/sentiment/dashboard`, which does not exist server-side.
+- `deploy/deploy.ps1` Docker mode builds a now-deleted Dockerfile.
+- `deploy/setup-vps.sh` retains an unreachable `systemctl is-active trading-bot` branch.
+
+---
+
 ## 2026-07-23 — htfRegimes fix, dashboard polish, ATR/shorts analysis (NO config change) — local-claude
 
 **Commits:** `6617d40`
