@@ -260,10 +260,6 @@ class StakingEngine {
     return true;
   }
 
-  private isAssetInTradingPosition(_exchange: string, asset: string): boolean {
-    return this.activeTradingAssets.has(`${asset}USD`);
-  }
-
   // ─── Getters ─────────────────────────────────────────────
 
   getProducts(): StakingProduct[] {

@@ -10,7 +10,6 @@ let _tg: any = null;
 async function getTelegram(): Promise<any> {
   if (!_tg) {
     try {
-      // @ts-expect-error JS module without types
       _tg = await import('../../services/telegramService.js');
     } catch {
       _tg = { default: null };

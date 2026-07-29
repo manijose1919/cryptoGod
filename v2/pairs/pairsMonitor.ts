@@ -14,7 +14,6 @@ import type { PairsLiveState } from './cointegration.ts';
 let _adapter: any = null;
 async function getAdapter(): Promise<any> {
   if (!_adapter) {
-    // @ts-expect-error JS module without types
     const mod = await import('../../services/exchangeAdapters/krakenAdapter.js');
     _adapter = mod.krakenAdapter;
   }

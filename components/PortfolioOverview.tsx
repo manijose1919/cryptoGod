@@ -3,7 +3,7 @@
  * Dense data grids, equity curve chart, real-time metrics.
  */
 
-import React, { lazy, Suspense, useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import {
   useAllEnginesStatus,

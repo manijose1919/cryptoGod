@@ -1,7 +1,7 @@
 /**
  * ShortPositionsPanel — Shows short selling engine positions, P&L, and status.
  */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 interface ShortPosition {
   ticker: string;

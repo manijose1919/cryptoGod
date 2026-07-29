@@ -44,7 +44,7 @@ export const GridTraining: React.FC = () => {
   // Build heatmap from results
   const gridCounts = results ? [...new Set(results.combos.map(c => c.gridCount))].sort((a, b) => a - b) : [];
   const gridWidths = results ? [...new Set(results.combos.map(c => c.gridWidth))].sort((a, b) => a - b) : [];
-  const comboMap = new Map<string, typeof results.combos[0]>();
+  const comboMap = new Map<string, GridTrainingResults['combos'][0]>();
   results?.combos.forEach(c => comboMap.set(`${c.gridCount}-${c.gridWidth}`, c));
 
   const maxPnl = results ? Math.max(...results.combos.map(c => Math.abs(c.totalPnl)), 1) : 1;

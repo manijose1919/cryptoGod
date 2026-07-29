@@ -8,15 +8,6 @@ global:
   scrape_timeout: 10s
 
 scrape_configs:
-  # ── Trading Bot Metrics ──────────────────────────────────────────────────
-  - job_name: "trading-bot"
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["bot:3033"]
-        labels:
-          instance: "canuck-trader-pro"
-          environment: "production"
-
   # ── Node Exporter (if present on host) ───────────────────────────────────
   - job_name: "node-exporter"
     static_configs:

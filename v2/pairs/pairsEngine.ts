@@ -121,7 +121,6 @@ const stats: EngineStats = {
 
 async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   try {
-    // @ts-expect-error JS module without types
     const mod = await import('../../services/exchangeAdapters/krakenAdapter.js');
     const raw = await mod.krakenAdapter.getCandles(
       ticker,

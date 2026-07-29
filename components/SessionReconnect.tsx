@@ -45,7 +45,7 @@ function formatUptime(ms: number): string {
   return `${minutes}m ${seconds % 60}s`;
 }
 
-const SessionReconnect: React.FC<SessionReconnectProps> = ({ onReconnect, onStopSession, onStartNew }) => {
+const SessionReconnect: React.FC<SessionReconnectProps> = ({ onReconnect, onStopSession }) => {
   const [status, setStatus] = useState<SessionStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [stopping, setStopping] = useState(false);

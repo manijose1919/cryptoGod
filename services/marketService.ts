@@ -81,7 +81,7 @@ export async function fetchAvailableUsdPairs(): Promise<string[]> {
 export async function fetchHistoricalCandles(
   symbol: string,
   interval: string = '1m',
-  limit: number = 200
+  _limit: number = 200
 ): Promise<Candle[]> {
   // For Kraken, pass the raw ticker — the backend adapter handles formatting
   // For Crypto.com, convert to instrument_name format (BTCUSD -> BTC_USD)

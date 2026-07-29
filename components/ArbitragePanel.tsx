@@ -1,7 +1,7 @@
 /**
  * ArbitragePanel — Shows cross-exchange arbitrage opportunities and basis trades.
  */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 interface ArbOpportunity {
   ticker: string;

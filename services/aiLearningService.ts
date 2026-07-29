@@ -10,7 +10,8 @@
  * Uses local statistical analysis - no external API needed.
  */
 
-import type { Trade, TradingStrategy, Candle } from '../types';
+import type { TradingStrategy, CoreTradingStrategy } from '../types';
+import { isCoreTradingStrategy, CORE_TRADING_STRATEGIES } from '../types';
 // Persistence stubs — persistenceService was removed (backend SQLite handles real persistence).
 // These no-ops keep aiLearningService functional with in-memory-only storage.
 const saveTradeMemory = async (_data: Record<string, unknown>) => {};
@@ -59,9 +60,9 @@ export interface LearningState {
   avgWinPercent: number;
   avgLossPercent: number;
   profitFactor: number;
-  bestStrategy: TradingStrategy | null;
-  worstStrategy: TradingStrategy | null;
-  strategyStats: Record<TradingStrategy, {
+  bestStrategy: CoreTradingStrategy | null;
+  worstStrategy: CoreTradingStrategy | null;
+  strategyStats: Record<CoreTradingStrategy, {
     trades: number;
     wins: number;
     winRate: number;
@@ -104,7 +105,7 @@ export interface ParameterAdjustments {
   confidenceThreshold: number;
 
   // Strategy weights (higher = preferred)
-  strategyWeights: Record<TradingStrategy, number>;
+  strategyWeights: Record<CoreTradingStrategy, number>;
 
   // Aggressiveness (0-100)
   aggressiveness: number;
@@ -171,8 +172,6 @@ let learningState: LearningState = {
 // ============================================
 // PERSISTENCE INTEGRATION
 // ============================================
-let persistenceInitialized = false;
-
 /**
  * Restore learning state from SQLite database.
  * Call this once on app startup to recover from previous sessions.
@@ -219,7 +218,6 @@ export async function restoreFromDatabase(): Promise<{ tradesLoaded: number; pat
     console.warn('[AI Learning] Could not restore parameters from DB:', e);
   }
 
-  persistenceInitialized = true;
   console.log(`[AI Learning] Restored: ${tradesLoaded} trades, ${patternsLoaded} patterns, params=${paramsRestored}`);
   return { tradesLoaded, patternsLoaded, paramsRestored };
 }
@@ -299,8 +297,6 @@ function localAnalyze(): string {
 
   const bestStrat = Object.entries(stratPerf)
     .sort((a, b) => b[1].pnl - a[1].pnl)[0];
-  const worstStrat = Object.entries(stratPerf)
-    .sort((a, b) => a[1].pnl - b[1].pnl)[0];
 
   // Identify market condition patterns
   const winConditions = wins.map(t => t.marketConditions?.volatility).filter(Boolean);
@@ -450,7 +446,7 @@ function updateLearningState(): void {
   learningState.profitFactor = totalLossAmount > 0 ? Math.min(999, totalWinAmount / totalLossAmount) : totalWinAmount > 0 ? 999 : 0;
 
   // Update strategy stats
-  const strategies: TradingStrategy[] = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];
+  const strategies: CoreTradingStrategy[] = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIVERGENCE', 'ADAPTIVE'];
 
   let bestWinRate = 0;
   let worstWinRate = 100;
@@ -503,7 +499,7 @@ function adjustParametersFromLearning(): void {
   }
 
   // Adjust strategy weights based on performance
-  for (const strat of Object.keys(learningState.strategyStats) as TradingStrategy[]) {
+  for (const strat of CORE_TRADING_STRATEGIES) {
     const stats = learningState.strategyStats[strat];
     if (stats.trades >= 15) {
       // Boost successful strategies, reduce unsuccessful ones (need 15+ for significance)
@@ -544,34 +540,6 @@ export async function requestAIAnalysis(): Promise<string> {
     return 'Need at least 5 trades for AI analysis';
   }
 
-  const prompt = `You are an expert crypto trading analyst. Analyze these recent trades and provide specific, actionable recommendations.
-
-TRADING PERFORMANCE:
-- Total Trades: ${learningState.totalTrades}
-- Win Rate: ${learningState.winRate.toFixed(1)}%
-- Average Win: ${learningState.avgWinPercent.toFixed(2)}%
-- Average Loss: ${learningState.avgLossPercent.toFixed(2)}%
-- Profit Factor: ${learningState.profitFactor.toFixed(2)}
-
-STRATEGY BREAKDOWN:
-${Object.entries(learningState.strategyStats)
-  .filter(([_, stats]) => stats.trades > 0)
-  .map(([strat, stats]) => `- ${strat}: ${stats.trades} trades, ${stats.winRate.toFixed(1)}% win rate, $${stats.totalPnl.toFixed(2)} total`)
-  .join('\n')}
-
-RECENT 10 TRADES:
-${recentTrades.slice(-10).map(t =>
-  `${t.outcome} | ${t.strategy} | ${t.ticker} | ${t.pnlPercent.toFixed(2)}% | TC:${t.indicators.tcValue.toFixed(0)} | ${t.marketConditions.volatility} vol`
-).join('\n')}
-
-Based on this data, provide:
-1. What patterns are working? What's failing?
-2. Specific parameter changes (entry thresholds, stop loss, etc.)
-3. Which strategies should be prioritized or avoided?
-4. Risk management adjustments
-
-Be specific with numbers. Format as JSON with keys: patterns, parameterChanges, strategyAdvice, riskAdvice`;
-
   const analysis = localAnalyze();
   learningState.lastAIAnalysis = analysis;
   learningState.lastAnalysisTime = Date.now();
@@ -611,15 +579,15 @@ function applyAIRecommendations(analysis: string): void {
         const advice = recommendations.strategyAdvice;
         if (advice.boost) {
           for (const strat of advice.boost) {
-            if (learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy]) {
-              learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy] *= 1.3;
+            if (isCoreTradingStrategy(strat) && learningState.parameterAdjustments.strategyWeights[strat]) {
+              learningState.parameterAdjustments.strategyWeights[strat] *= 1.3;
             }
           }
         }
         if (advice.reduce) {
           for (const strat of advice.reduce) {
-            if (learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy]) {
-              learningState.parameterAdjustments.strategyWeights[strat as TradingStrategy] *= 0.7;
+            if (isCoreTradingStrategy(strat) && learningState.parameterAdjustments.strategyWeights[strat]) {
+              learningState.parameterAdjustments.strategyWeights[strat] *= 0.7;
             }
           }
         }
@@ -670,8 +638,11 @@ export function shouldTakeTrade(
 ): { take: boolean; reason: string; adjustedConfidence: number } {
   const params = learningState.parameterAdjustments;
 
-  // Apply strategy weight
-  const strategyWeight = params.strategyWeights[strategy];
+  // Apply strategy weight. strategyWeights only carries the pre-V2 core
+  // strategies (see CoreTradingStrategy) — fall back to ADAPTIVE's weight
+  // for the newer strategy types.
+  const coreStrategy = isCoreTradingStrategy(strategy) ? strategy : 'ADAPTIVE';
+  const strategyWeight = params.strategyWeights[coreStrategy];
   const adjustedConfidence = indicators.confidence * strategyWeight;
 
   // Check if similar past trades were profitable

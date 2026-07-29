@@ -255,7 +255,7 @@ export function ExchangeDashboard({ exchange }: Props) {
       )}
 
       {/* Trade Stats Summary */}
-      {(status?.tradeStats?.total ?? 0) > 0 && (
+      {status && (status.tradeStats?.total ?? 0) > 0 && (
         <div className="ed-trade-stats">
           <div className="section-header" style={{ marginBottom: '8px' }}>
             <span>Trade Performance</span>
@@ -290,10 +290,10 @@ export function ExchangeDashboard({ exchange }: Props) {
       )}
 
       {/* Recent Trades */}
-      {(status?.recentTrades?.length ?? 0) > 0 && (
+      {status && (status.recentTrades?.length ?? 0) > 0 && (
         <div className="ed-recent-trades" style={{ marginTop: '12px' }}>
           <div className="section-header" style={{ marginBottom: '8px' }}>
-            <span>Recent Trades (last {Math.min(status.recentTrades.length, 10)})</span>
+            <span>Recent Trades (last {Math.min(status.recentTrades?.length ?? 0, 10)})</span>
           </div>
           <table className="trade-table" style={{ width: '100%', fontSize: '12px' }}>
             <thead>
@@ -307,7 +307,7 @@ export function ExchangeDashboard({ exchange }: Props) {
               </tr>
             </thead>
             <tbody>
-              {status.recentTrades.slice(-10).reverse().map((t: any, i: number) => {
+              {(status.recentTrades ?? []).slice(-10).reverse().map((t: any, i: number) => {
                 const tPnl = t.pnl ?? t.pnlPct ?? 0;
                 const dur = t.holdTime ? `${Math.floor(t.holdTime / 3600000)}h ${Math.floor((t.holdTime % 3600000) / 60000)}m` : '—';
                 return (

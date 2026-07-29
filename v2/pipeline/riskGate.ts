@@ -205,7 +205,6 @@ export function evaluateRisk(
     const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : exitCfg.slAtrMult;
     const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : exitCfg.tpAtrMult;
     const tpPercent = atrPercent * tpMult / 100;
-    const slPercent = atrPercent * slMult / 100;
     // Shorts use taker fees both sides on Kraken
     const feeRoundTrip = isShort
       ? V2_CONFIG.SHORT_FEE_ROUND_TRIP ?? fees.ROUND_TRIP_TAKER

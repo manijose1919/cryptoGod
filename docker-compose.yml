@@ -7,51 +7,6 @@
 version: "3.9"
 
 services:
-  # ── Trading Bot (Python FastAPI + React frontend) ────────────────────────
-  bot:
-    build:
-      context: .
-      dockerfile: canuck-trader-pro/backend/Dockerfile
-    container_name: canuck-trader-bot
-    ports:
-      - "3033:3033"
-    env_file:
-      - .env
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - PYTHONUNBUFFERED=1
-      - NODE_ENV=production
-      - NODE_OPTIONS=--max-old-space-size=12288
-    volumes:
-      - db-data:/app/data
-      - ./models:/app/models
-      - ./logs:/app/logs
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3033/api/health/ml"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          cpus: "6"
-          memory: 24G
-        reservations:
-          cpus: "2"
-          memory: 8G
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - trading-net
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "5"
-
   # ── Redis Cache ──────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
@@ -85,8 +40,6 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     restart: always
-    depends_on:
-      - bot
     networks:
       - trading-net
 

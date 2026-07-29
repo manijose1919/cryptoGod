@@ -86,7 +86,6 @@ export function calculateSentimentFromMarketData(
 
   // 1. Price momentum sentiment
   const priceChange = ((recent[recent.length - 1].close - recent[0].close) / recent[0].close) * 100;
-  const shortPriceChange = ((veryRecent[veryRecent.length - 1].close - veryRecent[0].close) / veryRecent[0].close) * 100;
 
   // 2. Volume analysis (high volume = high interest/sentiment)
   const avgVolume = recent.reduce((sum, c) => sum + c.volume, 0) / recent.length;

@@ -5,6 +5,8 @@
 # Sends high-priority email alerts on issues
 # ============================================
 
+VPS_HOST="${VPS_HOST:?VPS_HOST is not set — export it or add it to .env.local}"
+
 HEALTH_URL="http://localhost:3033/api/health"
 EMAIL="manijose1919@gmail.com"
 STATE_FILE="/tmp/bot-monitor-state"
@@ -33,7 +35,7 @@ send_alert() {
         fi
     fi
 
-    printf "From: manijose1919@gmail.com\nTo: %s\nSubject: %s\nX-Priority: 1\nImportance: High\nX-MSMail-Priority: High\nContent-Type: text/plain; charset=UTF-8\n\n%s\n\n---\nTrading Bot Monitor | VPS VPS_HOST_REDACTED\nTime: %s\n"         "$EMAIL" "$subject" "$body" "$(date)" | msmtp -a default "$EMAIL" 2>&1
+    printf "From: manijose1919@gmail.com\nTo: %s\nSubject: %s\nX-Priority: 1\nImportance: High\nX-MSMail-Priority: High\nContent-Type: text/plain; charset=UTF-8\n\n%s\n\n---\nTrading Bot Monitor | VPS $VPS_HOST\nTime: %s\n"         "$EMAIL" "$subject" "$body" "$(date)" | msmtp -a default "$EMAIL" 2>&1
 
     date +%s > "$COOLDOWN_FILE.$alert_key"
     log "[ALERT SENT] $subject"
@@ -45,7 +47,7 @@ CURL_EXIT=$?
 
 # --- Check 1: Bot unreachable ---
 if [ $CURL_EXIT -ne 0 ] || [ -z "$HEALTH" ]; then
-    send_alert         "[CRITICAL] Trading Bot DOWN"         "The trading bot health endpoint is not responding.\n\nCurl exit code: $CURL_EXIT\nResponse: $HEALTH\n\nPossible causes:\n- Node.js process crashed\n- Port 3033 not listening\n- Server overloaded\n\nCheck with: ssh root@VPS_HOST_REDACTED 'pm2 status && pm2 logs canuck-node --lines 30'"         "bot_down"
+    send_alert         "[CRITICAL] Trading Bot DOWN"         "The trading bot health endpoint is not responding.\n\nCurl exit code: $CURL_EXIT\nResponse: $HEALTH\n\nPossible causes:\n- Node.js process crashed\n- Port 3033 not listening\n- Server overloaded\n\nCheck with: ssh root@$VPS_HOST 'pm2 status && pm2 logs canuck-node --lines 30'"         "bot_down"
     log "[CRITICAL] Bot unreachable (curl exit $CURL_EXIT)"
     exit 1
 fi
@@ -71,7 +73,7 @@ fi
 
 # --- Check 3: Memory too high (>500MB) ---
 if [ "$MEMORY" -gt 500 ] 2>/dev/null; then
-    send_alert         "[WARNING] High Memory Usage: ${MEMORY}MB"         "Bot memory usage is ${MEMORY}MB (threshold: 500MB).\n\nUptime: ${UPTIME}s ($((UPTIME/3600))h)\nLoop count: $LOOP_COUNT\n\nThis may indicate a memory leak. Consider restarting:\nssh root@VPS_HOST_REDACTED 'pm2 restart canuck-node'"         "high_memory"
+    send_alert         "[WARNING] High Memory Usage: ${MEMORY}MB"         "Bot memory usage is ${MEMORY}MB (threshold: 500MB).\n\nUptime: ${UPTIME}s ($((UPTIME/3600))h)\nLoop count: $LOOP_COUNT\n\nThis may indicate a memory leak. Consider restarting:\nssh root@$VPS_HOST 'pm2 restart canuck-node'"         "high_memory"
     log "[WARNING] High memory: ${MEMORY}MB"
 fi
 
@@ -103,7 +105,7 @@ fi
 if [ -f "$STATE_FILE.uptime" ]; then
     PREV_UPTIME=$(cat "$STATE_FILE.uptime")
     if [ "$UPTIME" -lt 120 ] && [ "$PREV_UPTIME" -gt 120 ] 2>/dev/null; then
-        send_alert             "[WARNING] Bot Restarted"             "Bot uptime dropped from ${PREV_UPTIME}s to ${UPTIME}s — it was restarted or crashed.\n\nMemory: ${MEMORY}MB\nLoop count: $LOOP_COUNT\n\nCheck crash logs: ssh root@VPS_HOST_REDACTED 'pm2 logs canuck-node --lines 50 --nostream'"             "bot_restart"
+        send_alert             "[WARNING] Bot Restarted"             "Bot uptime dropped from ${PREV_UPTIME}s to ${UPTIME}s — it was restarted or crashed.\n\nMemory: ${MEMORY}MB\nLoop count: $LOOP_COUNT\n\nCheck crash logs: ssh root@$VPS_HOST 'pm2 logs canuck-node --lines 50 --nostream'"             "bot_restart"
         log "[WARNING] Bot restarted (uptime $PREV_UPTIME -> $UPTIME)"
     fi
 fi

@@ -3,7 +3,7 @@
  * Uses /api/orderbook/:ticker and /api/microstructure/analyze/:ticker
  */
 
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface Level {
   price: number;

@@ -1,14 +1,15 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
-import type { TradingStrategy, SystemEvent, TradingMode } from '../types';
-import { STRATEGY_INFO, DEFAULT_PROFIT_GOALS, MICRO_TRADING } from '../constants';
+import type { TradingStrategy, CoreTradingStrategy, SystemEvent, TradingMode } from '../types';
+import { CORE_TRADING_STRATEGIES } from '../types';
+import { STRATEGY_INFO, MICRO_TRADING } from '../constants';
 import { SettingsPanel } from './SettingsPanel';
 
 /**
  * Auto-optimize trading parameters based on budget and session goal
  */
 interface OptimizedSettings {
-  profitGoals: Record<TradingStrategy, number>;
+  profitGoals: Record<CoreTradingStrategy, number>;
   maxConcurrentTrades: number;
   stopLossPercent: number;
   trailingStopPercent: number;
@@ -69,7 +70,7 @@ function calculateOptimalSettings(budget: number, sessionGoal: number, userRiskA
   const baseProfitGoal = Math.round(targetTotalProfit / expectedWins);
 
   // Adjust profit goals by strategy risk level
-  const strategyMultipliers: Record<TradingStrategy, number> = {
+  const strategyMultipliers: Record<CoreTradingStrategy, number> = {
     TREND: 1.0,       // Medium risk, standard goal
     BREAKOUT: 1.3,    // High risk, higher reward target
     WHALE: 1.1,       // Medium risk, slightly higher
@@ -79,7 +80,7 @@ function calculateOptimalSettings(budget: number, sessionGoal: number, userRiskA
     ADAPTIVE: 1.05,   // Medium risk, asset-tuned signals
   };
 
-  const profitGoals: Record<TradingStrategy, number> = {
+  const profitGoals: Record<CoreTradingStrategy, number> = {
     TREND: Math.round(baseProfitGoal * strategyMultipliers.TREND),
     BREAKOUT: Math.round(baseProfitGoal * strategyMultipliers.BREAKOUT),
     WHALE: Math.round(baseProfitGoal * strategyMultipliers.WHALE),
@@ -91,7 +92,7 @@ function calculateOptimalSettings(budget: number, sessionGoal: number, userRiskA
 
   // Ensure minimum profit goals
   const minProfitGoal = Math.max(10, budget * 0.005); // At least $10 or 0.5% of budget
-  for (const key of Object.keys(profitGoals) as TradingStrategy[]) {
+  for (const key of CORE_TRADING_STRATEGIES) {
     profitGoals[key] = Math.max(minProfitGoal, profitGoals[key]);
   }
 
@@ -195,7 +196,7 @@ export const TradingControls: React.FC<TradingControlsProps> = ({
     setUseTrailingStop(true);
 
     // Apply profit goals for all strategies
-    for (const strat of Object.keys(optimized.profitGoals) as TradingStrategy[]) {
+    for (const strat of CORE_TRADING_STRATEGIES) {
       setProfitGoals(strat, optimized.profitGoals[strat]);
     }
 

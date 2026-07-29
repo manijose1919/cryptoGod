@@ -10,7 +10,7 @@ Provide a clean, professional, bug-tested, read-only monitoring GUI for the CRYP
 
 Success criteria:
 - A single-screen dashboard shows bot status, account balance, current-cohort KPIs, an equity curve, open positions, and recent closed trades.
-- Reachable at `https://VPS_HOST_REDACTED.sslip.io` behind a trusted Let's Encrypt cert and an HTTP basic-auth password.
+- Reachable at `https://VPS-HOST-REDACTED.sslip.io` behind a trusted Let's Encrypt cert and an HTTP basic-auth password.
 - Renders correctly in all states, including the **empty cohort** (0 trades since baseline — the actual live state today) and **API-down**.
 - No control actions: the GUI can display but never place/close trades or alter the bot.
 
@@ -33,7 +33,7 @@ Rationale: a self-contained `monitor.html` (modern CSS + vanilla JS + inline SVG
 
 ```
 Browser ──HTTPS──▶ nginx (TLS + basic-auth) ──proxy──▶ localhost:3033 (Node)
-        https://VPS_HOST_REDACTED.sslip.io                    ├─ GET /monitor            → monitor.html (static)
+        https://VPS-HOST-REDACTED.sslip.io                    ├─ GET /monitor            → monitor.html (static)
                                                          └─ GET /api/monitor/summary → JSON
 monitor.html polls /api/monitor/summary every 10s.
 ```
@@ -110,7 +110,7 @@ Behavior:
 
 ### 3. Infra / deployment
 - Install `nginx` + `certbot` on the VPS (one-time, manual over SSH).
-- Issue Let's Encrypt cert for `VPS_HOST_REDACTED.sslip.io` (sslip.io resolves the hostname to `VPS_HOST_REDACTED`; HTTP-01 challenge on port 80).
+- Issue Let's Encrypt cert for `VPS-HOST-REDACTED.sslip.io` (sslip.io resolves the hostname to `VPS_HOST_REDACTED`; HTTP-01 challenge on port 80).
 - nginx server block: TLS termination, `auth_basic` with an `htpasswd` file, `proxy_pass http://127.0.0.1:3033;`.
 - **Tighten `ufw`**: remove public access to `3033` (and unused `3000`, `3080`) so the only public entry is `443` (nginx) + `22` (SSH). nginx reaches Node over localhost.
 - App code (`monitor.html`, endpoint) ships via the normal `bash scripts/push-deploy.sh` (both remotes). nginx/certbot/ufw are one-time manual VPS steps, documented in the plan.
@@ -124,7 +124,7 @@ Behavior:
   - missing-baseline fallback.
 - **Live verification:**
   - `curl` the endpoint on the VPS → valid JSON, correct shape.
-  - Load `https://VPS_HOST_REDACTED.sslip.io` → browser shows padlock (trusted cert) and prompts for the password.
+  - Load `https://VPS-HOST-REDACTED.sslip.io` → browser shows padlock (trusted cert) and prompts for the password.
   - Confirm empty-state renders (cohort is 0 today).
   - Cross-check `account.balance` and `openPositions` against the live `portfolio` and the dashboard's KPIs against a manual `v2_trades` query.
 

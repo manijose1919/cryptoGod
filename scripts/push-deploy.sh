@@ -24,6 +24,9 @@
 
 set -e
 
+# The VPS address is not committed. Export VPS_HOST or put it in .env.local.
+VPS_HOST="${VPS_HOST:?VPS_HOST is not set — export it or add it to .env.local}"
+
 BRANCH="${1:-$(git rev-parse --abbrev-ref HEAD)}"
 NO_VERIFY=0
 [ "$2" = "--no-verify" ] && NO_VERIFY=1
@@ -50,7 +53,7 @@ if [ "$NO_VERIFY" = "1" ]; then
 fi
 
 # Are we running on the VPS itself, or remotely?
-# - Local dev: VPS is at VPS_HOST_REDACTED over SSH, vps remote is a path on remote host
+# - Local dev: VPS is at $VPS_HOST over SSH, vps remote is a path on remote host
 # - On-VPS: vps remote is a local file path /opt/trading-bot.git
 VPS_REMOTE_URL=$(git remote get-url vps 2>/dev/null || true)
 ON_VPS=0
@@ -63,7 +66,7 @@ if [ "$ON_VPS" = "1" ]; then
   ENDPOINT="http://127.0.0.1:3033/api/v2/status"
   until curl -fs "$ENDPOINT" > /dev/null 2>&1; do sleep 2; done
 else
-  ssh root@VPS_HOST_REDACTED "until curl -fs http://127.0.0.1:3033/api/v2/status > /dev/null 2>&1; do sleep 2; done"
+  ssh root@$VPS_HOST "until curl -fs http://127.0.0.1:3033/api/v2/status > /dev/null 2>&1; do sleep 2; done"
 fi
 echo "[push-deploy] API online"
 
@@ -77,7 +80,7 @@ echo "[push-deploy] API online"
 if [ "$ON_VPS" = "1" ]; then
   DEPLOYED_SHA=$(cd /opt/trading-bot.git && git rev-parse master)
 else
-  DEPLOYED_SHA=$(ssh root@VPS_HOST_REDACTED "cd /opt/trading-bot.git && git rev-parse master")
+  DEPLOYED_SHA=$(ssh root@$VPS_HOST "cd /opt/trading-bot.git && git rev-parse master")
 fi
 
 if [ "$DEPLOYED_SHA" != "$EXPECTED_SHA" ]; then

@@ -1,6 +1,6 @@
 
 import React from 'react';
-import type { ScannerInsights, TradingStrategy } from '../types';
+import type { ScannerInsights } from '../types';
 
 interface MarketScannerProps {
     insights: ScannerInsights | null;

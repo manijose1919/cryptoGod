@@ -66,7 +66,6 @@ export const TradeHistory: React.FC<TradeHistoryProps> = ({ trades }) => {
 
         const pnlList = sellTrades.map(t => t.pnl!);
         const wins = pnlList.filter(p => p > 0);
-        const losses = pnlList.filter(p => p < 0);
 
         // Calculate average hold time by matching buy/sell pairs
         const holdTimes: number[] = [];

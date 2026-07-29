@@ -211,8 +211,6 @@ export function useSessionActions() {
             }
 
             const holdingsValue = Object.values(cleanHoldings).reduce((sum: number, h: any) => sum + (h.usdValue || 0), 0);
-            // If backend already included holdings in balance, use the larger value
-            const totalBalance = Math.max(cashUsd, cashUsd + holdingsValue - (result.balance ?? 0) + holdingsValue);
             // Simpler: cashUsd already has fiat, add crypto holdings
             const finalBalance = cashUsd + holdingsValue;
 

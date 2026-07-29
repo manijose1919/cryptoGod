@@ -4,14 +4,11 @@
 // ============================================
 
 import type { Candle, V2Trade } from '../pipeline/types.ts';
-import { V2_CONFIG, MOMENTUM_CONFIG, STRATEGY_TIMEFRAMES, getExchangeFees } from './config.ts';
+import { V2_CONFIG, STRATEGY_TIMEFRAMES, getExchangeFees } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // Pipeline imports
-import { scanMarket, getPassedTickers, setHTFRegime } from '../pipeline/marketScanner.ts';
-import { detectRegime } from '../indicators/indicators.ts';
-import { generateSignals, generateShortSignals, getPassedSignals } from '../pipeline/signalGenerator.ts';
-import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
+import { scanMarket } from '../pipeline/marketScanner.ts';
 import { evaluateRisk, getApproved } from '../pipeline/riskGate.ts';
 import { executeTrade } from '../pipeline/executor.ts';
 import { checkExits } from '../pipeline/exitManager.ts';
@@ -27,7 +24,6 @@ import {
   resolveGatekeeperByEntry,
   getOpenTrades,
   getOpenTradesByStrategy,
-  getClosedTrades,
   getClosedTradesByStrategy,
   appendTradeDecision,
 } from '../attribution/attributionStore.ts';
@@ -86,22 +82,6 @@ export interface V2EngineStatus {
 
 // --- Telegram Helper ---
 
-async function sendTelegram(message: string): Promise<void> {
-  try {
-    const tg = await import('../../services/telegramService.js');
-    if (tg.isEnabled()) {
-      tg.alertTradeExecution({
-        type: 'INFO',
-        ticker: '',
-        price: 0,
-        strategy: message,
-      });
-    }
-  } catch {
-    // Telegram not available — silent fail
-  }
-}
-
 async function sendEntryAlert(trade: V2Trade): Promise<void> {
   try {
     const tg = await import('../../services/telegramService.js');
@@ -134,79 +114,6 @@ async function sendExitAlert(trade: V2Trade, exitPrice: number, exitReason: stri
   } catch {
     // Telegram not available
   }
-}
-
-// --- Candle Fetching ---
-
-/** Normalize short-form {t,o,h,l,c,v} candles to V2's {time,open,high,low,close,volume} */
-function normalizeCandles(raw: any[]): Candle[] {
-  return raw.map((c: any) => ({
-    time: c.time ?? c.t ?? 0,
-    open: c.open ?? c.o ?? 0,
-    high: c.high ?? c.h ?? 0,
-    low: c.low ?? c.l ?? 0,
-    close: c.close ?? c.c ?? 0,
-    volume: c.volume ?? c.v ?? 0,
-  }));
-}
-
-async function fetchCandles(ticker: string): Promise<Candle[] | null> {
-  const interval = V2_CONFIG.CANDLE_INTERVAL;
-
-  // For 1-minute candles, try WebSocket realtime first
-  if (interval === '1m') {
-    try {
-      const wsModule = await import('../../services/krakenWebsocketService.js');
-      const candles = wsModule.getRealtimeCandles(ticker);
-      if (candles && candles.length >= V2_CONFIG.MIN_CANDLES) {
-        return normalizeCandles(candles);
-      }
-    } catch {
-      // WS not available
-    }
-  }
-
-  // REST via Kraken adapter (supports all intervals)
-  try {
-    const adapterModule = await import('../../services/exchangeAdapters/krakenAdapter.js');
-    const adapter = adapterModule.krakenAdapter;
-    const candles = await adapter.getCandles(ticker, interval, 200);
-    if (candles && candles.length > 0) {
-      return normalizeCandles(candles);
-    }
-  } catch {
-    // REST failed
-  }
-
-  return null;
-}
-
-// --- 4h Candle Cache for MTF Regime ---
-
-const _4hCache = new Map<string, { candles: Candle[]; fetchedAt: number }>();
-
-async function fetch4hCandles(ticker: string): Promise<Candle[] | null> {
-  // Check cache
-  const cached = _4hCache.get(ticker);
-  if (cached && Date.now() - cached.fetchedAt < V2_CONFIG.MTF_REGIME_CACHE_TTL_MS) {
-    return cached.candles;
-  }
-
-  try {
-    const adapterModule = await import('../../services/exchangeAdapters/krakenAdapter.js');
-    const adapter = adapterModule.krakenAdapter;
-    const candles = await adapter.getCandles(ticker, V2_CONFIG.MTF_HIGHER_TIMEFRAME, 200);
-    if (candles && candles.length > 0) {
-      const normalized = normalizeCandles(candles);
-      _4hCache.set(ticker, { candles: normalized, fetchedAt: Date.now() });
-      return normalized;
-    }
-  } catch {
-    // 4h fetch failed — return cached if available (even if stale)
-    if (cached) return cached.candles;
-  }
-
-  return null;
 }
 
 // --- Init / Start / Stop ---

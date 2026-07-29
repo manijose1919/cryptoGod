@@ -18,16 +18,6 @@ export const RiskMetricsPanel: React.FC<RiskMetricsPanelProps> = ({
 }) => {
   const [expandedSection, setExpandedSection] = useState<'metrics' | 'kelly' | 'monte' | null>(null);
 
-  const getRiskColor = (risk: string) => {
-    switch (risk) {
-      case 'LOW': return 'text-green-400';
-      case 'MEDIUM': return 'text-yellow-400';
-      case 'HIGH': return 'text-orange-400';
-      case 'CRITICAL': return 'text-red-400';
-      default: return 'text-gray-400';
-    }
-  };
-
   const formatPercent = (value: number) => {
     return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
   };
