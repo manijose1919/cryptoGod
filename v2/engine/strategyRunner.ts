@@ -87,7 +87,7 @@ export function runAllStrategies(
       }
     }
 
-    // --- BREAKOUT (15m, 1h) ---
+    // --- BREAKOUT (1h, 4h per STRATEGY_TIMEFRAMES) ---
     if (STRATEGY_TIMEFRAMES.BREAKOUT?.includes(tf)) {
       for (const [ticker, candles] of tfCandles) {
         // Breakout has its own regime check internally

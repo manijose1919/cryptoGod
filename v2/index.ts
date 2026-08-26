@@ -14,7 +14,7 @@ import { stopMomentumEngine, getMomentumStatus } from './engine/momentumEngine.t
 import { buildKrakenSniper, buildCryptocomSniper, stopSniperEngine, getSniperStatus } from './engine/sniperEngine.ts';
 import { initPairsEngine, startPairsEngine, stopPairsEngine, getPairsStatus } from './pairs/pairsEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
-import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG, PAIRS_CONFIG } from './engine/config.ts';
+import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG, PAIRS_CONFIG, STRATEGY_TIMEFRAMES } from './engine/config.ts';
 
 export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine, getSniperStatus, stopSniperEngine, getPairsStatus, stopPairsEngine };
 
@@ -35,20 +35,29 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       console.warn(`[V2] Bearish services failed to start: ${err.message}`);
     }
 
-    // Boot Mean Reversion engine (15m, maker orders, independent loop)
+    // Boot Mean Reversion engine (1h, maker orders, independent loop)
     if (MR_CONFIG.ENABLED) {
       try {
         initMREngine(krakenV2, initialBudget);
         startMREngine();
-        console.log('[V2] Mean Reversion engine running (15m, maker fees)');
+        console.log(`[V2] Mean Reversion engine running (${MR_CONFIG.CANDLE_INTERVAL}, maker fees)`);
       } catch (err: any) {
         console.warn(`[V2] Mean Reversion engine failed to start: ${err.message}`);
       }
     }
 
-    // Breakout engine DISABLED — backtested 180 days: 341 trades, 28% WR, -$33 net
-    // Re-enable when strategy is reworked
-    console.log('[V2] Breakout engine disabled (unprofitable in backtest)');
+    // Standalone breakout ENGINE stays disabled — backtested 180 days: 341 trades,
+    // 28% WR, -$33 net. Re-enable that engine only after a rework.
+    // BREAKOUT *signals* are a separate thing and are LIVE: re-enabled 2026-07-21 on
+    // 1h/4h via STRATEGY_TIMEFRAMES.BREAKOUT, routed through the main TREND pipeline
+    // (see runAllStrategies in engine/strategyRunner.ts) with the same riskGate and
+    // exitManager — no separate engine loop. STRATEGY_TIMEFRAMES.BREAKOUT is the kill switch.
+    const breakoutTfs = STRATEGY_TIMEFRAMES.BREAKOUT ?? [];
+    if (breakoutTfs.length > 0) {
+      console.log(`[V2] Breakout signals enabled on ${breakoutTfs.join('/')} (main pipeline; standalone breakout engine disabled)`);
+    } else {
+      console.log('[V2] Breakout signals disabled (STRATEGY_TIMEFRAMES.BREAKOUT empty)');
+    }
 
     // Momentum engine v2 (rebuilt 2026-05-06, enabled 2026-05-18)
     // Original (1h, 1.5x histogram-ratio entry, histogram_decay exit):

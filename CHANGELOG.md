@@ -47,6 +47,63 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-08-26 14:56 UTC — Lint made runnable + two more stale-status log lines (NO trading change) — local-claude
+
+**Files changed:** `package.json`, `package-lock.json`, `v2/index.ts`, `v2/engine/strategyRunner.ts`
+**Stats baseline reset:** **no** — no strategy, threshold, gate, sizing rule, or config value altered. Log
+and comment text only, plus dev dependencies. Engine behavior is byte-for-byte identical.
+
+**What changed:**
+
+*`npx eslint` could not run at all.* `eslint.config.js` imports `@eslint/js`,
+`@typescript-eslint/eslint-plugin`, and `@typescript-eslint/parser`, and **none of the four packages
+(including `eslint` itself) were in `devDependencies`.** Any fresh clone got
+`ERR_MODULE_NOT_FOUND` from the documented lint command in `CLAUDE.md`. CI never caught it because
+the workflow runs typecheck, build, and tests — not lint. Added `eslint ^10.9.1`, `@eslint/js ^10.0.1`,
+`@typescript-eslint/eslint-plugin ^8.68.0`, `@typescript-eslint/parser ^8.68.0`.
+
+*Breakout status log was wrong.* `v2/index.ts` logged `[V2] Breakout engine disabled (unprofitable in
+backtest)` on every boot. True of the standalone `breakoutEngine.ts` (never started), but **BREAKOUT
+signals were re-enabled on 1h/4h on 2026-07-21** via `STRATEGY_TIMEFRAMES.BREAKOUT` and fire through
+the main pipeline at `strategyRunner.ts:91`. The boot log now reports the pipeline state and reads its
+timeframes from `STRATEGY_TIMEFRAMES` so it cannot drift again. `strategyRunner.ts` also had a stale
+`// --- BREAKOUT (15m, 1h) ---` section header — corrected to 1h/4h.
+
+*Mean Reversion interval was wrong.* Comment and log both said `15m`; `MR_CONFIG.CANDLE_INTERVAL` has
+been `'1h'` since the 2026-06-19 rebuild. The log now interpolates the config value. The `maker fees`
+half of that line was verified correct (`USE_MAKER_ORDERS: true`, `FEE_ROUND_TRIP: 0.0032`).
+
+**Why:**
+Same class as the momentum comment fixed in `c1241b5` — a code comment claiming a strategy is off while
+it trades. Two more instances were found by diffing every boot log line against the config it describes.
+A status log that lies about which strategies are live makes every incident triage start from a false
+premise.
+
+**What to monitor / watch for:**
+- Boot log should now read `[V2] Breakout signals enabled on 1h/4h (main pipeline; standalone breakout
+  engine disabled)` and `[V2] Mean Reversion engine running (1h, maker fees)`. Verified locally: clean
+  boot, 0 errors, Kraken WS connected, loop #1 completed.
+- `npx tsc --noEmit` clean, `npx vitest run` 18/18, `npx vite build` succeeds.
+- **Rollback:** `git revert <SHA>`. Nothing in the trading path is touched.
+
+**Known and NOT fixed — needs a decision:**
+`npx eslint . --ext .ts,.tsx,.js` now *runs* but reports **1216 problems (528 errors, 688 warnings)** and
+exits 1. It has never passed, so this is pre-existing debt now made visible, not a regression. Breakdown:
+- **375 `no-undef`** — an `eslint.config.js` defect, not real bugs. The config hand-rolls its
+  `languageOptions.globals` list and the list is incomplete. Fixing the config (e.g. via the `globals`
+  package) should erase nearly all 375 at once. **Do this before anything else** — it is most of the noise.
+- **410 `no-console` warnings** — the backend logs via `console` by design. The `**/*.js` block already
+  sets `no-console: 'off'` for exactly this reason; the `**/*.ts` block does not, and the backend is now
+  TypeScript. Almost certainly wants the same treatment.
+- **83 `no-empty`, 33 `prefer-const`, 16 `no-useless-assignment`** — real but cosmetic; 32 auto-fixable.
+- **Genuinely suspect, all outside the V2 trading path:** duplicate object keys in
+  `services/localNLPService.js:48,77` (a sentiment word list — the duplicates are silently dropped), and
+  `components/MLDashboard.tsx:264` (constant left-hand side of `??`). Neither is in the engine.
+- Adding a lint step to CI is **not** advisable until the config defect above is fixed — it would fail
+  every run on 375 false positives.
+
+---
+
 ## 2026-07-29 — Cleanup follow-ups: stale comments, dead deploy paths, /api 404 masking (NO trading change) — local-claude
 
 **Commits:** squash `c1241b5` (PR #2)
