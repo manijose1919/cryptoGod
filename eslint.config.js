@@ -1,6 +1,8 @@
 import js from '@eslint/js';
+import globals from 'globals';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 export default [
   js.configs.recommended,
@@ -13,41 +15,25 @@ export default [
         sourceType: 'module',
         ecmaFeatures: { jsx: true },
       },
-      globals: {
-        window: 'readonly',
-        document: 'readonly',
-        console: 'readonly',
-        fetch: 'readonly',
-        setTimeout: 'readonly',
-        setInterval: 'readonly',
-        clearTimeout: 'readonly',
-        clearInterval: 'readonly',
-        process: 'readonly',
-        __dirname: 'readonly',
-        URL: 'readonly',
-        URLSearchParams: 'readonly',
-        Map: 'readonly',
-        Set: 'readonly',
-        Promise: 'readonly',
-        Date: 'readonly',
-        JSON: 'readonly',
-        Math: 'readonly',
-        Number: 'readonly',
-        Error: 'readonly',
-        Array: 'readonly',
-        Object: 'readonly',
-        RegExp: 'readonly',
-        Symbol: 'readonly',
-        Intl: 'readonly',
-        WebSocket: 'readonly',
-        crypto: 'readonly',
-        Buffer: 'readonly',
-      },
     },
     plugins: {
       '@typescript-eslint': tsPlugin,
+      // Registered because hooks/*.ts already carry
+      // `// eslint-disable-next-line react-hooks/exhaustive-deps` comments. Without
+      // the plugin those comments reference an unknown rule, which ESLint reports as
+      // an error — the config was failing on its own source's disable directives.
+      'react-hooks': reactHooks,
     },
     rules: {
+      // tsc owns undefined-identifier and redeclare checking for TypeScript, and does
+      // it correctly — `npx tsc --noEmit` runs in CI and is green. The core ESLint
+      // rules only see values, so they misread type-only references: `RequestInit` in
+      // a type position reads as undefined, and the const-object + companion-type
+      // pattern (see core/mlProfitLabeler.ts) reads as a redeclare. Both are legal TS.
+      // This is why the block below no longer hand-maintains a `globals` list — that
+      // list existed solely to feed no-undef, and was permanently incomplete.
+      'no-undef': 'off',
+      'no-redeclare': 'off',
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'no-console': 'warn',
@@ -55,30 +41,22 @@ export default [
       'no-var': 'error',
       'eqeqeq': ['error', 'smart'],
       'no-throw-literal': 'error',
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
     },
   },
   {
-    files: ['**/*.js'],
+    // .mjs/.cjs matter: scripts/ is all .mjs. Without them here those files fall
+    // through to js.configs.recommended with no globals at all, and every console
+    // and process reference reports as no-undef.
+    files: ['**/*.js', '**/*.mjs', '**/*.cjs'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
+      // Every .js file outside the ignores is backend: services/, routes/,
+      // scripts/, middleware/, tests/.
       globals: {
-        console: 'readonly',
-        process: 'readonly',
-        setTimeout: 'readonly',
-        setInterval: 'readonly',
-        clearTimeout: 'readonly',
-        clearInterval: 'readonly',
-        Date: 'readonly',
-        JSON: 'readonly',
-        Math: 'readonly',
-        Map: 'readonly',
-        Set: 'readonly',
-        Promise: 'readonly',
-        URL: 'readonly',
-        Buffer: 'readonly',
-        __dirname: 'readonly',
-        __filename: 'readonly',
+        ...globals.node,
       },
     },
     rules: {

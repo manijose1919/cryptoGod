@@ -47,6 +47,79 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-08-26 16:07 UTC — eslint.config.js globals fixed: 528 errors → 146 (NO trading change) — local-claude
+
+**Files changed:** `eslint.config.js`, `package.json`, `package-lock.json`
+**Stats baseline reset:** **no** — lint configuration only. No source file in the trading path was touched.
+
+**Supersedes the "Known and NOT fixed" lint numbers in the 14:56 entry below.**
+
+**What changed:**
+
+Four separate defects in `eslint.config.js`, all of which produced `no-undef` noise:
+
+*Hand-rolled `globals` lists replaced with the `globals` package.* Both config blocks enumerated globals
+by hand (28 names for TS, 16 for JS) and were permanently incomplete — every global the author didn't
+think of became a `no-undef` error. The `.js` block now spreads `globals.node`; added `globals ^17.11.0`.
+
+*`.mjs` and `.cjs` were matched by no block at all.* The JS block was `files: ['**/*.js']`, but everything
+in `scripts/` is `.mjs`. Those files fell through to `js.configs.recommended` with **no globals whatsoever**,
+so every `console` and `process` reference errored. **This one defect accounted for 320 of the 375
+`no-undef` errors.** Pattern is now `['**/*.js', '**/*.mjs', '**/*.cjs']`. Verified `ecosystem.config.cjs`
+lints clean under it.
+
+*`no-undef` and `no-redeclare` are now off for `.ts`/`.tsx`.* Both misread TypeScript: `RequestInit` in a
+type position (`services/tradingBotService.ts:27`) reads as an undefined variable, and the const-object +
+companion-type pattern (`core/mlProfitLabeler.ts:20`) reads as a redeclare. Both are legal, deliberate TS.
+`tsc --noEmit` already performs this check correctly, runs in CI, and is green — so this is not lost
+coverage, it is the same check done by the tool that understands types. This is also why the TS block no
+longer carries a `globals` list: that list existed only to feed `no-undef`. `no-undef` stays **on** for
+`.js`/`.mjs`, where it does real work.
+
+*`eslint-plugin-react-hooks` registered (`^7.1.1`).* `hooks/useLearning.ts`, `hooks/useMarketData.ts` (×2)
+and `hooks/useSessionActions.ts` already carry `// eslint-disable-next-line react-hooks/exhaustive-deps`
+comments. With no plugin installed, ESLint errored on each with "Definition for rule was not found" — the
+config was failing on its own source's disable directives. `rules-of-hooks` is `error` (reports **0** — the
+codebase is clean), `exhaustive-deps` is `warn`.
+
+**Result:**
+
+| | before | after |
+|---|---|---|
+| total problems | 1216 | 842 |
+| **errors** | **528** | **146** |
+| warnings | 688 | 696 |
+| `no-undef` | 375 | **0** |
+
+Every remaining error is a real code-level finding — **no config defects are left**. Warnings rose by 8
+because previously-broken rules now actually run.
+
+**Why:**
+The 14:56 entry flagged the 375 `no-undef` errors as an `eslint.config.js` defect rather than real bugs and
+recommended fixing the config before anything else. This is that fix.
+
+**What to monitor / watch for:**
+- `npx eslint . --ext .ts,.tsx,.js` → 842 problems, 146 errors, exit 1. `npx tsc --noEmit` clean,
+  `npx vitest run` 18/18. No engine code touched, so no behavioral change to watch for.
+- **Rollback:** `git revert <SHA>`. Lint returns to its prior (broken) state; nothing else moves.
+
+**Known and NOT fixed — needs a decision:**
+- **`no-console` is still 411 warnings.** The `**/*.js` block sets `no-console: 'off'` because the backend
+  logs via `console`; the `**/*.ts` block does not, and the backend is TypeScript now. Turning it off for
+  `v2/**` and `serverV2.ts` (or repo-wide for `.ts`) would clear the largest remaining item. Not done here
+  because it is a policy call, not a defect.
+- **244 `no-unused-vars` warnings** in `.js`/`.mjs`, plus 36 in `.ts`.
+- **146 errors remain**, of which 33 are auto-fixable via `--fix`: 83 `no-empty`, 34 `prefer-const`,
+  16 `no-useless-assignment`, 5 `no-useless-escape`, 2 `eqeqeq`, 2 `no-dupe-keys`, and one each of
+  `no-constant-binary-expression`, `no-prototype-builtins`, `no-unassigned-vars`, `preserve-caught-error`.
+  The only two that look like genuine defects are still the ones named in the 14:56 entry
+  (`services/localNLPService.js:48,77` duplicate keys; `components/MLDashboard.tsx:264`), **both outside
+  the V2 trading path.**
+- **A CI lint step is still not advisable** — it would fail on those 146. It becomes viable once the
+  `no-console` policy is settled and `--fix` is run.
+
+---
+
 ## 2026-08-26 14:56 UTC — Lint made runnable + two more stale-status log lines (NO trading change) — local-claude
 
 **Files changed:** `package.json`, `package-lock.json`, `v2/index.ts`, `v2/engine/strategyRunner.ts`
