@@ -510,7 +510,7 @@ export async function getEnhancedTickerSentiment(ticker) {
     : 0;
 
   // Fetch comments from top 2 posts (reduced to save requests)
-  let commentSentiments = [];
+  const commentSentiments = [];
   for (const post of (mentions.topPosts || []).slice(0, 2)) {
     if (post.url) {
       const permalink = post.url.replace('https://www.reddit.com', '');

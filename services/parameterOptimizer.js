@@ -48,7 +48,7 @@ let currentRoundTripFee = 0.52;      // Default to Kraken fees (primary exchange
 // STATE
 // ============================================
 
-let currentParams = {};
+const currentParams = {};
 let optimizationHistory = [];  // { timestamp, changedParams, profitFactorBefore, profitFactorAfter }
 let lastOptimizationTime = 0;
 let totalOptimizations = 0;

@@ -276,7 +276,7 @@ async function downloadMinuteAndAggregate(ticker, targetTimeframe, startTimeMs, 
   let toTs = Math.floor(endTimeMs / 1000);
   let totalNew = 0;
   let pageCount = 0;
-  let buffer = [];
+  const buffer = [];
 
   while (!downloadState.aborted) {
     const candles = await fetchCryptoCompare('histominute', sym.fsym, sym.tsym, CC_MAX_CANDLES, toTs);

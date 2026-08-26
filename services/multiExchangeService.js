@@ -10,8 +10,8 @@ let binanceService, okxService, coinGeckoService, defiLlamaService, cryptoPanicS
 let isRunning = false;
 let activeTicker = 'BTCUSD';
 let intervals = {};
-let lastFetchTimes = {};
-let errorCounts = {};
+const lastFetchTimes = {};
+const errorCounts = {};
 let totalSnapshots = 0;
 
 // In-memory cache for fast access

@@ -65,7 +65,7 @@ const STRATEGIES = ['TREND', 'BREAKOUT', 'WHALE', 'CONFLUENCE', 'MOMENTUM', 'DIV
 // IN-MEMORY STATE
 // ============================================
 let tradeMemory = [];
-let learningState = createFreshState();
+const learningState = createFreshState();
 
 function createFreshState() {
   const strategyStats = {};

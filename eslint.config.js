@@ -36,7 +36,13 @@ export default [
       'no-redeclare': 'off',
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
-      'no-console': 'warn',
+      // Off, matching the `**/*.js` block below. The backend logs via console by
+      // design — 394 of the 411 warnings this rule produced were in v2/, core/,
+      // scripts/ and serverV2.ts, where console IS the logging mechanism (the boot
+      // and per-loop logs monitor.sh and incident triage both read). It was only
+      // still 'warn' here because the backend moved to TypeScript after this block
+      // was written.
+      'no-console': 'off',
       'prefer-const': 'error',
       'no-var': 'error',
       'eqeqeq': ['error', 'smart'],

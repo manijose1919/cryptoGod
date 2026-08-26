@@ -28,7 +28,7 @@ const rateLimiter = {
 
 // Historical tracking for trend detection
 let previousTVL = null;
-let dexVolumeHistory = []; // Last 7 days for average calculation
+const dexVolumeHistory = []; // Last 7 days for average calculation
 
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 

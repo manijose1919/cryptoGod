@@ -349,7 +349,7 @@ async function runWalkForwardLoop(wfId, foldWindows, tickers, initialCash, seedR
       const insufficient = testTrades < MIN_FOLD_TRADES;
 
       // Regime distribution: count candles per regime in test window
-      let regimeDistribution = {};
+      const regimeDistribution = {};
       try {
         const testCandles = getHistoricalCandles(tickers[0], '1h', fw.testStart, fw.testEnd, 10000);
         if (testCandles.length >= 21) {

@@ -268,7 +268,7 @@ export class KrakenAdapter extends BaseExchangeAdapter {
             if (FIAT_BASES.has(rawBase)) continue;
 
             // Normalize base: check aliases, then strip leading X
-            let base = KRAKEN_ALIASES[rawBase] || rawBase.replace(/^X/, '').replace('XBT', 'BTC');
+            const base = KRAKEN_ALIASES[rawBase] || rawBase.replace(/^X/, '').replace('XBT', 'BTC');
 
             // Skip very short bases (likely fragments) and fiat leaks
             if (base.length < 3) continue;

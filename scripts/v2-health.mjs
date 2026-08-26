@@ -26,7 +26,7 @@ async function main() {
 
   // Fetch live prices for open positions
   const openTickers = (trades.open || []).map(t => t.ticker);
-  let livePrices = {};
+  const livePrices = {};
   if (openTickers.length > 0) {
     try {
       const pairs = openTickers.map(t => {

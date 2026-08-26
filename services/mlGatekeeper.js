@@ -115,7 +115,7 @@ export function evaluateEntry(ticker, candles, ruleStrategy, ruleStrength, optio
 
     // Get ML prediction — use reliable features to avoid NaN from imputed values
     const mlPrediction = mlEngine.predict(reliableFeatures);
-    let mlConfidence = mlPrediction.confidence * 100; // Convert to 0-100
+    const mlConfidence = mlPrediction.confidence * 100; // Convert to 0-100
 
     // NaN guard: if ML confidence is NaN, fail open entirely
     if (typeof mlConfidence !== 'number' || isNaN(mlConfidence)) {

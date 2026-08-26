@@ -167,7 +167,7 @@ try {
 } catch (e) {
   console.warn('[ML Prediction] worker_threads not available');
 }
-let trainingWorker = null;
+const trainingWorker = null;
 let workerTraining = false;
 let _trainingInProgress = false; // Global lock to prevent concurrent trainModel() calls
 
@@ -301,7 +301,7 @@ export async function initializeML() {
                 try {
                   const features = JSON.parse(sample.features_json);
                   if (Array.isArray(features) && features.length >= 15) {
-                    let normalized = features.length >= FEATURE_COUNT
+                    const normalized = features.length >= FEATURE_COUNT
                       ? features.slice(0, FEATURE_COUNT)
                       : [...features, ...new Array(FEATURE_COUNT - features.length).fill(0)];
                     features2D.push(normalized);

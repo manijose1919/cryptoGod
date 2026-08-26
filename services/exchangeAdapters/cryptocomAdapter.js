@@ -216,7 +216,7 @@ export class CryptoComAdapter extends BaseExchangeAdapter {
     async placeSellOrder(ticker, quantity, sessionId, instrumentSpecs) {
         const instrument = this.formatTicker(ticker);
         const specs = instrumentSpecs?.get(instrument);
-        let decimals = specs ? specs.quantity_decimals : 8;
+        const decimals = specs ? specs.quantity_decimals : 8;
         const factor = Math.pow(10, decimals);
         const sellQty = (Math.floor(quantity * factor) / factor).toString();
 

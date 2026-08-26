@@ -1647,7 +1647,7 @@ async function runTrainingLoop(runId, timeline, candleData, candleData4h, traini
         // In training mode, use a fixed fraction to ensure enough trades for learning.
         // The learned exit params, quality filters, and optimizer data carry forward
         // to live where Kelly sizing can be applied.
-        let kellyFraction = isAggressive ? 0.25 : 0.15; // Fixed 15% or 25% for training
+        const kellyFraction = isAggressive ? 0.25 : 0.15; // Fixed 15% or 25% for training
 
         // VOLATILITY-SCALED sizing — smaller positions in high-vol
         let volScale = 1.0;

@@ -359,7 +359,7 @@ export function getTimeframeProfile(timeframeId, marketSpeed = 'FAST') {
   }
 
   // --- Numeric adjustments ---
-  let profitTarget = def.profitTarget;
+  const profitTarget = def.profitTarget;
   let stopLoss = def.stopLoss;
   let minConfidence = def.minConfidence;
   let minOppScore = def.minOppScore;

@@ -13,7 +13,7 @@
 import { getExchangeSnapshots, getDerivativesHistory } from './database.js';
 
 // Dynamic imports for data services (may not be loaded yet)
-let binanceData = null;
+const binanceData = null;
 let okxData = null;
 
 // State tracking for historical analysis

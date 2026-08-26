@@ -447,7 +447,7 @@ class GradientBoostedTrees {
     this.initialPrediction = Math.log(p / (1 - p));
 
     // Initialize predictions
-    let predictions = new Array(labels.length).fill(this.initialPrediction);
+    const predictions = new Array(labels.length).fill(this.initialPrediction);
 
     this.trees = [];
 
@@ -662,7 +662,7 @@ class LogisticRegression {
     const sampleWeights = weights || new Array(labels.length).fill(1);
 
     for (let iter = 0; iter < this.maxIterations; iter++) {
-      let gradWeights = new Array(numFeatures).fill(0);
+      const gradWeights = new Array(numFeatures).fill(0);
       let gradBias = 0;
 
       // Calculate gradients
@@ -1166,7 +1166,7 @@ class MLEngine {
       // GBT: add 20 new boosting rounds
       if (this.gradientBoosted && this.gradientBoosted.trees) {
         const gbt = this.gradientBoosted;
-        let predictions = scaledFeatures.map(f => {
+        const predictions = scaledFeatures.map(f => {
           let pred = gbt.initialPrediction;
           for (const tree of gbt.trees) {
             pred += gbt.learningRate * gbt._predictRegressionTree(tree, f);
@@ -1198,7 +1198,7 @@ class MLEngine {
         const lr = this.logisticRegression;
         for (let iter = 0; iter < 100; iter++) {
           const numFeatures = scaledFeatures[0].length;
-          let gradWeights = new Array(numFeatures).fill(0);
+          const gradWeights = new Array(numFeatures).fill(0);
           let gradBias = 0;
 
           for (let i = 0; i < scaledFeatures.length; i++) {

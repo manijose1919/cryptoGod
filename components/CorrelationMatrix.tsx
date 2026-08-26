@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { fetchCorrelationMatrix, type CorrelationMatrix as CorrMatrix } from '../services/correlationRiskService';
 
 interface Props {
-  tickers?: string[]; // eslint-disable-line @typescript-eslint/no-unused-vars
+  tickers?: string[];
 }
 
 const getColor = (value: number): string => {

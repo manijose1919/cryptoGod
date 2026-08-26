@@ -8,7 +8,7 @@ const TELEGRAM_API = 'https://api.telegram.org/bot';
 
 let botToken = process.env.TELEGRAM_BOT_TOKEN || '';
 let chatId = process.env.TELEGRAM_CHAT_ID || '';
-let messageQueue = [];
+const messageQueue = [];
 let processing = false;
 let enabled = false;
 

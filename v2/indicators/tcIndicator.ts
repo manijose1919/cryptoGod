@@ -151,7 +151,7 @@ export function computeTC(candles: Candle[]): TCResult {
 
     // Guard division by zero
     const clvAdjustment = tl2 !== 0 ? clvVal / tl2 : 0;
-    let tc = tl + clvAdjustment + clvVal;
+    const tc = tl + clvAdjustment + clvVal;
 
     // Clamp to 0-100
     return Math.max(0, Math.min(100, tc));

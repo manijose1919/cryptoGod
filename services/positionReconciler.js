@@ -79,7 +79,7 @@ export async function reconcilePositions(portfolio, sessionId) {
       for (const [asset, balance] of Object.entries(balanceResult)) {
         const total = parseFloat(balance);
         if (total > 0) {
-          let normalized = asset
+          const normalized = asset
             .replace(/^X{1,2}/, '')
             .replace(/^Z/, '')
             .replace('XBT', 'BTC');

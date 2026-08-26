@@ -151,7 +151,7 @@ class TFEngine {
 
       // Train with early stopping
       let bestValLoss = Infinity;
-      let patience = 10;
+      const patience = 10;
       let patienceCounter = 0;
       let bestEpoch = 0;
 
@@ -278,7 +278,7 @@ class TFEngine {
     grn = tf.layers.layerNormalization().apply(grn);
 
     // LSTM temporal processing
-    let temporal = tf.layers.lstm({
+    const temporal = tf.layers.lstm({
       units: hiddenDim * 2,
       returnSequences: true,
     }).apply(grn);

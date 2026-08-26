@@ -41,7 +41,7 @@ class SimpleRNG {
   }
 }
 
-let rng = new SimpleRNG(Date.now());
+const rng = new SimpleRNG(Date.now());
 
 /**
  * Genome: a decision tree that evaluates indicator values and produces BUY/SKIP signals.

@@ -34,7 +34,7 @@ const TRADING_FEE = 0.0052; // 0.52% round-trip (Kraken taker fees)
 
 let interval = null;
 let _tableReady = false;
-let lastResults = new Map(); // strategy -> { winRate, avgPnl, maxDrawdown }
+const lastResults = new Map(); // strategy -> { winRate, avgPnl, maxDrawdown }
 
 function ensureTable() {
   if (_tableReady) return;

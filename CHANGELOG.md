@@ -47,6 +47,67 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-08-26 17:40 UTC — no-console off for .ts + eslint --fix applied: 146 errors → 113 (NO trading change) — local-claude
+
+**Files changed:** `eslint.config.js`, plus 28 source files touched by `--fix` (1 line each except
+`services/mlEngine.js` and three others at 2), `components/CorrelationMatrix.tsx`
+**Stats baseline reset:** **no.** Every `--fix` edit is `let` → `const` on a binding that is never
+reassigned — semantically identical by the rule's own precondition. CLAUDE.md lists behavior-preserving
+refactors under "never reset".
+
+**What changed:**
+
+*`no-console` is now `off` for `.ts`/`.tsx`,* matching the `**/*.js` block. 394 of the 411 warnings it
+produced were in `v2/`, `core/`, `scripts/` and `serverV2.ts`, where `console` **is** the logging
+mechanism — the boot and per-loop output that `monitor.sh` and every incident triage read. The rule was
+only still on here because the backend moved to TypeScript after that config block was written. This also
+silences 17 warnings in `components/`; if the frontend should keep the rule, it needs its own block.
+
+*`npx eslint --fix` applied,* clearing 33 errors and 1 warning across 28 files. The entire diff is
+`let` → `const` (30 sites), plus one unused `eslint-disable-line` directive removed from
+`components/CorrelationMatrix.tsx` — `--fix` left trailing whitespace on that line, which was cleaned by
+hand. **No logic, no control flow, no thresholds.** Files touched include live backend services
+(`krakenWebsocketService.js`, `fearGreedGate.js`, `telegramService.js`) and one trading-path file,
+`v2/indicators/tcIndicator.ts` (local `tc`, computed once and returned).
+
+**Result — cumulative across the three commits in this branch:**
+
+| | at branch start | now |
+|---|---|---|
+| total problems | 1216 | **397** |
+| errors | 528 | **113** |
+| warnings | 688 | **284** |
+| `no-undef` | 375 | 0 |
+| `no-console` | 411 | 0 |
+
+**Why:**
+Both items were listed as "Known and NOT fixed — needs a decision" in the 16:07 entry. The user made the
+call on `no-console` and asked for `--fix`.
+
+**What to monitor / watch for:**
+- Nothing behavioral. Verified after the change: `tsc --noEmit` clean, `vitest run` 18/18, `vite build`
+  succeeds, and a 70s live boot against Kraken with **0 errors** — WS connected and subscribed, Fear &
+  Greed blended 56, loop #1 completed, bearish eval #1 completed. That boot exercises three of the four
+  most-edited services directly.
+- **Rollback:** `git revert <SHA>`. Safe at any time; nothing depends on these edits.
+
+**Known and NOT fixed:**
+- **113 errors remain**, none auto-fixable, and `--fix` has now been exhausted. By directory: 81
+  `services/`, 17 `components/`, 9 `routes/`, 3 `v2/`, 2 `serverV2.ts`, 1 `core/`. By rule: **83
+  `no-empty`** (empty `catch {}` blocks — the dominant item and a real code-quality question for a system
+  that swallows exchange errors), 16 `no-useless-assignment`, 5 `no-useless-escape`, 2 `eqeqeq`, 2
+  `no-dupe-keys`, and one each of `no-constant-binary-expression`, `prefer-const`
+  (`routes/auth.js:34` — `--fix` skips multi-declarator statements), `no-prototype-builtins`,
+  `no-unassigned-vars` (`services/multiExchangeService.js:7`), `preserve-caught-error`.
+- **Still the only two that look like genuine defects,** unchanged since the 14:56 entry:
+  `services/localNLPService.js:48,77` (duplicate keys, silently dropped) and
+  `components/MLDashboard.tsx:264`. **Both outside the V2 trading path.**
+- **284 warnings**, almost all `no-unused-vars` (244 in `.js`/`.mjs`, 36 in `.ts`).
+- **A CI lint step is still blocked on the 83 `no-empty` errors.** That is the last thing standing between
+  this repo and a lint gate. Most are likely `catch {}` blocks that deserve at least a comment.
+
+---
+
 ## 2026-08-26 16:07 UTC — eslint.config.js globals fixed: 528 errors → 146 (NO trading change) — local-claude
 
 **Files changed:** `eslint.config.js`, `package.json`, `package-lock.json`

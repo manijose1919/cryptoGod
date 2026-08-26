@@ -36,7 +36,7 @@ let champion = {
 
 let challenger = null;  // Same structure, or null if no test running
 
-let testHistory = [];   // Past A/B test results
+const testHistory = [];   // Past A/B test results
 const MAX_HISTORY = 20;
 
 // ─── Public API ──────────────────────────────────────────────

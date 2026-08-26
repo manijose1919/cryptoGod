@@ -51,7 +51,7 @@ let _liquidationModule = null;
 let _modulesLoaded = false;
 
 // Source breakdown for dashboard transparency
-let sourceBreakdown = {
+const sourceBreakdown = {
   alternativeMe: { value: 50, weight: WEIGHTS.alternativeMe, raw: 50 },
   fundingRate:   { value: 50, weight: WEIGHTS.fundingRate, raw: 0, detail: 'not loaded' },
   exchangeFlow:  { value: 50, weight: WEIGHTS.exchangeFlow, raw: 0, detail: 'not loaded' },

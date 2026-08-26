@@ -53,7 +53,7 @@ function isDomainDead(domain) {
   return deadDomains.has(domain);
 }
 
-let _deadLoggedDomains = new Set();
+const _deadLoggedDomains = new Set();
 function recordDomainFailure(domain, status) {
   const count = (domainFailCounts.get(domain) || 0) + 1;
   domainFailCounts.set(domain, count);
