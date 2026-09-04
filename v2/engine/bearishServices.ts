@@ -571,11 +571,18 @@ export function stopBearishServices(): void {
 }
 
 export function getBearishStatus() {
-  const shortStatus = shortSellingEngine.getStatus();
-  const stakingStatus = stakingEngine.getStatus();
+  const shortStatus = {
+    ...shortSellingEngine.getStatus(),
+    enabled: BEARISH_CONFIG.SHORT_ENABLED,
+  };
+  const stakingStatus = {
+    ...stakingEngine.getStatus(),
+    enabled: BEARISH_CONFIG.STAKING_ENABLED,
+  };
 
   let arbStatus: any = {};
   try { arbStatus = arbitrageEngine.getStatus(); } catch { /* */ }
+  arbStatus = { ...arbStatus, enabled: BEARISH_CONFIG.ARB_ENABLED };
 
   // Load DCA history from DB
   let dcaHistory: any[] = [];
