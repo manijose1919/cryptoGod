@@ -27,8 +27,8 @@ import { requireAdminAuth } from './middleware/adminAuth.js';
 
 let derivativesIntel: any = null;
 let whaleFlowTracker: any = null;
-try { derivativesIntel = await import('./services/derivativesIntelligence.js'); } catch {}
-try { whaleFlowTracker = await import('./services/whaleFlowTracker.js'); } catch {}
+try { derivativesIntel = await import('./services/derivativesIntelligence.js'); } catch { /* optional */ }
+try { whaleFlowTracker = await import('./services/whaleFlowTracker.js'); } catch { /* optional */ }
 
 // --- 4. Kraken WebSocket ---
 import { initWebSocket as initKrakenWS } from './services/krakenWebsocketService.js';
