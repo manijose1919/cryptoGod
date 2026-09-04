@@ -227,7 +227,8 @@ six weeks later than a number with the sample size that justified it.
 
 | Variable | Read by | Effect |
 |---|---|---|
-| `V2_MODE` | `V2_CONFIG.MODE` | `shadow` (default when unset), `paper` (deployed), or live execution |
+| `V2_MODE` | `V2_CONFIG.MODE` | `shadow` (default when unset), `paper` (deployed), or a live request |
+| `V2_LIVE_CONFIRMED` | `resolveV2Mode()` | Must equal `yes` in addition to `V2_MODE=live`; otherwise mode is downgraded to paper |
 | `V2_BUDGET` | `serverV2.ts` | Starting budget passed to `bootV2()`; defaults to `1000` |
 | `PAIRS_MODE` | `PAIRS_CONFIG.MODE` | `off` (default), `paper` (deployed), `live` |
 | `PAIRS_LIVE_CONFIRMED` | pairs deployment protocol | Second required confirmation for live pairs trading |
@@ -238,7 +239,8 @@ six weeks later than a number with the sample size that justified it.
 `ecosystem.config.cjs` sets `V2_MODE` and `PAIRS_MODE` explicitly, so the deployed process never
 inherits a default for either.
 
-**The pairs safety interlock.** Live pairs trading requires *two* independent settings:
+**Live safety interlocks.** Main-engine live trading requires *two* independent settings:
+`V2_MODE=live` and `V2_LIVE_CONFIRMED=yes`. Pairs trading follows the same pattern and requires
 `PAIRS_MODE=live` and `PAIRS_LIVE_CONFIRMED=yes`. With only the first, the mode is downgraded to
 paper. This is intentional friction — a single mistyped environment variable or a copied PM2 config
 should not be able to move a strategy from simulation to real margin orders. The deployment protocol

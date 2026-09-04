@@ -14,6 +14,8 @@ import { detectMomentumEntry } from '../pipeline/momentumSignal.ts';
 import { checkTimeGate } from '../pipeline/timeGate.ts';
 import { scanMarket } from '../pipeline/marketScanner.ts';
 import { SIGNAL_ACTIVE_THRESHOLDS } from '../attribution/postTradeAnalyzer.ts';
+import { applyPaperSlippage } from '../engine/tradeAccounting.ts';
+import { getNextBarEntryPrice } from './backtestExecution.ts';
 import type {
   BacktestConfig,
   BacktestTrade,
@@ -257,7 +259,12 @@ function simulateTicker(
 
       if (exitResult.shouldExit) {
         // Exit price from the intra-bar simulation (stop price for SL/trailing, TP for take_profit)
-        const exitPrice = exitResult.exitPrice;
+        const exitPrice = applyPaperSlippage(
+          exitResult.exitPrice,
+          trade.side,
+          'exit',
+          config.slippagePerSide,
+        );
         const pnlGross = trade.side === 'short'
           ? (trade.entryPrice - exitPrice) * trade.quantity
           : (exitPrice - trade.entryPrice) * trade.quantity;
@@ -289,6 +296,8 @@ function simulateTicker(
     state.openTrades = stillOpen;
 
     // --- CHECK ENTRY ---
+    const nextCandle = candles[bar + 1];
+    if (!nextCandle) continue;
     if (state.openTrades.length >= config.maxOpenPositions) continue;
 
     // Re-entry cooldown
@@ -348,8 +357,12 @@ function simulateTicker(
         && confidence >= V2_CONFIG.MIN_CONFIDENCE
         && expectedReturn >= V2_CONFIG.MIN_EXPECTED_RETURN
       ) {
-        // Slippage: 0.1% adverse on entry (buy higher than close)
-        const entryPrice = currentCandle.close * 1.001;
+        const entryPrice = getNextBarEntryPrice(
+          candles,
+          bar,
+          'long',
+          config.slippagePerSide,
+        )!;
         const atrValue = signals.atr as number;
         const stopLoss = entryPrice - atrValue * V2_CONFIG.STOP_LOSS_ATR_MULT;
         const takeProfit = entryPrice + atrValue * V2_CONFIG.TAKE_PROFIT_ATR_MULT;
@@ -369,8 +382,8 @@ function simulateTicker(
           state.cash -= positionSizeUsd;
           state.openTrades.push({
             id: nextTradeId(ticker),
-            ticker, side: 'long', entryBar: bar, entryPrice,
-            entryTime: currentCandle.time, entrySignals: signals,
+            ticker, side: 'long', entryBar: bar + 1, entryPrice,
+            entryTime: nextCandle.time, entrySignals: signals,
             entryRegime: regime.regime, entryConfidence: confidence, compositeScore,
             exitBar: null, exitPrice: null, exitTime: null, exitReason: null,
             quantity, positionSizeUsd, stopLoss, takeProfit,
@@ -387,7 +400,12 @@ function simulateTicker(
     if (!trendEntry && MOMENTUM_CONFIG.ENABLED) {
       const momSignal = detectMomentumEntry(window, ticker);
       if (momSignal && momSignal.confidence >= MOMENTUM_CONFIG.MIN_CONFIDENCE) {
-        const momPrice = currentCandle.close * 1.001; // slippage
+        const momPrice = getNextBarEntryPrice(
+          candles,
+          bar,
+          'long',
+          config.slippagePerSide,
+        )!;
         const momAtr = momSignal.signals.atr as number;
         const momAtrPct = momSignal.signals.atr_percent as number;
         const momSwingLow = momSignal.signals.mom_swing_low as number | undefined;
@@ -409,8 +427,8 @@ function simulateTicker(
           state.cash -= momPosSize;
           state.openTrades.push({
             id: nextTradeId(ticker) + 'M',
-            ticker, side: 'long', entryBar: bar, entryPrice: momPrice,
-            entryTime: currentCandle.time, entrySignals: momSignal.signals,
+            ticker, side: 'long', entryBar: bar + 1, entryPrice: momPrice,
+            entryTime: nextCandle.time, entrySignals: momSignal.signals,
             entryRegime: momSignal.regime, entryConfidence: momSignal.confidence,
             compositeScore: momSignal.compositeScore,
             exitBar: null, exitPrice: null, exitTime: null, exitReason: null,
@@ -427,7 +445,12 @@ function simulateTicker(
   // Force-close any remaining open trades at last bar close
   const lastCandle = candles[candles.length - 1];
   for (const trade of state.openTrades) {
-    const exitPrice = lastCandle.close;
+    const exitPrice = applyPaperSlippage(
+      lastCandle.close,
+      trade.side,
+      'exit',
+      config.slippagePerSide,
+    );
     const pnlGross = trade.side === 'short'
       ? (trade.entryPrice - exitPrice) * trade.quantity
       : (exitPrice - trade.entryPrice) * trade.quantity;

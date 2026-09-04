@@ -136,6 +136,7 @@ async function main(): Promise<void> {
     intervalMinutes,
     maxOpenPositions: V2_CONFIG.MAX_OPEN_POSITIONS,
     feeRoundTrip: V2_CONFIG.FEE_ROUND_TRIP_TAKER, // Conservative: use taker fees
+    slippagePerSide: V2_CONFIG.PAPER_SLIPPAGE_PER_SIDE,
     barSequence: args.barSequence,
     seed: args.seed,
   };
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
   console.log(`  Timeframe: ${args.interval} (${intervalMinutes}min)`);
   console.log(`  Budget:    $${args.budget}/ticker ($${args.budget * args.tickers.length} total)`);
   console.log(`  Fees:      ${(config.feeRoundTrip * 100).toFixed(2)}% round-trip (Kraken taker)`);
+  console.log(`  Slippage:  ${(config.slippagePerSide * 100).toFixed(2)}% per side`);
   console.log(`  Bar seq:   ${args.barSequence}${args.barSequence === 'optimistic' ? ' (legacy favorable-first — results inflated)' : ''}`);
   console.log(`  Seed:      ${args.seed ? 'YES' : 'no'}`);
 

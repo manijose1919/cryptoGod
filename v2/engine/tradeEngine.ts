@@ -289,11 +289,13 @@ async function runLoop(): Promise<void> {
     let mlFiltered = approved;
     // Gatekeeper A/B: on a fraction of loops, bypass the gatekeeper entirely (OFF arm)
     // so we can measure its block-recall — do the trades it would block actually lose?
-    const abOff = V2_CONFIG.GATEKEEPER_AB_TEST && Math.random() < V2_CONFIG.GATEKEEPER_AB_OFF_RATE;
-    if (approved.length > 0 && abOff) {
+    const abOff = V2_CONFIG.ML_GATEKEEPER_ENABLED
+      && V2_CONFIG.GATEKEEPER_AB_TEST
+      && Math.random() < V2_CONFIG.GATEKEEPER_AB_OFF_RATE;
+    if (V2_CONFIG.ML_GATEKEEPER_ENABLED && approved.length > 0 && abOff) {
       mlFiltered = approved; // all approved proceed at 1.0x size (no ML multiplier)
       console.log(`[V2] Loop #${stats.loopCount}: GATEKEEPER A/B OFF arm — bypassing gatekeeper for ${approved.length} signal(s)`);
-    } else if (approved.length > 0) {
+    } else if (V2_CONFIG.ML_GATEKEEPER_ENABLED && approved.length > 0) {
       try {
         const gk = await import('../../services/mlGatekeeper.js');
         if (gk.evaluateEntry) {
