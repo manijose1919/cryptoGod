@@ -11,6 +11,16 @@ import { ema, detectRegime } from '../indicators/indicators.ts';
 
 // --- Helpers ---
 
+function timeframeToMinutes(tf: string): number {
+  return tf === '1m' ? 1
+    : tf === '5m' ? 5
+    : tf === '15m' ? 15
+    : tf === '30m' ? 30
+    : tf === '1h' ? 60
+    : tf === '4h' ? 240
+    : tf === '1d' ? 1440 : 240;
+}
+
 function makeReject(ticker: string, reason: string): ScanResult {
   return {
     ticker,
@@ -54,8 +64,17 @@ function getHTFRegime(ticker: string): string | null {
  * is UP or STRONG_UP (pullback-in-uptrend pattern).
  * Returns one ScanResult per ticker (passed or rejected).
  */
-export function scanMarket(tickerCandles: Map<string, Candle[]>, side: 'long' | 'short' = 'long'): ScanResult[] {
+export function scanMarket(
+  tickerCandles: Map<string, Candle[]>,
+  side: 'long' | 'short' = 'long',
+  // Timeframe of the candles being scanned. strategyRunner scans 1h AND 4h
+  // buffers; before 2026-09-04 the 24h-volume estimate always assumed
+  // CANDLE_INTERVAL (4h), so 1h scans were under-counted 4x and hit the
+  // MIN_VOLUME_24H_USD gate on tickers that pass it on 4h.
+  timeframe: string = V2_CONFIG.CANDLE_INTERVAL,
+): ScanResult[] {
   const results: ScanResult[] = [];
+  const candlesPerDay = 1440 / timeframeToMinutes(timeframe);
   const allowedRegimes: ReadonlySet<string> = new Set(
     side === 'short' ? V2_CONFIG.SHORT_ALLOWED_REGIMES : V2_CONFIG.ALLOWED_REGIMES
   );
@@ -189,13 +208,6 @@ export function scanMarket(tickerCandles: Map<string, Candle[]>, side: 'long' | 
     const recentCandles = candles.slice(-20);
     const avgVolume = recentCandles.reduce((sum, c) => sum + c.volume, 0) / recentCandles.length;
     const lastPrice = candles[candles.length - 1].close;
-    // Scale volume to 24h based on candle interval (1440 minutes / interval minutes)
-    const intervalMinutes = V2_CONFIG.CANDLE_INTERVAL === '1m' ? 1
-      : V2_CONFIG.CANDLE_INTERVAL === '5m' ? 5
-      : V2_CONFIG.CANDLE_INTERVAL === '15m' ? 15
-      : V2_CONFIG.CANDLE_INTERVAL === '1h' ? 60
-      : V2_CONFIG.CANDLE_INTERVAL === '4h' ? 240 : 1;
-    const candlesPerDay = 1440 / intervalMinutes;
     const volumeUsd24h = avgVolume * lastPrice * candlesPerDay;
 
     if (volumeUsd24h < V2_CONFIG.MIN_VOLUME_24H_USD) {

@@ -43,7 +43,7 @@ export function runAllStrategies(
     if (tfCandles.size === 0) continue;
 
     // Run market scanner for this timeframe
-    const scanResults = scanMarket(tfCandles);
+    const scanResults = scanMarket(tfCandles, 'long', tf);
     const passedScan = getPassedTickers(scanResults);
 
     // Strategy lookups are null-safe (?.) — disabling a strategy by removing
@@ -106,7 +106,7 @@ export function runAllStrategies(
     // --- SHORTS (4h only — see SHORT_TIMEFRAMES; 1h/30m shorts proven losers — same ADX gate) ---
     if (V2_CONFIG.SHORTS_ENABLED && V2_CONFIG.MODE !== 'live'
         && STRATEGY_TIMEFRAMES.TREND?.includes(tf) && V2_CONFIG.SHORT_TIMEFRAMES.includes(tf)) {
-      const shortScanResults = scanMarket(tfCandles, 'short');
+      const shortScanResults = scanMarket(tfCandles, 'short', tf);
       const passedShortScan = getPassedTickers(shortScanResults).filter(scan => {
         const candles = tfCandles.get(scan.ticker);
         if (!candles || candles.length < 30) return false;
