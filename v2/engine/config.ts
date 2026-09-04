@@ -11,24 +11,11 @@ export const V2_CONFIG = {
 
   // --- Scan ---
   SCAN_TICKERS: [
-    // 2026-05-27: Concentrated on 6 top performers. $10K/6 = $1,667/ticker.
-    // PF 8.64, +$8,443 (84.4% in 90d), 180d +$13,486 (134.8%)
-    'AKTUSD',    // PF best, 93.3% WR, +$2,009
-    'ZECUSD',    // 92.4% WR, +$1,554
-    'FETUSD',    // 91.7% WR, +$1,402
-    'PENGUUSD',  // 90.9% WR, +$1,489
-    'TAOUSD',    // 89.5% WR, +$1,479
-    'PENDLEUSD', // 88.1% WR, +$511, PF 8.20
-    // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
-    //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
-    //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
-    //   COMPUSD: PF 1.20 alone (Compound DeFi) — third strongest, low-correlation to AKT/ZEC
-    // Combined (AKT+ZEC+COMP, single-strategy backtest, 4h, 90d): PF 1.62, +$151, +5.0%, max DD 2.3%
-    // Robustness: 30d PF 1.00 (break-even, yellow flag), 60d PF 1.33, 90d PF 1.62 — improves with longer window
-    // Removed: ETHUSD, XRPUSD, DOGEUSD, DOTUSD, ADAUSD (all PF<1 in current 90d regime under tuned config)
-    // Per-ticker (90d, Config A): ETH -4.2%, XRP losing, DOGE losing, DOT/ADA worst-2 (-$84/-$112)
-    // 2026-05-17: Added SOL ($9.4M vol), HYPE ($7M vol, +7.1% today), SUI ($5.6M vol), LINK ($2.3M vol)
-    //   — diversify out of 3 correlated mid-cap alts all stuck in DOWN regime. Higher vol + different sectors.
+    // Kraken USD markets available to the Canadian deployment. The previous
+    // concentration used unsupported mid-cap bases and could not be executed
+    // by the intended account even if its backtest held up.
+    'BTCUSD', 'ETHUSD', 'XRPUSD', 'BNBUSD', 'SOLUSD',
+    'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD',
   ],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 1.0,  // 2026-07-21: raised from 0.3. Data mining: ATR<1% = 27.3% WR (n=132), death zone. ATR 1-2% = 51.7% WR, 2-3% = 63.5%. Minimum 1% eliminates fee-dominated noise trades.
@@ -36,7 +23,10 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // 2026-06-27: UP restored. ADX gate (now 20) handles trend-strength filtering. STRONG_UP-only was too strict — 1 trade in 9 days. Fee-aware floor protects against sub-fee wins.
+  // Fresh 90d pessimistic replay on the Canadian universe: STRONG_UP +$25.31
+  // vs UP -$105.33 after fees. Non-overlapping 45d halves were -$2.60/+13.91
+  // for STRONG_UP vs -$65.53/-$22.71 for UP. Prefer inactivity to negative edge.
+  ALLOWED_REGIMES: ['STRONG_UP'] as const,
   // 2026-07-21: UP+1h is a proven loser all-time (n=25, 40% WR, -$1.05/trade).
   // STRONG_UP+1h works (60% WR, +$0.45/trade). Restrict UP to 4h only.
   REGIME_TIMEFRAME_RESTRICT: { 'UP': ['4h'] } as Record<string, string[]>,
@@ -51,6 +41,7 @@ export const V2_CONFIG = {
   FEE_MAKER_PERCENT: 0.0016,
   FEE_ROUND_TRIP_MAKER: 0.0032,
   FEE_ROUND_TRIP_TAKER: 0.0052,
+  PAPER_SLIPPAGE_PER_SIDE: 0.0005, // 5 bps adverse fill on every simulated entry/exit
 
   // Fee-aware trailing-activation floor: trail may not arm until unrealized
   // profit >= this multiple of round-trip taker fee (3 × 0.52% = 1.56%).
@@ -261,7 +252,7 @@ export const MOMENTUM_CONFIG = {
   // PF > 1 individually under v2 logic; combined PF was 1.70 (90d).
   // ZECUSD overlaps with TREND's SCAN_TICKERS — that's intentional, the two
   // strategies pick different signal patterns and rarely fire simultaneously.
-  SCAN_TICKERS: ['ZECUSD', 'RUNEUSD', 'FLOWUSD', 'ENAUSD', 'KASUSD', 'ICPUSD', 'WIFUSD'] as readonly string[],
+  SCAN_TICKERS: V2_CONFIG.SCAN_TICKERS,
 
   CANDLE_INTERVAL: '4h' as string,  // 4h was the best timeframe — 1h gave PF 0 (too noisy)
   ALLOWED_REGIMES: ['STRONG_UP'] as readonly string[],  // 2026-06-30: STRONG_UP-only. Edge diagnosis (42 trades): MOMENTUM STRONG_UP 94% WR/+$82 (best setup in system); UP 8% WR/−$20; SIDEWAYS −$0.65. MOMENTUM only works in strong uptrends. Rollback: re-add 'UP','SIDEWAYS'.
@@ -329,7 +320,9 @@ export const MOM_EXIT_CONFIG = {
 // ============================================
 
 export const SNIPER_CONFIG = {
-  ENABLED: true,             // master enable — both kraken + cryptocom respect this
+  // Disabled: dynamic new listings can fall outside the Canadian allowlist,
+  // and this strategy has no reproducible historical validation.
+  ENABLED: false,
 
   // --- Per-exchange budgets + enable flags (2026-05-06: dual-exchange) ---
   KRAKEN_ENABLED: true,
@@ -390,12 +383,11 @@ export const MR_CONFIG = {
   //      same mid-cap tickers as TREND (AKT, ZEC, FET, etc.)
   //   3. No ADX gate — was entering ranging AND trending markets
   //   4. Long-only — missed 50% of MR opportunities (overbought shorts)
-  ENABLED: true,
+  // Disabled until the rebuilt strategy has a positive fee-aware OOS sample.
+  ENABLED: false,
   CANDLE_INTERVAL: '1h' as string,
   ALLOWED_REGIMES: ['SIDEWAYS'] as readonly string[],
-  SCAN_TICKERS: [
-    'AKTUSD', 'ZECUSD', 'FETUSD', 'PENGUUSD', 'TAOUSD', 'PENDLEUSD',
-  ] as string[],
+  SCAN_TICKERS: [...V2_CONFIG.SCAN_TICKERS],
 
   // ADX gate — only enter when market is ranging (primary gate)
   ADX_MAX_FOR_ENTRY: 20,

@@ -16,6 +16,7 @@ import {
 } from './types.ts';
 import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, timeframeToMs } from '../engine/config.ts';
 import type { StrategyExitConfig } from '../engine/config.ts';
+import { getGapAwareStopFill } from '../engine/tradeAccounting.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 import { updateTradeStop, markTrailingActivated, updateTradePeakPrice } from '../attribution/attributionStore.ts';
 
@@ -156,8 +157,10 @@ export async function checkExits(
       const stopWasRaised = trade.trailingActivated || (isShort ? trade.currentStop < trade.initialStop : trade.currentStop > trade.initialStop);
       const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
       const reasonLabel = stopWasRaised ? 'Trailing/BE stop hit' : 'Stop loss hit';
-      // Paper mode: use stop price to avoid gap-through losses
-      const exitPrice = V2_CONFIG.MODE !== 'live' ? trade.currentStop : currentPrice;
+      // Paper stops cannot fill better than the observed quote after a gap.
+      const exitPrice = V2_CONFIG.MODE !== 'live'
+        ? getGapAwareStopFill(trade.side, trade.currentStop, currentPrice)
+        : currentPrice;
       results.push({
         trade,
         shouldExit: true,
@@ -334,7 +337,9 @@ export async function checkExits(
         ? currentPrice >= newStop
         : currentPrice <= newStop;
       if (trailHit) {
-        const trailExitPrice = V2_CONFIG.MODE !== 'live' ? newStop : currentPrice;
+        const trailExitPrice = V2_CONFIG.MODE !== 'live'
+          ? getGapAwareStopFill(trade.side, newStop, currentPrice)
+          : currentPrice;
         results.push({
           trade,
           shouldExit: true,

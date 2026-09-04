@@ -15,10 +15,8 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 3033,
         V2_MODE: 'paper',
-        // Pairs trading: paper mode only. Live requires both PAIRS_MODE=live
-        // AND PAIRS_LIVE_CONFIRMED=yes (safety interlock). Phase A = 30 days
-        // paper. Plan: docs/plans/2026-05-26-pairs-deployment-plan.md
-        PAIRS_MODE: 'paper',
+        // FIL/ICP is outside the Canadian deployment allowlist.
+        PAIRS_MODE: 'off',
       },
       // Logging
       error_file: '/opt/trading-bot/logs/error.log',

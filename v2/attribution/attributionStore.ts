@@ -14,6 +14,7 @@ import type {
   Regime,
 } from '../pipeline/types.ts';
 import { TRADE_STATUS } from '../pipeline/types.ts';
+import { calculateRealizedPnl } from '../engine/tradeAccounting.ts';
 
 // --- Schema Init ---
 
@@ -217,9 +218,13 @@ export function closeTrade(
   if (!trade) throw new Error(`Trade ${tradeId} not found`);
 
   const now = Date.now();
-  const pnlGross = (exitPrice - trade.entryPrice) * trade.quantity *
-    (trade.side === 'long' ? 1 : -1);
-  const pnlNet = pnlGross - feesPaid;
+  const { pnlGross, pnlNet } = calculateRealizedPnl(
+    trade.side,
+    trade.entryPrice,
+    exitPrice,
+    trade.quantity,
+    feesPaid,
+  );
   const holdDurationMs = now - trade.entryTime;
 
   _closeStmt.run({

@@ -16,6 +16,7 @@ import {
   PIPELINE_STAGE,
 } from './types.ts';
 import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, getExchangeFees } from '../engine/config.ts';
+import { applyPaperSlippage } from '../engine/tradeAccounting.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // --- Helpers ---
@@ -89,16 +90,23 @@ export async function executeTrade(
   if (V2_CONFIG.MODE !== 'live') {
     // --- Shadow / Paper mode ---
     // Use close price from signal (already computed from candles) instead of extra API call
-    let price = signal.signals.close_price as number;
-    if (!price || price <= 0) {
-      price = await exchange.getLatestPrice(signal.ticker);
+    let referencePrice = signal.signals.close_price as number;
+    if (!referencePrice || referencePrice <= 0) {
+      referencePrice = await exchange.getLatestPrice(signal.ticker);
     }
-    if (!price || price <= 0) {
+    if (!referencePrice || referencePrice <= 0) {
       const rejectDecision = makeReject(tradeId, `Cannot get price for ${signal.ticker}`);
       return { trade: null, decision: rejectDecision };
     }
-    const quantity = risk.positionSizeUsd / price;
     const isShort = risk.side === 'short';
+    const side = isShort ? 'short' : 'long';
+    const price = applyPaperSlippage(
+      referencePrice,
+      side,
+      'entry',
+      V2_CONFIG.PAPER_SLIPPAGE_PER_SIDE,
+    );
+    const quantity = risk.positionSizeUsd / price;
     // Use per-strategy exit config for SL/TP (BREAKOUT uses tighter stops than TREND)
     const strategy = (signal as any)._strategy ?? 'TREND';
     const exitCfg = STRATEGY_EXIT_CONFIGS[strategy] ?? STRATEGY_EXIT_CONFIGS.TREND;
@@ -121,7 +129,7 @@ export async function executeTrade(
     const trade: V2Trade = {
       id: tradeId,
       ticker: signal.ticker,
-      side: isShort ? 'short' : 'long',
+      side,
       status: TRADE_STATUS.open,
       entryPrice: price,
       entryTime: Date.now(),

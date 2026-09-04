@@ -6,6 +6,7 @@
 import type { Candle, V2Trade } from '../pipeline/types.ts';
 import { V2_CONFIG, STRATEGY_TIMEFRAMES, getExchangeFees } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
+import { applyPaperSlippage, calculateRealizedPnl } from './tradeAccounting.ts';
 
 // Pipeline imports
 import { scanMarket } from '../pipeline/marketScanner.ts';
@@ -508,25 +509,14 @@ async function checkOpenExits(): Promise<void> {
 
       const trade = result.trade;
 
-      // Calculate fees: both entry and exit sides.
-      // All exits use placeMarketSell (see V2_CONFIG.MODE === 'live' block below),
-      // which is always taker. Previously we assumed maker fee for take_profit and
-      // trailing exits — that under-counted by ~0.10% (taker - maker), inflating
-      // recorded P&L vs the actual exchange charge. Match accounting to reality.
-      const entryFee = trade.feesPaid; // already paid at entry
-      // H7: use the active exchange's taker rate (Kraken 0.26%, Crypto.com 0.075%).
-      // Hardcoded V2_CONFIG.FEE_TAKER_PERCENT was Kraken-only and over-stated
-      // exit fees by ~3.5x when the bot ran on Crypto.com.
-      const fees = getExchangeFees(exchange.getName());
-      const exitFee = result.exitPrice * trade.quantity * fees.TAKER_PERCENT;
-      const totalFees = entryFee + exitFee;
-
       // In live mode, actually sell. C2: cancel the native SL FIRST so it
       // doesn't fire later on the next re-entry's price dip and accidentally
       // close the fresh position. Cancel is best-effort — if it fails (already
       // filled, or just rejected), proceed with the market-sell anyway and
       // let the exchange reject one of the two if it ever races. Logging
       // captures both cases for diagnosis.
+      let exitPrice = result.exitPrice;
+      let reportedExitFee: number | null = null;
       if (V2_CONFIG.MODE === 'live') {
         if (trade.stopOrderId) {
           try {
@@ -536,25 +526,48 @@ async function checkOpenExits(): Promise<void> {
           }
         }
         try {
-          await exchange.placeMarketSell(trade.ticker, trade.quantity);
+          const exitOrder = await exchange.placeMarketSell(trade.ticker, trade.quantity);
+          if (exitOrder.price > 0) exitPrice = exitOrder.price;
+          if (exitOrder.fee > 0) reportedExitFee = exitOrder.fee;
         } catch (e) {
           console.error(`[V2] Failed to place market sell for ${trade.ticker}: ${(e as Error).message}`);
           continue;
         }
+      } else {
+        exitPrice = applyPaperSlippage(
+          exitPrice,
+          trade.side,
+          'exit',
+          V2_CONFIG.PAPER_SLIPPAGE_PER_SIDE,
+        );
       }
 
+      // Calculate fees from the actual live fill or the adverse paper fill.
+      const entryFee = trade.feesPaid;
+      const fees = getExchangeFees(exchange.getName());
+      const exitFee = reportedExitFee
+        ?? exitPrice * trade.quantity * fees.TAKER_PERCENT;
+      const totalFees = entryFee + exitFee;
+
       // Close in DB
-      closeTrade(trade.id, result.exitPrice, result.exitReason, totalFees);
+      closeTrade(trade.id, exitPrice, result.exitReason, totalFees);
       _lastDecisionPersistLoop.delete(trade.id); // Trade closed; clear heartbeat tracker
 
       // Analyze for signal scoring
+      const { pnlGross, pnlNet } = calculateRealizedPnl(
+        trade.side,
+        trade.entryPrice,
+        exitPrice,
+        trade.quantity,
+        totalFees,
+      );
       const closedTrade = {
         ...trade,
-        exitPrice: result.exitPrice,
+        exitPrice,
         exitTime: Date.now(),
         exitReason: result.exitReason,
-        pnlGross: (result.exitPrice - trade.entryPrice) * trade.quantity,
-        pnlNet: (result.exitPrice - trade.entryPrice) * trade.quantity - totalFees,
+        pnlGross,
+        pnlNet,
         feesPaid: totalFees,
         holdDurationMs: Date.now() - trade.entryTime,
         status: 'closed' as const,
@@ -566,16 +579,13 @@ async function checkOpenExits(): Promise<void> {
       // Use a sign-correct realized PnL (closedTrade.pnlNet above omits the short-side
       // multiplier, so it would misclassify short wins as losses).
       try {
-        const realizedPnl = (result.exitPrice - trade.entryPrice) * trade.quantity
-          * (trade.side === 'long' ? 1 : -1) - totalFees;
-        resolveGatekeeperByEntry(trade.ticker, trade.entryTime, realizedPnl > 0 ? 'WIN' : 'LOSS');
+        resolveGatekeeperByEntry(trade.ticker, trade.entryTime, pnlNet > 0 ? 'WIN' : 'LOSS');
       } catch (e) {
         console.warn(`[V2] gatekeeper resolve failed for ${trade.ticker}: ${(e as Error).message}`);
       }
 
-      const pnlNet = closedTrade.pnlNet;
-      console.log(`[V2] Trade closed: ${trade.ticker} @ $${result.exitPrice.toFixed(2)} reason=${result.exitReason} PnL=$${pnlNet.toFixed(2)}`);
-      await sendExitAlert(trade, result.exitPrice, result.exitReason, pnlNet);
+      console.log(`[V2] Trade closed: ${trade.ticker} @ $${exitPrice.toFixed(2)} reason=${result.exitReason} PnL=$${pnlNet.toFixed(2)}`);
+      await sendExitAlert(trade, exitPrice, result.exitReason, pnlNet);
     }
   } catch (e) {
     console.error(`[V2] Exit check error: ${(e as Error).message}`);

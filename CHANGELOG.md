@@ -47,6 +47,26 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-09-04 15:15 UTC — Canadian paper-trading hardening and evidence-based regime gate — local-claude
+
+**Commits:** this branch
+**Files changed:** `v2/engine/config.ts`, `v2/engine/tradeAccounting.ts`, `v2/engine/tradeEngine.ts`, `v2/pipeline/executor.ts`, `v2/pipeline/exitManager.ts`, `v2/attribution/attributionStore.ts`, `ecosystem.config.cjs`, `.env.example`, tests
+**Stats baseline reset:** no deployment in this change — reset is required if/when this trading configuration is deployed
+
+**What changed:**
+The executable universe now uses the ten approved Canadian Kraken USD bases. The main entry gate is restricted to `STRONG_UP`; unsupported FIL/ICP pairs trading, the unvalidated dynamic-listing sniper, and mean reversion remain off. Paper entries and exits now include 5 bps adverse slippage per side, stop gaps fill at the worse observed price, live exits use the exchange-reported fill/fee, and all downstream PnL is sign-correct for shorts.
+
+**Why:**
+A fresh pessimistic 90-day replay (2026-06-06 through 2026-09-04, 132 trades, 0.52% taker fees) lost **$80.02**, PF **0.72**. `UP` lost **$105.33** while `STRONG_UP` made **$25.31**. Two non-overlapping 45-day checks supported the regime distinction: `UP` lost **$65.53** then **$22.71**; `STRONG_UP` returned **-$2.60** then **+$13.91**. This is a loss-avoidance gate, not proof of future profitability.
+
+**What to monitor / watch for:**
+- Paper trades must be limited to the approved USD universe and `STRONG_UP` entries.
+- Re-run fee-aware, pessimistic validation before any live-mode discussion; require positive OOS expectancy and PF > 1 after slippage.
+- Compare paper fills to contemporaneous Kraken quotes; sustained realized slippage above 5 bps invalidates the current assumption.
+- If deployed, set a new `stats_baseline_time`; rollback by reverting this branch commit.
+
+---
+
 ## 2026-07-29 — Cleanup follow-ups: stale comments, dead deploy paths, /api 404 masking (NO trading change) — local-claude
 
 **Commits:** squash `c1241b5` (PR #2)
