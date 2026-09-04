@@ -37,9 +37,12 @@ async function fetchCandles(ticker: string): Promise<Candle[] | null> {
 const BEARISH_CONFIG = {
   // How often to run bearish evaluation (separate from V2's 30s loop)
   EVAL_INTERVAL_MS: 60_000,        // 1 minute — shorts need timely evaluation
-  SHORT_ENABLED: true,
-  STAKING_ENABLED: true,
-  ARB_ENABLED: true,
+  // Disabled until each service has its own validated edge and an explicit
+  // live interlock. Staking can call a real exchange API and must never start
+  // implicitly when the day-trading engine is in paper mode.
+  SHORT_ENABLED: false,
+  STAKING_ENABLED: false,
+  ARB_ENABLED: false,
   DCA_FEAR_ENABLED: true,
 
   // Extreme Fear DCA
