@@ -47,6 +47,28 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-09-04 15:12 UTC — Canadian primary paper-trading safeguards — local-claude
+
+**Commits:** `e2d90a7`
+**Files changed:** `v2/engine/config.ts`, `v2/index.ts`, `v2/pipeline/executor.ts`, `v2/pipeline/exitManager.ts`, focused tests
+**Stats baseline reset:** **no (not deployed)** — a fresh baseline is required before evaluating the new Canadian-universe cohort after deployment.
+
+**What changed:**
+
+The primary V2 scan universe now uses only the repository's stated Canadian USD spot tickers. Shadow mode is signal-only and can no longer create simulated trades. Paper entries use the executable book side (bid for longs, ask for shorts), and paper exits are valued at executable quotes rather than a historical candle close or an idealized stop price.
+
+Paper runs now start only the primary V2 strategy. The separate mean-reversion, sniper, bearish, and FIL/ICP pairs engines are excluded because they either use independent simulation models or are outside the configured Canadian universe. They require their own compliant, quote-aware validation before inclusion.
+
+**Why:**
+
+The prior implementation mixed shadow data with paper fills and modeled fills at prices that may not be executable, making reported paper P&L optimistic. The prior primary and pairs universes also contained tickers outside the repository's Canadian compliance constraint. This change reduces apparent performance but makes the remaining paper-trading data suitable for a more honest out-of-sample evaluation.
+
+**What to monitor / watch for:**
+- Keep `V2_MODE=paper`; confirm `/api/v2/status` reports `paper` and only primary V2 trade records accumulate.
+- Require a meaningful out-of-sample sample with net P&L after all fees before considering any live-mode configuration. Do not infer profitability from backtests or a short paper run.
+- Set `stats_baseline_time` immediately after deployment, before comparing this cohort to historical altcoin/shadow records.
+- **Rollback:** `git revert e2d90a7`.
+
 ## 2026-07-29 — Cleanup follow-ups: stale comments, dead deploy paths, /api 404 masking (NO trading change) — local-claude
 
 **Commits:** squash `c1241b5` (PR #2)
