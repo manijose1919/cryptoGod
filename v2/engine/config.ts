@@ -30,10 +30,11 @@ export const V2_CONFIG = {
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // 2026-06-27: UP restored. ADX gate (now 20) handles trend-strength filtering. STRONG_UP-only was too strict — 1 trade in 9 days. Fee-aware floor protects against sub-fee wins.
-  // 2026-07-21: UP+1h is a proven loser all-time (n=25, 40% WR, -$1.05/trade).
-  // STRONG_UP+1h works (60% WR, +$0.45/trade). Restrict UP to 4h only.
-  REGIME_TIMEFRAME_RESTRICT: { 'UP': ['4h'] } as Record<string, string[]>,
+  // 2026-09-04 Canadian-universe backtest: UP lost $105.33 across 85 trades,
+  // while STRONG_UP gained $25.31 across 47. Paper-test STRONG_UP only before
+  // considering any live configuration; this reduces opportunity frequency.
+  ALLOWED_REGIMES: ['STRONG_UP'] as const,
+  REGIME_TIMEFRAME_RESTRICT: {} as Record<string, string[]>,
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
