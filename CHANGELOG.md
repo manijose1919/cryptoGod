@@ -50,7 +50,7 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 ## 2026-09-04 15:15 UTC — Canadian paper-trading hardening and evidence-based regime gate — local-claude
 
 **Commits:** this branch
-**Files changed:** `v2/engine/config.ts`, `v2/engine/bearishServices.ts`, `v2/engine/tradeAccounting.ts`, `v2/engine/tradeMode.ts`, `v2/engine/tradeEngine.ts`, `v2/pipeline/executor.ts`, `v2/pipeline/exitManager.ts`, `v2/attribution/attributionStore.ts`, `v2/backtest/backtestEngine.ts`, `v2/backtest/backtestExecution.ts`, `v2/backtest/types.ts`, `scripts/backtest-v2.ts`, `ecosystem.config.cjs`, `.env.example`, `docs/ARCHITECTURE.md`, `package.json`, `package-lock.json`, tests
+**Files changed:** `serverV2.ts`, `v2/engine/config.ts`, `v2/engine/bearishServices.ts`, `v2/engine/tradeAccounting.ts`, `v2/engine/tradeMode.ts`, `v2/engine/tradeEngine.ts`, `v2/pipeline/executor.ts`, `v2/pipeline/exitManager.ts`, `v2/attribution/attributionStore.ts`, `v2/backtest/backtestEngine.ts`, `v2/backtest/backtestExecution.ts`, `v2/backtest/types.ts`, `scripts/backtest-v2.ts`, `ecosystem.config.cjs`, `.env.example`, `docs/ARCHITECTURE.md`, `package.json`, `package-lock.json`, tests
 **Stats baseline reset:** no deployment in this change — reset is required if/when this trading configuration is deployed
 
 **What changed:**
@@ -58,14 +58,15 @@ The executable universe now uses the ten approved Canadian Kraken USD bases. The
 
 Main-engine live mode now requires both `V2_MODE=live` and `V2_LIVE_CONFIRMED=yes`; an unconfirmed live request downgrades to paper. The V2 replay now fills signals at the next candle's open and applies adverse slippage on both sides instead of buying at the signal candle's already-known close. The ML gatekeeper and its random A/B bypass are disabled because the training path stores exit-time features and does not provide valid temporal OOS evidence.
 
-Missing lint dependencies were restored, and patched direct/transitive dependency releases reduce the production audit from eight high-severity advisories to three moderate Express 4 advisories; clearing those remaining advisories requires a separately tested Express 5 migration.
+The runtime flag mutation endpoint now uses the existing admin-auth middleware; remote callers cannot change persisted feature flags without `ADMIN_API_KEY`. Missing lint dependencies were restored, and patched direct/transitive dependency releases reduce the production audit from eight high-severity advisories to three moderate Express 4 advisories; clearing those remaining advisories requires a separately tested Express 5 migration.
 
 **Why:**
-The initial pessimistic 90-day replay (2026-06-06 through 2026-09-04, 132 trades, 0.52% taker fees) lost **$80.02**, PF **0.72**. `UP` lost **$105.33** while `STRONG_UP` made **$25.31**. Two non-overlapping 45-day checks supported the regime distinction: `UP` lost **$65.53** then **$22.71**; `STRONG_UP` returned **-$2.60** then **+$13.91**. These figures came from the old same-bar entry model and must be superseded by the corrected replay before deployment. This is a loss-avoidance gate, not proof of future profitability.
+The initial same-bar replay showed `UP` as the dominant losing regime, motivating its removal, but its dollar figures were not causal. The corrected next-bar-open replay of `STRONG_UP` only is approximately break-even over 90 days: **47 trades, -$3.63, PF 0.96**. Non-overlapping halves are **-$22.47 / PF 0.46** (17 trades) and **+$7.47 / PF 1.23** (19 trades). This does not establish a durable profitable edge; the engine remains paper-only to gather a forward sample.
 
 **What to monitor / watch for:**
 - Paper trades must be limited to the approved USD universe and `STRONG_UP` entries.
 - Re-run fee-aware, pessimistic validation before any live-mode discussion; require positive OOS expectancy and PF > 1 after slippage.
+- Do not set `V2_LIVE_CONFIRMED=yes` until forward paper results meet a pre-registered promotion rule.
 - Compare paper fills to contemporaneous Kraken quotes; sustained realized slippage above 5 bps invalidates the current assumption.
 - If deployed, set a new `stats_baseline_time`; rollback by reverting this branch commit.
 

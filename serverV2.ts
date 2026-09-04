@@ -22,6 +22,7 @@ import { initTelegram, isEnabled as telegramEnabled, alertCircuitBreaker } from 
 
 // --- 3. Fear & Greed Gate + Data Sources ---
 import { initFearGreedGate, getFearGreedStatus } from './services/fearGreedGate.js';
+import { requireAdminAuth } from './middleware/adminAuth.js';
 
 let derivativesIntel: any = null;
 let whaleFlowTracker: any = null;
@@ -83,7 +84,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/v2', v2Router);
 
 // --- Config endpoint (runtime flag changes) ---
-app.post('/api/config/flag', async (req, res) => {
+app.post('/api/config/flag', requireAdminAuth, async (req, res) => {
   try {
     const { key, value } = req.body;
     if (!key) return res.status(400).json({ error: 'key required' });

@@ -5,7 +5,7 @@
 // implements exit simulation on OHLC bars
 // ============================================
 
-import type { Candle, SignalSnapshot, Regime } from '../pipeline/types.ts';
+import type { Candle } from '../pipeline/types.ts';
 import { EXIT_REASON } from '../pipeline/types.ts';
 import { V2_CONFIG, MOMENTUM_CONFIG } from '../engine/config.ts';
 import { computeSignals } from '../indicators/indicators.ts';
