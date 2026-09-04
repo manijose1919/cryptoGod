@@ -4,7 +4,7 @@
 // ============================================
 
 import type { ExchangeAdapter, OrderResult } from './types.ts';
-import { V2_CONFIG } from '../engine/config.ts';
+import { getExchangeFees } from '../engine/config.ts';
 
 // --- Lazy-loaded references ---
 
@@ -74,7 +74,7 @@ export const krakenV2: ExchangeAdapter = {
   async placeMakerBuy(ticker: string, price: number, quantity: number): Promise<OrderResult> {
     const adapter = getAdapter();
     const result = await adapter.placePostOnlyBuy(ticker, price, quantity, 'v2');
-    const fee = price * quantity * V2_CONFIG.FEE_MAKER_PERCENT;
+    const fee = price * quantity * getExchangeFees('kraken').MAKER_PERCENT;
     return {
       orderId: result.orderId || '',
       ticker,
@@ -90,7 +90,7 @@ export const krakenV2: ExchangeAdapter = {
   async placeMakerSell(ticker: string, price: number, quantity: number): Promise<OrderResult> {
     const adapter = getAdapter();
     const result = await adapter.placePostOnlySell(ticker, price, quantity, 'v2');
-    const fee = price * quantity * V2_CONFIG.FEE_MAKER_PERCENT;
+    const fee = price * quantity * getExchangeFees('kraken').MAKER_PERCENT;
     return {
       orderId: result.orderId || '',
       ticker,
@@ -107,7 +107,7 @@ export const krakenV2: ExchangeAdapter = {
     const adapter = getAdapter();
     const result = await adapter.placeSellOrder(ticker, quantity, 'v2', null);
     const avgPrice = result.avgPrice || result.filledPrice || 0;
-    const fee = avgPrice * (result.filledQuantity ?? quantity) * V2_CONFIG.FEE_TAKER_PERCENT;
+    const fee = avgPrice * (result.filledQuantity ?? quantity) * getExchangeFees('kraken').TAKER_PERCENT;
     return {
       orderId: result.orderId || '',
       ticker,

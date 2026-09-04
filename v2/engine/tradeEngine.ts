@@ -5,6 +5,8 @@
 
 import type { Candle, V2Trade } from '../pipeline/types.ts';
 import { V2_CONFIG, STRATEGY_TIMEFRAMES, getExchangeFees } from './config.ts';
+import { setKrakenVolume30d, getKrakenFeeState } from './feeTier.ts';
+import type { KrakenFeeState } from './feeTier.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 
 // Pipeline imports
@@ -26,6 +28,7 @@ import {
   getOpenTradesByStrategy,
   getClosedTradesByStrategy,
   appendTradeDecision,
+  getKrakenNotionalSince,
 } from '../attribution/attributionStore.ts';
 import { analyzeClosedTrade } from '../attribution/postTradeAnalyzer.ts';
 
@@ -78,6 +81,58 @@ export interface V2EngineStatus {
   totalTrades: number;
   portfolioCash: number;
   totalPnlNet: number;
+  /** Tier-resolved Kraken fee schedule the engine is currently trading under. */
+  fees?: {
+    exchange: string;
+    tier: number;
+    source: KrakenFeeState['source'];
+    volume30dUsd: number;
+    aopUsd: number;
+    makerPercent: number;
+    takerPercent: number;
+    roundTripRealPercent: number;
+  };
+}
+
+// --- Fee tier refresh ---
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Re-resolve the Kraken fee tier from the trailing 30-day traded notional.
+ * Called once per loop so a tier change takes effect on the next decision,
+ * not at the next restart. Logs on change only.
+ */
+function refreshKrakenFeeTier(): void {
+  if (!exchange || exchange.getName().toLowerCase() !== 'kraken') return;
+  const before = getKrakenFeeState().tier;
+  let notional = 0;
+  try {
+    notional = getKrakenNotionalSince(Date.now() - THIRTY_DAYS_MS);
+  } catch (e) {
+    console.warn(`[V2] fee-tier volume query failed (${(e as Error).message}) — keeping tier ${before}`);
+    return;
+  }
+  const after = setKrakenVolume30d(notional);
+  if (after.tier !== before || stats.loopCount === 1) {
+    console.log(
+      `[V2] Kraken fee tier ${after.tier} (${after.source}): 30d volume $${after.volume30dUsd.toFixed(0)}, AoP $${after.aopUsd.toFixed(0)} → maker ${(after.fees.MAKER_PERCENT * 100).toFixed(2)}% / taker ${(after.fees.TAKER_PERCENT * 100).toFixed(2)}% (RT real ${(after.fees.ROUND_TRIP_REAL * 100).toFixed(2)}%)`,
+    );
+  }
+}
+
+function feeStatus(): V2EngineStatus['fees'] {
+  const s = getKrakenFeeState();
+  return {
+    exchange: exchange?.getName() ?? 'kraken',
+    tier: s.tier,
+    source: s.source,
+    volume30dUsd: s.volume30dUsd,
+    aopUsd: s.aopUsd,
+    makerPercent: s.fees.MAKER_PERCENT * 100,
+    takerPercent: s.fees.TAKER_PERCENT * 100,
+    roundTripRealPercent: s.fees.ROUND_TRIP_REAL * 100,
+  };
 }
 
 // --- Telegram Helper ---
@@ -192,6 +247,7 @@ export function getV2Status(): V2EngineStatus {
     totalPnlNet,
     lastScanReasons: stats.lastScanReasons,
     candleCounts: stats.candleCounts,
+    fees: feeStatus(),
   };
 }
 
@@ -211,6 +267,9 @@ async function runLoop(): Promise<void> {
   stats.loopCount++;
 
   try {
+    // Fee tier first — riskGate, executor and exitManager all read it this loop.
+    refreshKrakenFeeTier();
+
     // ==============================
     // Stage 0: Fetch candles (multi-timeframe)
     // ==============================

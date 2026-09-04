@@ -29,6 +29,11 @@ export interface MonitorSummary {
     regimes: Record<string, string>;       // per-ticker, so the page can show the spread
   };
   account: { balance: number; openPositionsCount: number };
+  /** Tier-resolved fee schedule in effect — null if the engine didn't report one. */
+  fees: {
+    exchange: string; tier: number; source: string;
+    volume30dUsd: number; makerPercent: number; takerPercent: number; roundTripRealPercent: number;
+  } | null;
   cohort: {
     baselineTs: number;
     baselineMissing: boolean;
@@ -124,6 +129,13 @@ export function buildMonitorSummary(deps: MonitorDeps): MonitorSummary {
       regimes,
     },
     account: { balance: status.portfolioCash ?? 0, openPositionsCount: openTrades.length },
+    fees: status.fees
+      ? {
+        exchange: status.fees.exchange, tier: status.fees.tier, source: status.fees.source,
+        volume30dUsd: status.fees.volume30dUsd, makerPercent: status.fees.makerPercent,
+        takerPercent: status.fees.takerPercent, roundTripRealPercent: status.fees.roundTripRealPercent,
+      }
+      : null,
     cohort: {
       baselineTs, baselineMissing, winRate, netPnl, tradeCount, avgR,
     },

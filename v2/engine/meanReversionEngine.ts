@@ -1,5 +1,5 @@
 import type { Candle, V2Trade } from '../pipeline/types.ts';
-import { MR_CONFIG } from './config.ts';
+import { MR_CONFIG, getExchangeFees } from './config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 import { detectMeanReversionEntry } from '../pipeline/meanReversionSignal.ts';
 import type { MRSignalResult } from '../pipeline/meanReversionSignal.ts';
@@ -27,6 +27,14 @@ const stats = {
 };
 // Per-candle entry guard — see breakoutEngine.ts for context (dup-row bug 2026-05-25).
 const lastTradedCandleTime = new Map<string, number>();
+
+// 2026-09-04: was the fixed MR_CONFIG.FEE_ROUND_TRIP (0.32%, maker both sides).
+// No maker-exit path exists anywhere in the engine, and Kraken's tier schedule
+// changed 2026-07-09, so MR now pays the same tier-resolved maker-in/taker-out
+// cost as TREND. Resolved at call time — never cache.
+function mrFeeRoundTrip(): number {
+  return getExchangeFees(exchange?.getName() ?? 'kraken').ROUND_TRIP_REAL;
+}
 
 async function fetchCandles(ticker: string): Promise<Candle[] | null> {
   try {
@@ -63,7 +71,7 @@ async function runMRLoop(): Promise<void> {
         const pnlGross = isShortTrade
           ? (t.entryPrice - result.exitPrice) * t.quantity
           : (result.exitPrice - t.entryPrice) * t.quantity;
-        const fees = t.positionSizeUsd * MR_CONFIG.FEE_ROUND_TRIP;
+        const fees = t.positionSizeUsd * mrFeeRoundTrip();
         const pnlNet = pnlGross - fees;
 
         closeTrade(t.id, result.exitPrice, result.exitReason as any ?? 'unknown', fees);
@@ -119,7 +127,7 @@ async function runMRLoop(): Promise<void> {
       const tpPercent = side === 'short'
         ? (price0 - ema0) / price0   // short: ema is below price, we profit as price falls to ema
         : (ema0 - price0) / price0;  // long:  ema is above price, we profit as price rises to ema
-      const expectedReturn = tpPercent - MR_CONFIG.FEE_ROUND_TRIP;
+      const expectedReturn = tpPercent - mrFeeRoundTrip();
       if (expectedReturn < 0.001) continue;
 
       const price = price0;
@@ -145,7 +153,7 @@ async function runMRLoop(): Promise<void> {
         exitReason: null,
         pnlGross: null,
         pnlNet: null,
-        feesPaid: posSize * MR_CONFIG.FEE_ROUND_TRIP / 2,
+        feesPaid: posSize * mrFeeRoundTrip() / 2,
         holdDurationMs: null,
         initialStop: sl,
         currentStop: sl,

@@ -457,6 +457,25 @@ export function getClosedTradesSince(sinceMs: number, strategy?: string): V2Trad
   return rows.map(rowToTrade);
 }
 
+/**
+ * Traded notional on Kraken in the trailing window: every entry (position
+ * size) plus every exit (exit price × qty) that happened after `sinceMs`.
+ * This is what Kraken's 30-day spot volume tier counts. Crypto.com sniper
+ * trades are excluded — they never touch the Kraken account.
+ */
+export function getKrakenNotionalSince(sinceMs: number): number {
+  const row = getDb().prepare(`
+    SELECT
+      COALESCE(SUM(CASE WHEN entry_time >= @sinceMs THEN position_size_usd ELSE 0 END), 0)
+      + COALESCE(SUM(CASE WHEN exit_time >= @sinceMs AND exit_price IS NOT NULL THEN exit_price * quantity ELSE 0 END), 0)
+      AS notional
+    FROM v2_trades
+    WHERE strategy != 'SNIPER_CRYPTOCOM'
+      AND (entry_time >= @sinceMs OR exit_time >= @sinceMs)
+  `).get({ sinceMs }) as { notional: number };
+  return row.notional;
+}
+
 let _recentClosedByTickerStmt: ReturnType<ReturnType<typeof getDb>['prepare']> | null = null;
 export function getRecentClosedByTicker(ticker: string, strategy: string, sinceMs: number): V2Trade[] {
   if (!_recentClosedByTickerStmt) {

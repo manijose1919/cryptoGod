@@ -91,6 +91,16 @@ function tiles(s) {
     ['Open (all)', String(s.account.openPositionsCount), ''],
     ['Avg R (TREND)', c.avgR==null?'—':fmtNum(c.avgR), c.avgR==null?'':cls(c.avgR)],
   ];
+  // Kraken tier the engine is pricing fees at. Round-trip is maker in + taker
+  // out — the cost every entry must clear before it is a win.
+  const f = s.fees;
+  if (f) {
+    rows.push([
+      'Fees (' + esc(f.exchange) + ' T' + f.tier + ')',
+      f.makerPercent.toFixed(2) + '/' + f.takerPercent.toFixed(2) + '% · RT ' + f.roundTripRealPercent.toFixed(2) + '%',
+      '',
+    ]);
+  }
   document.getElementById('tiles').innerHTML = rows.map(([k,v,cl]) =>
     `<div class="tile"><div class="k">${k}</div><div class="v ${cl}">${v}</div></div>`).join('');
 }

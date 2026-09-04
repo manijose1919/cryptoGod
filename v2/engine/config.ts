@@ -4,6 +4,8 @@
 // ============================================
 
 import type { V2Mode } from '../pipeline/types.ts';
+import { getKrakenFees, feesForTier } from './feeTier.ts';
+import type { FeeTable } from './feeTier.ts';
 
 export const V2_CONFIG = {
   // --- Mode ---
@@ -47,16 +49,33 @@ export const V2_CONFIG = {
   MIN_CANDLES: 50,
 
   // --- Fees (Kraken) ---
+  // STALE — pre-2026-07-09 schedule, kept only so legacy read-sites compile.
+  // Every live read-site now goes through getExchangeFees(exchangeName), which
+  // resolves the Kraken tier dynamically (v2/engine/feeTier.ts). Do not add
+  // new references to these four constants.
   FEE_TAKER_PERCENT: 0.0026,
   FEE_MAKER_PERCENT: 0.0016,
   FEE_ROUND_TRIP_MAKER: 0.0032,
   FEE_ROUND_TRIP_TAKER: 0.0052,
 
   // Fee-aware trailing-activation floor: trail may not arm until unrealized
-  // profit >= this multiple of round-trip taker fee (3 × 0.52% = 1.56%).
-  // Both fixed values failed live: 2.5% armed too late (20 SLs), 1% armed
-  // too early (trailing wins +$1.55 < $1.90 fee floor). Fee multiple self-scales.
+  // profit >= this multiple of the REAL round-trip fee (maker in + taker out,
+  // the way the executor actually trades). Both fixed values failed live:
+  // 2.5% armed too late (20 SLs), 1% armed too early (trailing wins +$1.55 <
+  // $1.90 fee floor). Fee multiple self-scales with the resolved Kraken tier.
+  // 2026-09-04: was 3 × ROUND_TRIP_TAKER (0.52% → 1.56%). Switched to
+  // ROUND_TRIP_REAL because exits are taker but entries are maker; at Tier 3
+  // that is 3 × 0.60% = 1.80% (Tier 1: 3.60%).
   TRAIL_ACTIVATE_FEE_FLOOR_MULT: 3.0,
+
+  // --- Paper-fill realism (shadow/paper only) ---
+  // Per-side adverse price move applied to every simulated fill, in basis
+  // points. 5 bps ≈ half the typical Kraken spread on the mid-cap USD pairs in
+  // SCAN_TICKERS. Entry fills are still charged the maker fee (post-only), but
+  // the slippage stands in for the adverse selection of resting at the bid —
+  // the fills you get are the ones where price came down to you. Live mode
+  // ignores this; real fills carry their own slippage.
+  PAPER_SLIPPAGE_BPS: Number(process.env.PAPER_SLIPPAGE_BPS ?? 5),
 
   // --- Position Sizing ---
   MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
@@ -85,7 +104,7 @@ export const V2_CONFIG = {
   SHORTS_ENABLED: false,                 // 2026-07-14: disabled. All-time timeframed shorts −$54.45/37 trades, negative on EVERY timeframe (1h −$15.72/11, 30m −$18.33/5, 4h −$20.40/21); post-baseline 4h shorts −$17.99/4 @ 25% WR. No profitable sub-segment with n≥10. Rollback: set true (SHORT_TIMEFRAMES/SHORT_ALLOWED_REGIMES below retained for that case). Review: docs/reviews/2026-07-14-sprint-review.md
   SHORT_TIMEFRAMES: ['4h'] as readonly string[],  // 2026-06-30: shorts restricted to 4h. Backtest: 1h shorts 36% WR/-$15.72, 30m shorts 40% WR/-$18.33; 4h shorts 76% WR. Dropping 1h/30m shorts added +$34 net & best sharpe over 522 trades. Lower-conviction (16-trade sample) — revisit.
   SHORT_ALLOWED_REGIMES: ['STRONG_DOWN'] as readonly string[],  // 2026-06-30: dropped DOWN. Edge diagnosis (75 trades): STRONG_DOWN shorts 74% WR/+$36; DOWN shorts 65% WR/−$42. Shorts only work in strong downtrends; plain DOWN is chop-prone. Rollback: re-add 'DOWN'.
-  SHORT_FEE_ROUND_TRIP: 0.0052,          // taker both sides for shorts on Kraken
+  SHORT_FEE_ROUND_TRIP: 0.0052,          // STALE (2026-09-04) — riskGate uses getExchangeFees().ROUND_TRIP_TAKER for shorts (taker both sides)
   SHORT_STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-06: matched to long SL. ZEC short lost -$39.53 at 2.0x ATR (9% stop). At 1.5x would be ~-$28.
   SHORT_TAKE_PROFIT_ATR_MULT: 3.5,
   SHORT_TRAILING_ACTIVATE_PERCENT: 0.01,
@@ -435,7 +454,7 @@ export const MR_CONFIG = {
   QUICK_KILL_SL_ATR_MULT: 0.8,
 
   USE_MAKER_ORDERS: true,
-  FEE_ROUND_TRIP: 0.0032,        // Maker both sides → 0.32% RT vs TREND's 0.42%
+  FEE_ROUND_TRIP: 0.0032,        // STALE (2026-09-04) — meanReversionEngine now uses getExchangeFees().ROUND_TRIP_REAL; no read-sites remain
 
   BOT_LOOP_INTERVAL_MS: 60_000,
   LOOP_OFFSET_MS: 30_000,        // 30s stagger from TREND loop
@@ -447,14 +466,14 @@ export const MR_CONFIG = {
 // USE_MAKER_ORDERS=true: entries fill as maker, but every exit goes through
 // placeMarketSell (taker) per tradeEngine.ts:541-548. Use this for any
 // gating logic that's deciding whether expected-return covers actual fees.
-export const EXCHANGE_FEES = {
-  kraken: {
-    TAKER_PERCENT: 0.0026,
-    MAKER_PERCENT: 0.0016,
-    ROUND_TRIP_TAKER: 0.0052,
-    ROUND_TRIP_MAKER: 0.0032,
-    ROUND_TRIP_REAL: 0.0042, // 0.16% maker entry + 0.26% taker exit
-  },
+//
+// 2026-09-04: Kraken moved to a cross-platform tier schedule on 2026-07-09.
+// Tier 1 (fresh account) is 0.40% maker / 0.80% taker — not the 0.16/0.26 this
+// table carried for four months. `EXCHANGE_FEES.kraken` is now the Tier 1
+// baseline; the LIVE table comes from getExchangeFees('kraken'), which reads
+// the tier resolved in feeTier.ts from rolling 30-day notional + KRAKEN_AOP_USD.
+export const EXCHANGE_FEES: { kraken: FeeTable; 'crypto.com': FeeTable } = {
+  kraken: feesForTier(1),
   'crypto.com': {
     TAKER_PERCENT: 0.00075,
     MAKER_PERCENT: 0.00050,
@@ -462,17 +481,20 @@ export const EXCHANGE_FEES = {
     ROUND_TRIP_MAKER: 0.0010,
     ROUND_TRIP_REAL: 0.00125, // 0.05% maker entry + 0.075% taker exit
   },
-} as const;
+};
 
 /**
  * Look up the fee table for an exchange by name. Defaults to Kraken if the
  * name is unknown — callers should pass exchange.getName() so this never
  * silently picks the wrong table when running on Crypto.com.
+ *
+ * Kraken's table is tier-resolved at call time — never cache the result across
+ * loops.
  */
-export function getExchangeFees(exchangeName: string) {
+export function getExchangeFees(exchangeName: string): FeeTable {
   const key = exchangeName.toLowerCase();
   if (key === 'crypto.com' || key === 'cryptocom') return EXCHANGE_FEES['crypto.com'];
-  return EXCHANGE_FEES.kraken;
+  return getKrakenFees();
 }
 
 // --- Dual Exchange Competition Config ---

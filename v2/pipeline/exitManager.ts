@@ -14,10 +14,11 @@ import {
   PIPELINE_STAGE,
   DECISION,
 } from './types.ts';
-import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, timeframeToMs } from '../engine/config.ts';
+import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, timeframeToMs, getExchangeFees } from '../engine/config.ts';
 import type { StrategyExitConfig } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 import { updateTradeStop, markTrailingActivated, updateTradePeakPrice } from '../attribution/attributionStore.ts';
+import { applyPaperSlippage, paperStopFillPrice } from './paperFills.ts';
 
 // H3: ExitMutators allow callers to swap the persistence backend. The default
 // (DB-backed) writes through attributionStore. Dual-engine paper trades live
@@ -98,15 +99,20 @@ export async function checkExits(
     try {
     const currentPrice = await exchange.getLatestPrice(trade.ticker);
     const isShort = trade.side === 'short';
+    const side = isShort ? 'short' : 'long';
+    const isPaper = V2_CONFIG.MODE !== 'live';
+    // Paper exits at market (TP, time-kill) slip against us; live books the real fill.
+    const marketExitPrice = isPaper ? applyPaperSlippage(currentPrice, side, 'exit') : currentPrice;
 
     // Per-strategy exit config (falls back to TREND defaults)
     const exitCfg: StrategyExitConfig = STRATEGY_EXIT_CONFIGS[trade.strategy ?? 'TREND'] ?? STRATEGY_EXIT_CONFIGS.TREND;
     // Trailing activation floored at fee multiple so trail never arms on a move
     // too small to clear round-trip fees. This is the only read-site of
-    // trailActivatePercent — the floor applies engine-wide.
+    // trailActivatePercent — the floor applies engine-wide. Fee is the
+    // tier-resolved maker-in/taker-out cost (see TRAIL_ACTIVATE_FEE_FLOOR_MULT).
     const cfgTrailActivate = Math.max(
       exitCfg.trailActivatePercent,
-      V2_CONFIG.FEE_ROUND_TRIP_TAKER * V2_CONFIG.TRAIL_ACTIVATE_FEE_FLOOR_MULT,
+      getExchangeFees(exchange.getName()).ROUND_TRIP_REAL * V2_CONFIG.TRAIL_ACTIVATE_FEE_FLOOR_MULT,
     );
     const cfgTrailGiveback = exitCfg.trailGivebackPercent;
     const cfgUseTrailing = exitCfg.useTrailing;
@@ -156,8 +162,10 @@ export async function checkExits(
       const stopWasRaised = trade.trailingActivated || (isShort ? trade.currentStop < trade.initialStop : trade.currentStop > trade.initialStop);
       const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
       const reasonLabel = stopWasRaised ? 'Trailing/BE stop hit' : 'Stop loss hit';
-      // Paper mode: use stop price to avoid gap-through losses
-      const exitPrice = V2_CONFIG.MODE !== 'live' ? trade.currentStop : currentPrice;
+      // Paper: a stop-market fills at market once triggered, and the loop only
+      // looks every 60s — book the worse of stop/current, slipped. (Pre-2026-09-04
+      // this booked the exact stop price, i.e. no gap-through ever.)
+      const exitPrice = isPaper ? paperStopFillPrice(trade.currentStop, currentPrice, side) : currentPrice;
       results.push({
         trade,
         shouldExit: true,
@@ -184,7 +192,7 @@ export async function checkExits(
         trade,
         shouldExit: true,
         exitReason: EXIT_REASON.take_profit,
-        exitPrice: currentPrice,
+        exitPrice: marketExitPrice,
         newStop: trade.currentStop,
         trailingJustActivated: false,
         decision: makeDecision(trade.id, 'execute', `Take profit hit: ${currentPrice.toFixed(2)} >= ${trade.takeProfitTarget.toFixed(2)}`, {
@@ -334,7 +342,7 @@ export async function checkExits(
         ? currentPrice >= newStop
         : currentPrice <= newStop;
       if (trailHit) {
-        const trailExitPrice = V2_CONFIG.MODE !== 'live' ? newStop : currentPrice;
+        const trailExitPrice = isPaper ? paperStopFillPrice(newStop, currentPrice, side) : currentPrice;
         results.push({
           trade,
           shouldExit: true,
@@ -360,7 +368,7 @@ export async function checkExits(
         trade,
         shouldExit: true,
         exitReason: EXIT_REASON.time_kill,
-        exitPrice: currentPrice,
+        exitPrice: marketExitPrice,
         newStop,
         trailingJustActivated,
         decision: makeDecision(trade.id, 'execute', `Time kill: held ${(holdMs / 3600000).toFixed(1)}h > ${(cfgTimeKillMs / 3600000).toFixed(1)}h, move ${(pnlPercent * 100).toFixed(2)}% < ${(cfgTimeKillMinMove * 100).toFixed(1)}%`, {

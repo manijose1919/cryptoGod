@@ -205,9 +205,9 @@ export function evaluateRisk(
     const slMult = isShort ? V2_CONFIG.SHORT_STOP_LOSS_ATR_MULT : exitCfg.slAtrMult;
     const tpMult = isShort ? V2_CONFIG.SHORT_TAKE_PROFIT_ATR_MULT : exitCfg.tpAtrMult;
     const tpPercent = atrPercent * tpMult / 100;
-    // Shorts use taker fees both sides on Kraken
+    // Shorts use taker fees both sides on Kraken. Tier-resolved at call time.
     const feeRoundTrip = isShort
-      ? V2_CONFIG.SHORT_FEE_ROUND_TRIP ?? fees.ROUND_TRIP_TAKER
+      ? fees.ROUND_TRIP_TAKER
       : (V2_CONFIG.USE_MAKER_ORDERS ? fees.ROUND_TRIP_REAL : fees.ROUND_TRIP_TAKER);
 
     // Gate 5: Expected return must exceed minimum

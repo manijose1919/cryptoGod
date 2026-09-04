@@ -17,6 +17,7 @@ import {
 } from './types.ts';
 import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, getExchangeFees } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
+import { applyPaperSlippage } from './paperFills.ts';
 
 // --- Helpers ---
 
@@ -97,8 +98,10 @@ export async function executeTrade(
       const rejectDecision = makeReject(tradeId, `Cannot get price for ${signal.ticker}`);
       return { trade: null, decision: rejectDecision };
     }
-    const quantity = risk.positionSizeUsd / price;
     const isShort = risk.side === 'short';
+    // Adverse fill: paper used to enter at the exact candle close (see paperFills.ts).
+    price = applyPaperSlippage(price, isShort ? 'short' : 'long', 'entry');
+    const quantity = risk.positionSizeUsd / price;
     // Use per-strategy exit config for SL/TP (BREAKOUT uses tighter stops than TREND)
     const strategy = (signal as any)._strategy ?? 'TREND';
     const exitCfg = STRATEGY_EXIT_CONFIGS[strategy] ?? STRATEGY_EXIT_CONFIGS.TREND;
