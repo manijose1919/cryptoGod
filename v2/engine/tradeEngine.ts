@@ -241,6 +241,7 @@ async function runLoop(): Promise<void> {
     // Market scan on primary timeframe for diagnostics/logging
     const scanResults = scanMarket(tickerCandles);
     stats.lastScanReasons = scanResults.map(r => ({ ticker: r.ticker, reason: r.reason || (r.passed ? 'PASS' : 'UNKNOWN') }));
+    stats.rejectedByScan += scanResults.filter(r => !r.passed).length;
     // htfRegimes was declared and returned by getV2Status() but never written,
     // so every consumer read {} and reported regime UNKNOWN. Populate it here.
     stats.htfRegimes = Object.fromEntries(scanResults.map(r => [r.ticker, r.regime]));

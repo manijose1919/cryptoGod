@@ -168,7 +168,7 @@ async function runMRLoop(): Promise<void> {
       break; // one entry per loop to avoid overloading
     }
 
-    if (stats.loopCount % 10 === 0 || signalCount > 0) {
+    if (stats.loopCount <= 5 || stats.loopCount % 10 === 0 || signalCount > 0) {
       console.log(`[MR] Loop #${stats.loopCount}: ${signalCount} signals, ${rejectCount} rejected, ${currentMR.length} open, PnL=$${stats.totalPnl.toFixed(2)}`);
     }
   } catch (err: any) {
