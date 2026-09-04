@@ -29,7 +29,11 @@
 // ============================================
 
 export const TIME_GATE_CONFIG = {
-  ENABLED: true,
+  // TIME_GATE_ENABLED=false disables the gate for the process. Intended for
+  // paper sessions that need to observe entries on a blocked day/hour; never
+  // set it on the VPS — the 0-7 UTC and Friday blocks are the strongest
+  // out-of-sample edge this repo has found.
+  ENABLED: (process.env.TIME_GATE_ENABLED ?? 'true') !== 'false',
 
   // Hard-block hours (UTC) — consistently worst across both training + v2 data.
   // 2026-06-30 refresh (382 live TREND+MOMENTUM trades): the entire 0-7 UTC overnight
