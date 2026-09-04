@@ -22,6 +22,7 @@ import { initTelegram, isEnabled as telegramEnabled, alertCircuitBreaker } from 
 
 // --- 3. Fear & Greed Gate + Data Sources ---
 import { initFearGreedGate, getFearGreedStatus } from './services/fearGreedGate.js';
+// @ts-expect-error JS module without types
 import { requireAdminAuth } from './middleware/adminAuth.js';
 
 let derivativesIntel: any = null;
@@ -173,11 +174,12 @@ async function start() {
   // 8. Start HTTP server
   const server = createServer(app);
   server.listen(PORT, () => {
+    const effectiveMode = getV2Status().mode;
     console.log(`[V2-Server] Listening on port ${PORT}`);
-    console.log(`[V2-Server] Mode: ${process.env.V2_MODE || 'shadow'}`);
+    console.log(`[V2-Server] Mode: ${effectiveMode}`);
     console.log(`[V2-Server] Budget: $${budget}`);
     if (telegramEnabled()) {
-      alertCircuitBreaker(`Phoenix V2 slim server started (${process.env.V2_MODE || 'shadow'} mode, $${budget})`);
+      alertCircuitBreaker(`Phoenix V2 slim server started (${effectiveMode} mode, $${budget})`);
     }
   });
 
