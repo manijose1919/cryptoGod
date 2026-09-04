@@ -47,6 +47,29 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-09-04 — Canadian daytrader profitability fork (paper) — cursor-cloud
+
+**Commits:** (this branch)
+**Files changed:** `v2/engine/config.ts`, `v2/pipeline/breakoutSignal.ts`, `.env.example`, `CHANGELOG.md`, `package.json`
+**Stats baseline reset:** **yes on next paper/live cohort** — set `stats_baseline_time` when this config is the running book so mid-cap-era trades don't pollute CA-major stats.
+
+**What changed:**
+- `SCAN_TICKERS` → 10 Canadian-compliant liquid USD majors (BTC/ETH/SOL/XRP/LINK/AVAX/ADA/DOT/DOGE/BNB).
+- `MIN_ATR_PERCENT` 1.0→**2.0** (BREAKOUT aligned).
+- `MIN_EXPECTED_RETURN` 0.8%→**0.84%** (2× Kraken ROUND_TRIP_REAL).
+- Disabled `GATEKEEPER_AB_TEST`, `MOMENTUM`, `MR`, `SNIPER`; re-enabled `REENTRY_COOLDOWN_MS` = 4h.
+- Documented `V2_MODE` / `V2_BUDGET` / `PAIRS_MODE` in `.env.example`; default exchange hint → kraken.
+
+**Why:**
+Prior mid-cap book was fee-dominated on ATR&lt;2%, correlated droughts in DOWN, and MOMENTUM/MR/sniper diluted a thin TREND edge. Goal: fewer, fee-clearing trades on Kraken Canada USD pairs in paper mode.
+
+**What to monitor / watch for:**
+- Paper `/api/v2/status` scan reasons: expect more ATR rejects, fewer regime-all-DOWN droughts across the book.
+- Expectancy $/trade and WR since baseline; abort if PF&lt;1 after n≥30 closed TREND/BREAKOUT trades.
+- Rollback: restore prior `SCAN_TICKERS` + ATR 1.0 + MOMENTUM/MR flags from pre-fork commit.
+
+---
+
 ## 2026-07-29 — Cleanup follow-ups: stale comments, dead deploy paths, /api 404 masking (NO trading change) — local-claude
 
 **Commits:** squash `c1241b5` (PR #2)

@@ -10,28 +10,20 @@ export const V2_CONFIG = {
   MODE: (process.env.V2_MODE || 'shadow') as V2Mode,
 
   // --- Scan ---
+  // 2026-09-04 CA daytrader fork: Canadian-compliant liquid USD majors only
+  // (CANADIAN_ALLOWED_BASES). Prior mid-cap book (AKT/ZEC/FET/PENGU/TAO/PENDLE)
+  // was highly correlated — all gated out together in DOWN, and several failed
+  // the $500k volume floor. Majors stay tradeable on Kraken Canada and diversify
+  // sector/beta. ATR>=2% gate below skips fee-dominated quiet sessions.
   SCAN_TICKERS: [
-    // 2026-05-27: Concentrated on 6 top performers. $10K/6 = $1,667/ticker.
-    // PF 8.64, +$8,443 (84.4% in 90d), 180d +$13,486 (134.8%)
-    'AKTUSD',    // PF best, 93.3% WR, +$2,009
-    'ZECUSD',    // 92.4% WR, +$1,554
-    'FETUSD',    // 91.7% WR, +$1,402
-    'PENGUUSD',  // 90.9% WR, +$1,489
-    'TAOUSD',    // 89.5% WR, +$1,479
-    'PENDLEUSD', // 88.1% WR, +$511, PF 8.20
-    // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
-    //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
-    //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
-    //   COMPUSD: PF 1.20 alone (Compound DeFi) — third strongest, low-correlation to AKT/ZEC
-    // Combined (AKT+ZEC+COMP, single-strategy backtest, 4h, 90d): PF 1.62, +$151, +5.0%, max DD 2.3%
-    // Robustness: 30d PF 1.00 (break-even, yellow flag), 60d PF 1.33, 90d PF 1.62 — improves with longer window
-    // Removed: ETHUSD, XRPUSD, DOGEUSD, DOTUSD, ADAUSD (all PF<1 in current 90d regime under tuned config)
-    // Per-ticker (90d, Config A): ETH -4.2%, XRP losing, DOGE losing, DOT/ADA worst-2 (-$84/-$112)
-    // 2026-05-17: Added SOL ($9.4M vol), HYPE ($7M vol, +7.1% today), SUI ($5.6M vol), LINK ($2.3M vol)
-    //   — diversify out of 3 correlated mid-cap alts all stuck in DOWN regime. Higher vol + different sectors.
+    'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'LINKUSD',
+    'AVAXUSD', 'ADAUSD', 'DOTUSD', 'DOGEUSD', 'BNBUSD',
   ],
   MIN_VOLUME_24H_USD: 500_000,
-  MIN_ATR_PERCENT: 1.0,  // 2026-07-21: raised from 0.3. Data mining: ATR<1% = 27.3% WR (n=132), death zone. ATR 1-2% = 51.7% WR, 2-3% = 63.5%. Minimum 1% eliminates fee-dominated noise trades.
+  // 2026-09-04: 1.0→2.0. Cohort mining: ATR<1% = 27% WR; 1–2% ≈ breakeven after
+  // Kraken fees; profit concentrates in ATR 2–3% (+$77/90 @ 64% WR). Majors often
+  // sit below 2% — we sit out rather than pay 0.42% RT for noise.
+  MIN_ATR_PERCENT: 2.0,
   MAX_ATR_PERCENT: 8.0,  // Widened for 4h — normal BTC 4h ATR% is 1-4%
   MAX_SPREAD_PERCENT: 0.15,
 
@@ -59,19 +51,25 @@ export const V2_CONFIG = {
   TRAIL_ACTIVATE_FEE_FLOOR_MULT: 3.0,
 
   // --- Position Sizing ---
-  MIN_EXPECTED_RETURN: 0.008,    // 0.8% — was 0.5%, too close to fees; need meaningful edge above 0.52% round-trip
+  // 2026-09-04: 0.8%→0.84% (= 2× Kraken ROUND_TRIP_REAL 0.42%). Forces expected
+  // net edge ≥ one full fee round-trip after clearing fees — stops near-fee scrapes.
+  MIN_EXPECTED_RETURN: 0.0084,
   BASE_POSITION_PERCENT: 0.40,  // 2026-05-18: 0.25→0.40. Backtest: PF 3.84→6.63, +$414→+$888 on $6K. Safe — max DD stays 0.2%.
   MAX_RISK_PER_TRADE_PERCENT: 0.015, // 2026-06-06: 0.03→0.015. Live: high-ATR trades (FET 4.5%, ZEC 3%) got $400+ positions with $40 max loss. Caps high-ATR smaller while low-ATR unaffected.
   MAX_RISK_PER_TRADE_USD: 12,    // 2026-06-30: hard $ cap layered ON TOP of the % cap. The % cap is a CEILING that floated to $38 on high-ATR names (522-trade backtest). Capping at $12 cut worst loss -$40→-$15, eliminated all 9 tail losses (>$15), -14% volatility, while net rose +$91→+$105 (combined w/ short filter). Effective risk = min(equity×1.5%, $12). NOTE: scales as an absolute $; revisit upward as the account grows.
 
   MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
-  GATEKEEPER_AB_TEST: true,      // 2026-06-30: forward A/B to settle whether the ML gatekeeper (blocks 92%, approvals win 48% = baseline) adds value. Block-RECALL is unmeasurable retroactively, so we measure it forward: on a fraction of loops, bypass the gatekeeper and let approved signals through, shadow-logging the would-be decision. Compare PROCEED (approved) vs PROCEED_AB (would-block-but-forced) win rates. Paper mode = no $ risk; $12 cap + MAX_OPEN_POSITIONS=3 bound exposure. Disable by setting false once enough PROCEED_AB samples (~30) accrue.
-  GATEKEEPER_AB_OFF_RATE: 0.5,   // fraction of loops where the gatekeeper is bypassed (OFF arm)
+  // 2026-09-04: A/B OFF — forcing 50% of would-be blocks through increases bad-trade
+  // exposure. Re-enable only as a deliberate experiment with a fresh baseline.
+  GATEKEEPER_AB_TEST: false,
+  GATEKEEPER_AB_OFF_RATE: 0.0,
   SIZE_BY_CONFIDENCE: false,     // 2026-06-30: was true. Confidence proven NON-predictive (out-of-sample AUC 0.44 — slightly INVERSE; 3 analyses: calibration, feature reweight, scorecard edges all ~0). Sizing by a non-predictive (slightly inverse) score bet MORE on worse trades. Flat factor below is exposure-neutral and reallocates size toward the profitable .60-.70 band. Re-enable only if a recalibrated score shows OOS AUC > 0.55.
   CONFIDENCE_SIZE_FLAT: 0.70,    // exposure-neutral constant (= historical avg entry_confidence) used when SIZE_BY_CONFIDENCE is false
 
   // --- Re-entry Cooldown ---
-  REENTRY_COOLDOWN_MS: 0,  // 2026-05-27: disabled. Backtest: 0h cooldown triples trades (357→1207) while maintaining 88% WR. Intra-bar trailing catches re-entries profitably.
+  // 2026-09-04: re-enabled at 4h. Zero cooldown overtraded thin edges into fee drag
+  // on live cohorts; 4h matches one candle on the primary TREND TF and cuts churn.
+  REENTRY_COOLDOWN_MS: 4 * 60 * 60 * 1000,
 
   // --- Correlation Check ---
   CORRELATION_MAX_AVG: 0.70,           // reject if avg correlation with open positions > this
@@ -254,7 +252,10 @@ export function timeframeToMs(tf: string): number {
 // ============================================
 
 export const MOMENTUM_CONFIG = {
-  ENABLED: true,    // 2026-05-18: REBUILT — now routes through main TREND pipeline (same riskGate, exitManager, all guards). No separate engine loop.
+  // 2026-09-04: disabled for CA daytrader fork. Post-dedup live ~15% WR / slightly
+  // negative; main loop only scanned TREND tickers so MOMENTUM effectively only
+  // saw ZECUSD overlap. Re-enable only after full ticker scan + PF>1 on clean data.
+  ENABLED: false,
   MIN_CONFIDENCE: 0.65,
 
   // Tickers — chosen via wide-ticker scan in backtest. These 7 produced
@@ -329,7 +330,9 @@ export const MOM_EXIT_CONFIG = {
 // ============================================
 
 export const SNIPER_CONFIG = {
-  ENABLED: true,             // master enable — both kraken + cryptocom respect this
+  // 2026-09-04: disabled — listing sniper is not Canadian daytrading edge; keep
+  // the paper book focused on TREND/BREAKOUT on liquid USD majors.
+  ENABLED: false,
 
   // --- Per-exchange budgets + enable flags (2026-05-06: dual-exchange) ---
   KRAKEN_ENABLED: true,
@@ -383,18 +386,13 @@ export const SNIPER_CONFIG = {
 // ============================================
 
 export const MR_CONFIG = {
-  // 2026-06-19: Rebuilt from 15m long-only (0/4 wins, -$2.80 live) to
-  // 1h dual-direction with ADX<20 gate. Root causes of failure:
-  //   1. 15m too noisy — reversion signal drowned in noise
-  //   2. BTCUSD/ETHUSD tickers wrong — these trend; ranging MR needs the
-  //      same mid-cap tickers as TREND (AKT, ZEC, FET, etc.)
-  //   3. No ADX gate — was entering ranging AND trending markets
-  //   4. Long-only — missed 50% of MR opportunities (overbought shorts)
-  ENABLED: true,
+  // 2026-09-04: disabled for CA daytrader fork pending revalidation on majors.
+  // Prior live MR was weak; mid-cap SCAN_TICKERS are outside Canadian allowed bases.
+  ENABLED: false,
   CANDLE_INTERVAL: '1h' as string,
   ALLOWED_REGIMES: ['SIDEWAYS'] as readonly string[],
   SCAN_TICKERS: [
-    'AKTUSD', 'ZECUSD', 'FETUSD', 'PENGUUSD', 'TAOUSD', 'PENDLEUSD',
+    'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'LINKUSD', 'AVAXUSD',
   ] as string[],
 
   // ADX gate — only enter when market is ranging (primary gate)

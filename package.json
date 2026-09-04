@@ -1,7 +1,7 @@
 {
-  "name": "cryptogod",
-  "version": "1.0.0",
-  "description": "Automated multi-strategy cryptocurrency trading engine — Kraken execution, ML signal gating, and a React monitoring dashboard",
+  "name": "crypto-daytrader-ca",
+  "version": "1.1.0",
+  "description": "Canadian Kraken USD daytrading engine — fee-aware TREND/BREAKOUT, paper-first, React monitor",
   "main": "serverV2.ts",
   "type": "module",
   "scripts": {
