@@ -33,7 +33,13 @@ export const V2_CONFIG = {
     //   — diversify out of 3 correlated mid-cap alts all stuck in DOWN regime. Higher vol + different sectors.
   ],
   MIN_VOLUME_24H_USD: 500_000,
-  MIN_ATR_PERCENT: 1.0,  // 2026-07-21: raised from 0.3. Data mining: ATR<1% = 27.3% WR (n=132), death zone. ATR 1-2% = 51.7% WR, 2-3% = 63.5%. Minimum 1% eliminates fee-dominated noise trades.
+  // 2026-09-04: 1.0→2.0. Pre-registered in docs/reviews/2026-07-23 (n=276 TREND closes):
+  // the 1.0–2.0% band wins 53-54% and still nets −$1.85 over 104 trades — fees eat it.
+  // 2.0–3.0% is +$77.47/90 @ 64.4%. Floor 2.0 keeps +$89 of the +$87 total on 38% fewer
+  // trades. Under the 2026-07-09 Kraken schedule (≥0.60% RT at Tier 3, 1.20% at Tier 1)
+  // sub-2% ATR moves cannot clear fees at all, so the case is stronger than when flagged.
+  // 2026-07-21: raised from 0.3. Data mining: ATR<1% = 27.3% WR (n=132), death zone.
+  MIN_ATR_PERCENT: 2.0,
   MAX_ATR_PERCENT: 8.0,  // Widened for 4h — normal BTC 4h ATR% is 1-4%
   MAX_SPREAD_PERCENT: 0.15,
 
