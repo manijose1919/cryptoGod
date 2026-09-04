@@ -259,7 +259,15 @@ async function runLoop(): Promise<void> {
 
     if (passedSignals.length === 0) {
       if (stats.loopCount % 5 === 1) {
-        console.log(`[V2] Loop #${stats.loopCount}: no signals from any strategy across ${requiredTfs.length} timeframes`);
+        const rejectSample = allSignals
+          .filter(s => !s.passed)
+          .slice(0, 6)
+          .map(s => `${s.ticker}/${(s as StrategySignal)._strategy}/${(s as StrategySignal)._timeframe}: ${s.reason}`)
+          .join(' | ');
+        console.log(
+          `[V2] Loop #${stats.loopCount}: no signals from any strategy across ${requiredTfs.length} timeframes` +
+          (rejectSample ? ` — ${rejectSample}` : ''),
+        );
       }
       stats.lastLoopTime = Date.now() - loopStart;
       await checkOpenExits();
