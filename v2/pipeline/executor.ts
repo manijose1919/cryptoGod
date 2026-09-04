@@ -86,19 +86,36 @@ export async function executeTrade(
   const tradeId = randomUUID();
   const atr = signal.signals.atr as number;
 
-  if (V2_CONFIG.MODE !== 'live') {
-    // --- Shadow / Paper mode ---
-    // Use close price from signal (already computed from candles) instead of extra API call
-    let price = signal.signals.close_price as number;
-    if (!price || price <= 0) {
-      price = await exchange.getLatestPrice(signal.ticker);
+  if (V2_CONFIG.MODE === 'shadow') {
+    // Shadow mode is intentionally signal-only. Persisting simulated trades here
+    // contaminated paper-trading results with fills that were never modeled.
+    const decision = makeExecuteDecision(
+      tradeId,
+      `Shadow signal ${signal.ticker} not simulated`,
+      signal.confidence,
+      { atr },
+    );
+    return { trade: null, decision };
+  }
+
+  if (V2_CONFIG.MODE === 'paper') {
+    // Paper entries model an immediately filled maker order at the executable
+    // side of the live book, rather than the last historical candle close.
+    const isShort = risk.side === 'short';
+    let price: number;
+    try {
+      price = isShort
+        ? await exchange.getBestAsk(signal.ticker)
+        : await exchange.getBestBid(signal.ticker);
+    } catch (error) {
+      const rejectDecision = makeReject(tradeId, `Paper quote unavailable for ${signal.ticker}: ${(error as Error).message}`);
+      return { trade: null, decision: rejectDecision };
     }
-    if (!price || price <= 0) {
-      const rejectDecision = makeReject(tradeId, `Cannot get price for ${signal.ticker}`);
+    if (!isFinite(price) || price <= 0) {
+      const rejectDecision = makeReject(tradeId, `Paper quote invalid for ${signal.ticker}: ${price}`);
       return { trade: null, decision: rejectDecision };
     }
     const quantity = risk.positionSizeUsd / price;
-    const isShort = risk.side === 'short';
     // Use per-strategy exit config for SL/TP (BREAKOUT uses tighter stops than TREND)
     const strategy = (signal as any)._strategy ?? 'TREND';
     const exitCfg = STRATEGY_EXIT_CONFIGS[strategy] ?? STRATEGY_EXIT_CONFIGS.TREND;

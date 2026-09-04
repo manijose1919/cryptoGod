@@ -77,6 +77,23 @@ function makeDecision(
   };
 }
 
+async function getPaperExecutablePrice(
+  exchange: ExchangeAdapter,
+  ticker: string,
+  isShort: boolean,
+  fallbackPrice: number,
+): Promise<number> {
+  try {
+    const price = isShort
+      ? await exchange.getBestAsk(ticker)
+      : await exchange.getBestBid(ticker);
+    if (isFinite(price) && price > 0) return price;
+  } catch (error) {
+    console.warn(`[V2 ExitMgr] paper quote unavailable for ${ticker}: ${(error as Error).message}`);
+  }
+  return fallbackPrice;
+}
+
 // --- Exit Evaluation ---
 
 /**
@@ -96,8 +113,13 @@ export async function checkExits(
     // for-loop and skip exit checks for every remaining trade — they'd wait
     // up to BOT_LOOP_INTERVAL_MS for the next pass. Now: log and continue.
     try {
-    const currentPrice = await exchange.getLatestPrice(trade.ticker);
     const isShort = trade.side === 'short';
+    const marketPrice = await exchange.getLatestPrice(trade.ticker);
+    // A paper exit must be valued at the sellable/buyable side of the book.
+    // The last traded price is not necessarily executable and overstated PnL.
+    const currentPrice = V2_CONFIG.MODE === 'paper'
+      ? await getPaperExecutablePrice(exchange, trade.ticker, isShort, marketPrice)
+      : marketPrice;
 
     // Per-strategy exit config (falls back to TREND defaults)
     const exitCfg: StrategyExitConfig = STRATEGY_EXIT_CONFIGS[trade.strategy ?? 'TREND'] ?? STRATEGY_EXIT_CONFIGS.TREND;
@@ -156,8 +178,8 @@ export async function checkExits(
       const stopWasRaised = trade.trailingActivated || (isShort ? trade.currentStop < trade.initialStop : trade.currentStop > trade.initialStop);
       const exitReason = stopWasRaised ? EXIT_REASON.trailing : EXIT_REASON.stop_loss;
       const reasonLabel = stopWasRaised ? 'Trailing/BE stop hit' : 'Stop loss hit';
-      // Paper mode: use stop price to avoid gap-through losses
-      const exitPrice = V2_CONFIG.MODE !== 'live' ? trade.currentStop : currentPrice;
+      // Paper mode uses the executable quote too, retaining gap-through loss.
+      const exitPrice = currentPrice;
       results.push({
         trade,
         shouldExit: true,
@@ -334,7 +356,7 @@ export async function checkExits(
         ? currentPrice >= newStop
         : currentPrice <= newStop;
       if (trailHit) {
-        const trailExitPrice = V2_CONFIG.MODE !== 'live' ? newStop : currentPrice;
+        const trailExitPrice = currentPrice;
         results.push({
           trade,
           shouldExit: true,

@@ -14,7 +14,7 @@ import { stopMomentumEngine, getMomentumStatus } from './engine/momentumEngine.t
 import { buildKrakenSniper, buildCryptocomSniper, stopSniperEngine, getSniperStatus } from './engine/sniperEngine.ts';
 import { initPairsEngine, startPairsEngine, stopPairsEngine, getPairsStatus } from './pairs/pairsEngine.ts';
 import { v2Router } from './dashboard/attributionAPI.ts';
-import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG, PAIRS_CONFIG } from './engine/config.ts';
+import { V2_CONFIG, MR_CONFIG, MOMENTUM_CONFIG, SNIPER_CONFIG, PAIRS_CONFIG, isCanadianUsdTicker } from './engine/config.ts';
 
 export { v2Router, getV2Status, stopV2Engine, getDualStatus, stopDualEngine, getBearishStatus, stopBearishServices, getMRStatus, stopMREngine, getBreakoutStatus, stopBreakoutEngine, getMomentumStatus, stopMomentumEngine, getSniperStatus, stopSniperEngine, getPairsStatus, stopPairsEngine };
 
@@ -26,17 +26,22 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
     startV2Engine();
     console.log('[V2] Phoenix V2 engine running');
 
-    // Boot bearish services (shorts, staking, arb, DCA) alongside V2
-    try {
-      initBearishServices(krakenV2);
-      startBearishServices();
-      console.log('[V2] Bearish services running (shorts, staking, arb, DCA)');
-    } catch (err: any) {
-      console.warn(`[V2] Bearish services failed to start: ${err.message}`);
+    // Auxiliary engines do not share the main V2 paper-fill model. Keep paper
+    // validation attributable to the primary Canadian USD strategy only.
+    if (V2_CONFIG.MODE === 'live') {
+      try {
+        initBearishServices(krakenV2);
+        startBearishServices();
+        console.log('[V2] Bearish services running (shorts, staking, arb, DCA)');
+      } catch (err: any) {
+        console.warn(`[V2] Bearish services failed to start: ${err.message}`);
+      }
+    } else {
+      console.log(`[V2] Auxiliary bearish services disabled in ${V2_CONFIG.MODE} mode`);
     }
 
     // Boot Mean Reversion engine (15m, maker orders, independent loop)
-    if (MR_CONFIG.ENABLED) {
+    if (MR_CONFIG.ENABLED && V2_CONFIG.MODE === 'live') {
       try {
         initMREngine(krakenV2, initialBudget);
         startMREngine();
@@ -44,6 +49,8 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       } catch (err: any) {
         console.warn(`[V2] Mean Reversion engine failed to start: ${err.message}`);
       }
+    } else if (MR_CONFIG.ENABLED) {
+      console.log(`[V2] Mean Reversion disabled in ${V2_CONFIG.MODE} mode (separate simulation model)`);
     }
 
     // Breakout engine DISABLED — backtested 180 days: 341 trades, 28% WR, -$33 net
@@ -74,7 +81,7 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
     // touches cryptocom or sniper budget pools. Each engine has its own loop,
     // candle cache, detector namespace, and budget — they cannot interfere
     // with each other or with day-trading.
-    if (SNIPER_CONFIG.ENABLED) {
+    if (SNIPER_CONFIG.ENABLED && V2_CONFIG.MODE === 'live') {
       // --- Kraken sniper ---
       if (SNIPER_CONFIG.KRAKEN_ENABLED) {
         try {
@@ -104,14 +111,19 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       } else {
         console.log('[V2] Sniper CRYPTOCOM disabled (SNIPER_CONFIG.CRYPTOCOM_ENABLED=false).');
       }
-    } else {
+    } else if (!SNIPER_CONFIG.ENABLED) {
       console.log('[V2] Sniper master switch off (SNIPER_CONFIG.ENABLED=false).');
+    } else {
+      console.log(`[V2] Sniper engines disabled in ${V2_CONFIG.MODE} mode (separate simulation model).`);
     }
 
     // Pairs trading engine (cross-asset cointegration, paper-only this session).
     // Gated by PAIRS_MODE env: 'off' | 'paper'. 'live' is refused for now.
     // Deployment plan: docs/plans/2026-05-26-pairs-deployment-plan.md
-    if (PAIRS_CONFIG.MODE !== 'off') {
+    const pairsComplyWithCanadianUniverse =
+      isCanadianUsdTicker(PAIRS_CONFIG.SYMBOL_A) &&
+      isCanadianUsdTicker(PAIRS_CONFIG.SYMBOL_B);
+    if (PAIRS_CONFIG.MODE !== 'off' && pairsComplyWithCanadianUniverse) {
       try {
         initPairsEngine();
         startPairsEngine();
@@ -119,6 +131,8 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       } catch (err: any) {
         console.warn(`[V2] Pairs engine failed to start: ${err.message}`);
       }
+    } else if (PAIRS_CONFIG.MODE !== 'off') {
+      console.warn(`[V2] Pairs engine disabled: ${PAIRS_CONFIG.SYMBOL_A}/${PAIRS_CONFIG.SYMBOL_B} is outside the Canadian USD universe.`);
     } else {
       console.log('[V2] Pairs engine disabled (PAIRS_MODE=off).');
     }

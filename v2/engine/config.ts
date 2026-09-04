@@ -5,30 +5,24 @@
 
 import type { V2Mode } from '../pipeline/types.ts';
 
+export const CANADIAN_USD_TICKERS = [
+  'BTCUSD', 'ETHUSD', 'XRPUSD', 'BNBUSD', 'SOLUSD',
+  'ADAUSD', 'DOGEUSD', 'LINKUSD', 'DOTUSD', 'AVAXUSD',
+] as const;
+
+export function isCanadianUsdTicker(ticker: string): boolean {
+  return (CANADIAN_USD_TICKERS as readonly string[]).includes(ticker);
+}
+
 export const V2_CONFIG = {
   // --- Mode ---
   MODE: (process.env.V2_MODE || 'shadow') as V2Mode,
 
   // --- Scan ---
   SCAN_TICKERS: [
-    // 2026-05-27: Concentrated on 6 top performers. $10K/6 = $1,667/ticker.
-    // PF 8.64, +$8,443 (84.4% in 90d), 180d +$13,486 (134.8%)
-    'AKTUSD',    // PF best, 93.3% WR, +$2,009
-    'ZECUSD',    // 92.4% WR, +$1,554
-    'FETUSD',    // 91.7% WR, +$1,402
-    'PENGUUSD',  // 90.9% WR, +$1,489
-    'TAOUSD',    // 89.5% WR, +$1,479
-    'PENDLEUSD', // 88.1% WR, +$511, PF 8.20
-    // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
-    //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
-    //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
-    //   COMPUSD: PF 1.20 alone (Compound DeFi) — third strongest, low-correlation to AKT/ZEC
-    // Combined (AKT+ZEC+COMP, single-strategy backtest, 4h, 90d): PF 1.62, +$151, +5.0%, max DD 2.3%
-    // Robustness: 30d PF 1.00 (break-even, yellow flag), 60d PF 1.33, 90d PF 1.62 — improves with longer window
-    // Removed: ETHUSD, XRPUSD, DOGEUSD, DOTUSD, ADAUSD (all PF<1 in current 90d regime under tuned config)
-    // Per-ticker (90d, Config A): ETH -4.2%, XRP losing, DOGE losing, DOT/ADA worst-2 (-$84/-$112)
-    // 2026-05-17: Added SOL ($9.4M vol), HYPE ($7M vol, +7.1% today), SUI ($5.6M vol), LINK ($2.3M vol)
-    //   — diversify out of 3 correlated mid-cap alts all stuck in DOWN regime. Higher vol + different sectors.
+    // Canadian-compliant USD spot universe. Paper results from the previous
+    // altcoin-only universe are not comparable and must not guide live sizing.
+    ...CANADIAN_USD_TICKERS,
   ],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 1.0,  // 2026-07-21: raised from 0.3. Data mining: ATR<1% = 27.3% WR (n=132), death zone. ATR 1-2% = 51.7% WR, 2-3% = 63.5%. Minimum 1% eliminates fee-dominated noise trades.
