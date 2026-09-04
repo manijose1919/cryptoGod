@@ -22,7 +22,8 @@ export const TIME_FRAMES_MAP: Record<string, string> = {
 // Canadian-supported crypto pairs only (USD pairs - NO USDT)
 // Note: USDC doesn't exist on Crypto.com Exchange API, using USD instead
 export const FALLBACK_TICKERS = [
-    'BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD'
+    'BTCUSD', 'ETHUSD', 'XRPUSD', 'SOLUSD', 'ADAUSD', 'DOGEUSD',
+    'LINKUSD', 'DOTUSD', 'AVAXUSD',
 ];
 
 // Allowed base currencies for Canadian accounts

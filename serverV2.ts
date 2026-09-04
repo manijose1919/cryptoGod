@@ -54,6 +54,7 @@ async function initML(): Promise<void> {
 
 // --- 6. Phoenix V2 Engine ---
 import { bootV2, v2Router, getV2Status, stopV2Engine } from './v2/index.ts';
+import { V2_CONFIG } from './v2/engine/config.ts';
 
 // ============================================
 // Express App
@@ -128,11 +129,6 @@ app.get('*', (_req, res) => {
 // Boot Sequence
 // ============================================
 
-const V2_TICKERS = [
-  'BTCUSD', 'ETHUSD', 'SOLUSD', 'XRPUSD', 'ADAUSD',
-  'LINKUSD', 'DOTUSD', 'AVAXUSD', 'DOGEUSD', 'BNBUSD',
-];
-
 async function start() {
   console.log('[V2-Server] Starting Phoenix V2 slim server...');
 
@@ -157,7 +153,7 @@ async function start() {
   await initFearGreedGate();
 
   // 5. Kraken WebSocket — warm up candle buffers for V2 tickers
-  initKrakenWS(V2_TICKERS, {
+  initKrakenWS([...V2_CONFIG.SCAN_TICKERS], {
     onConnect: () => console.log('[V2-Server] Kraken WS connected'),
   });
   console.log('[V2-Server] Kraken WebSocket initializing...');
@@ -173,10 +169,10 @@ async function start() {
   const server = createServer(app);
   server.listen(PORT, () => {
     console.log(`[V2-Server] Listening on port ${PORT}`);
-    console.log(`[V2-Server] Mode: ${process.env.V2_MODE || 'shadow'}`);
+    console.log(`[V2-Server] Mode: ${process.env.V2_MODE || V2_CONFIG.MODE}`);
     console.log(`[V2-Server] Budget: $${budget}`);
     if (telegramEnabled()) {
-      alertCircuitBreaker(`Phoenix V2 slim server started (${process.env.V2_MODE || 'shadow'} mode, $${budget})`);
+      alertCircuitBreaker(`Phoenix V2 slim server started (${process.env.V2_MODE || V2_CONFIG.MODE} mode, $${budget})`);
     }
   });
 

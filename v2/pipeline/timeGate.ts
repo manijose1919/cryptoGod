@@ -39,7 +39,10 @@ export const TIME_GATE_CONFIG = {
   // expectancy (+$0.25 -> +$0.56). It also subsumes the apparent "Saturday is bad"
   // effect (Saturday looked bad only because of its overnight hours). 13 & 20 UTC kept
   // from the original training-data blocks (13: 44% WR; 20: 20% WR live).
-  BLOCKED_HOURS: [0, 1, 2, 3, 4, 5, 6, 7, 13, 20] as readonly number[],
+  // 2026-09-04 daytrading reshape: also block 21-23 UTC. Hour 21 used to be a
+  // *boosted* swing-hold window; a same-session book cannot enter after the
+  // NY-afternoon flatten (20:00 UTC / 4pm EDT) or it rides overnight.
+  BLOCKED_HOURS: [0, 1, 2, 3, 4, 5, 6, 7, 13, 20, 21, 22, 23] as readonly number[],
 
   // Hard-block days (0=Sun, 1=Mon, ..., 5=Fri, 6=Sat)
   // Friday: 40.5% WR, -$938/trade training (worst day)
@@ -51,10 +54,56 @@ export const TIME_GATE_CONFIG = {
   // 12 UTC: 66.9% WR, +$783/trade training | +$0.71 avg v2 (BEST)
   // 14 UTC: 52.8% WR, +$524/trade training | +$0.53 avg v2
   // 17 UTC: 75% WR (small v2), +avg in training mid-tier — boosting based on v2 evidence
-  // 21 UTC: 55.2% WR, +$1378/trade training (highest training avg PnL)
-  BOOSTED_HOURS: [12, 14, 17, 21] as readonly number[],
+  // 21 UTC removed 2026-09-04 — that edge came from overnight swing holds.
+  BOOSTED_HOURS: [12, 14, 17] as readonly number[],
   BOOST_AMOUNT: 5, // points to subtract from entry-score threshold (60 -> 55)
 };
+
+// Same-session flatten. Daytrading: do not carry inventory through the
+// overnight window the entry gate already refuses. Friday gets an earlier
+// flatten so a missed 20:00 pass cannot ride the weekend gap.
+export const SESSION_FLATTEN_CONFIG = {
+  ENABLED: true,
+  FLATTEN_HOUR_UTC: 20,          // 4pm EDT / 3pm EST — end of NY cash session
+  FRIDAY_FLATTEN_HOUR_UTC: 16,   // noon EDT Friday — weekend gap
+};
+
+export interface SessionFlattenResult {
+  flatten: boolean;
+  reason: string;
+  hour: number;
+  dayOfWeek: number;
+}
+
+export function shouldSessionFlatten(timestampMs?: number): SessionFlattenResult {
+  const date = timestampMs != null ? new Date(timestampMs) : new Date();
+  const hour = date.getUTCHours();
+  const dow = date.getUTCDay();
+
+  if (!SESSION_FLATTEN_CONFIG.ENABLED) {
+    return { flatten: false, reason: 'flatten disabled', hour, dayOfWeek: dow };
+  }
+
+  if (dow === 5 && hour >= SESSION_FLATTEN_CONFIG.FRIDAY_FLATTEN_HOUR_UTC) {
+    return {
+      flatten: true,
+      reason: `Friday session flatten from ${SESSION_FLATTEN_CONFIG.FRIDAY_FLATTEN_HOUR_UTC}h UTC`,
+      hour,
+      dayOfWeek: dow,
+    };
+  }
+
+  if (hour >= SESSION_FLATTEN_CONFIG.FLATTEN_HOUR_UTC) {
+    return {
+      flatten: true,
+      reason: `session flatten from ${SESSION_FLATTEN_CONFIG.FLATTEN_HOUR_UTC}h UTC`,
+      hour,
+      dayOfWeek: dow,
+    };
+  }
+
+  return { flatten: false, reason: 'session open', hour, dayOfWeek: dow };
+}
 
 export interface TimeGateResult {
   allow: boolean;

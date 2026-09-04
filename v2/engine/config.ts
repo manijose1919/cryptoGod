@@ -4,42 +4,31 @@
 // ============================================
 
 import type { V2Mode } from '../pipeline/types.ts';
+import { CANADIAN_DAYTRADE_TICKERS } from './canadianUniverse.ts';
 
 export const V2_CONFIG = {
   // --- Mode ---
-  MODE: (process.env.V2_MODE || 'shadow') as V2Mode,
+  // Paper is the default. Live is a deliberate env change, never an accident.
+  MODE: (process.env.V2_MODE || 'paper') as V2Mode,
 
   // --- Scan ---
-  SCAN_TICKERS: [
-    // 2026-05-27: Concentrated on 6 top performers. $10K/6 = $1,667/ticker.
-    // PF 8.64, +$8,443 (84.4% in 90d), 180d +$13,486 (134.8%)
-    'AKTUSD',    // PF best, 93.3% WR, +$2,009
-    'ZECUSD',    // 92.4% WR, +$1,554
-    'FETUSD',    // 91.7% WR, +$1,402
-    'PENGUUSD',  // 90.9% WR, +$1,489
-    'TAOUSD',    // 89.5% WR, +$1,479
-    'PENDLEUSD', // 88.1% WR, +$511, PF 8.20
-    // 2026-05-06 (Config A — wide-ticker optimization sweep, 80+ backtests):
-    //   AKTUSD: PF 1.69 alone (Akash compute) — best PF found across 50+ tested tickers
-    //   ZECUSD: PF 1.33 alone (Zcash privacy) — second strongest individual edge
-    //   COMPUSD: PF 1.20 alone (Compound DeFi) — third strongest, low-correlation to AKT/ZEC
-    // Combined (AKT+ZEC+COMP, single-strategy backtest, 4h, 90d): PF 1.62, +$151, +5.0%, max DD 2.3%
-    // Robustness: 30d PF 1.00 (break-even, yellow flag), 60d PF 1.33, 90d PF 1.62 — improves with longer window
-    // Removed: ETHUSD, XRPUSD, DOGEUSD, DOTUSD, ADAUSD (all PF<1 in current 90d regime under tuned config)
-    // Per-ticker (90d, Config A): ETH -4.2%, XRP losing, DOGE losing, DOT/ADA worst-2 (-$84/-$112)
-    // 2026-05-17: Added SOL ($9.4M vol), HYPE ($7M vol, +7.1% today), SUI ($5.6M vol), LINK ($2.3M vol)
-    //   — diversify out of 3 correlated mid-cap alts all stuck in DOWN regime. Higher vol + different sectors.
-  ],
+  // 2026-09-04: Canadian daytrading universe. Liquid Kraken USD pairs a CIRO
+  // account can actually trade. The previous 6-name mid-cap book (AKT/ZEC/FET/
+  // PENGU/TAO/PENDLE) was a 90d backtest cherry-pick — those names gated out
+  // together in DOWN and are not in the Canadian allowed-base list.
+  // BTC/ETH often fail the 1% ATR floor on 1h; that is intended (fee-dominated).
+  SCAN_TICKERS: [...CANADIAN_DAYTRADE_TICKERS],
   MIN_VOLUME_24H_USD: 500_000,
   MIN_ATR_PERCENT: 1.0,  // 2026-07-21: raised from 0.3. Data mining: ATR<1% = 27.3% WR (n=132), death zone. ATR 1-2% = 51.7% WR, 2-3% = 63.5%. Minimum 1% eliminates fee-dominated noise trades.
   MAX_ATR_PERCENT: 8.0,  // Widened for 4h — normal BTC 4h ATR% is 1-4%
   MAX_SPREAD_PERCENT: 0.15,
 
   // --- Regime ---
-  ALLOWED_REGIMES: ['STRONG_UP', 'UP'] as const, // 2026-06-27: UP restored. ADX gate (now 20) handles trend-strength filtering. STRONG_UP-only was too strict — 1 trade in 9 days. Fee-aware floor protects against sub-fee wins.
-  // 2026-07-21: UP+1h is a proven loser all-time (n=25, 40% WR, -$1.05/trade).
-  // STRONG_UP+1h works (60% WR, +$0.45/trade). Restrict UP to 4h only.
-  REGIME_TIMEFRAME_RESTRICT: { 'UP': ['4h'] } as Record<string, string[]>,
+  // 2026-09-04: STRONG_UP only on the 1h daytrading book.
+  // UP+1h is a proven loser (n=25, 40% WR, -$1.05/trade). 4h UP is swing, not
+  // daytrading. SIDEWAYS is handled by the mean-reversion engine, not TREND.
+  ALLOWED_REGIMES: ['STRONG_UP'] as const,
+  REGIME_TIMEFRAME_RESTRICT: {} as Record<string, string[]>,
 
   // --- Signal ---
   MIN_COMPOSITE_SCORE: 60,                // Was 70 — scoring math caps at ~64 in normal STRONG_UP; 70 only fires on extreme pullbacks
@@ -64,14 +53,14 @@ export const V2_CONFIG = {
   MAX_RISK_PER_TRADE_PERCENT: 0.015, // 2026-06-06: 0.03→0.015. Live: high-ATR trades (FET 4.5%, ZEC 3%) got $400+ positions with $40 max loss. Caps high-ATR smaller while low-ATR unaffected.
   MAX_RISK_PER_TRADE_USD: 12,    // 2026-06-30: hard $ cap layered ON TOP of the % cap. The % cap is a CEILING that floated to $38 on high-ATR names (522-trade backtest). Capping at $12 cut worst loss -$40→-$15, eliminated all 9 tail losses (>$15), -14% volatility, while net rose +$91→+$105 (combined w/ short filter). Effective risk = min(equity×1.5%, $12). NOTE: scales as an absolute $; revisit upward as the account grows.
 
-  MAX_OPEN_POSITIONS: 3,         // Cap at 3 — data shows 4-5 adds correlation risk without enough upside (Apr 18: 5 correlated longs lost $35)
+  MAX_OPEN_POSITIONS: 2,         // 2026-09-04: majors are highly correlated; 2 names is the diversification we actually get. 3-5 correlated longs is one bet.
   GATEKEEPER_AB_TEST: true,      // 2026-06-30: forward A/B to settle whether the ML gatekeeper (blocks 92%, approvals win 48% = baseline) adds value. Block-RECALL is unmeasurable retroactively, so we measure it forward: on a fraction of loops, bypass the gatekeeper and let approved signals through, shadow-logging the would-be decision. Compare PROCEED (approved) vs PROCEED_AB (would-block-but-forced) win rates. Paper mode = no $ risk; $12 cap + MAX_OPEN_POSITIONS=3 bound exposure. Disable by setting false once enough PROCEED_AB samples (~30) accrue.
   GATEKEEPER_AB_OFF_RATE: 0.5,   // fraction of loops where the gatekeeper is bypassed (OFF arm)
   SIZE_BY_CONFIDENCE: false,     // 2026-06-30: was true. Confidence proven NON-predictive (out-of-sample AUC 0.44 — slightly INVERSE; 3 analyses: calibration, feature reweight, scorecard edges all ~0). Sizing by a non-predictive (slightly inverse) score bet MORE on worse trades. Flat factor below is exposure-neutral and reallocates size toward the profitable .60-.70 band. Re-enable only if a recalibrated score shows OOS AUC > 0.55.
   CONFIDENCE_SIZE_FLAT: 0.70,    // exposure-neutral constant (= historical avg entry_confidence) used when SIZE_BY_CONFIDENCE is false
 
   // --- Re-entry Cooldown ---
-  REENTRY_COOLDOWN_MS: 0,  // 2026-05-27: disabled. Backtest: 0h cooldown triples trades (357→1207) while maintaining 88% WR. Intra-bar trailing catches re-entries profitably.
+  REENTRY_COOLDOWN_MS: 2 * 60 * 60 * 1000,  // 2026-09-04: 2h. Zero cooldown tripled backtest trades at 0.42% real RT — that 88% WR was an overfit 4h mid-cap book, not a fee-aware daytrading edge.
 
   // --- Correlation Check ---
   CORRELATION_MAX_AVG: 0.70,           // reject if avg correlation with open positions > this
@@ -100,14 +89,14 @@ export const V2_CONFIG = {
   USE_MAKER_ORDERS: true,
 
   // --- Candle Timeframe ---
-  CANDLE_INTERVAL: '4h' as string, // Was 15m — backtest: 15m=21%WR/-$1030, 1h=26%WR/-$1669, 4h=27%WR/-$455. 4h gives trends room past 0.52% fees.
+  CANDLE_INTERVAL: '1h' as string, // 2026-09-04: daytrading. 15m cannot clear 0.42% real RT; 4h is a swing hold. 1h is the only TF that is both intra-day and wide enough for Kraken fees. STRONG_UP+1h was the profitable TREND cell (60% WR).
 
   // --- Exit Management ---
   STOP_LOSS_ATR_MULT: 1.5,  // 2026-06-03: 2.0→1.5. Live data: SL avg -$11.13 vs trail avg +$2.13 (5.2:1 ratio). Tighter SL cuts loss size ~33%. Backtest: +$6,391→+$7,186, PF 9.07→9.50.
   TAKE_PROFIT_ATR_MULT: 4.0,       // 2026-04-29: 3.5 → 4.0 (R:R 1.4 → 1.6). Avg_win problem: at R:R 1.4 the cohort was avg_win $0.97 vs needed ~$1.10 for 59% WR break-even. Wider TP makes individual TP hits +$2.00 instead of +$1.75. Risk: historical R:R 1.6 cohort underperformed R:R 1.4 (-$10.89 vs -$1.89), but that was without working BE/trailing stops. With current trailing-active@1% catching moderate winners, wider TP may behave differently. Deliberate test under user's risk-on framing 2026-04-29.
   TRAILING_ACTIVATE_PERCENT: 0.01, // 2026-05-18: 0.025→0.015. At 2.5% most trades peaked +1-2% and never trailed. At 1.5% trailing engages on moderate moves — PF 1.67→3.71, time_kill 72→26 trades.
   TRAILING_GIVEBACK_PERCENT: 0.03,  // 2026-05-06 Config A: 0.25 → 0.03 — extreme tight trail. Once activated, surrender only 3% of peak gain. The trailing-exit P&L moved from +$216 (PF 1.43) to +$312 (PF 1.62) on AKT+ZEC+COMP 90d
-  TIME_KILL_MS: 6 * 60 * 60 * 1000,      // 6h — was 8h; backtest shows time_kill is #1 PnL drag (-$125/128 trades). Cutting 2h earlier reduces fee bleed on stale positions.
+  TIME_KILL_MS: 8 * 60 * 60 * 1000,      // 8h backup. Session flatten at 20:00 UTC is the real daytrading close; this catches anything the flatten misses.
   TIME_KILL_MIN_MOVE: 0.007,
   EXIT_CHECK_INTERVAL_MS: 15_000,
 
@@ -149,14 +138,11 @@ export const V2_CONFIG = {
 
 // Which timeframes each strategy runs on
 export const STRATEGY_TIMEFRAMES: Record<string, string[]> = {
-  TREND:           ['1h', '4h'],  // 2026-06-27: 1h restored. Was 4h-only since Jun 19 (1 trade in 9 days). Fee-aware floor now protects 1h wins. 30m stays out (proven loser).
-  MOMENTUM:        ['1h', '4h'],
-  // 2026-07-21: BREAKOUT re-enabled on 1h/4h. All-time clean data: 60% WR, +$5.45/trade (n=10).
-  // Was disabled Jun 9 after a bad 12-trade stretch. Now has fee-aware floor + ATR>=1% gate
-  // that didn't exist before. 15m/30m removed (too noisy). Volume 2x + N-bar-high breakout
-  // is a structurally different signal from TREND's EMA/MACD scoring.
-  BREAKOUT:        ['1h', '4h'],
-  // MEAN_REVERSION and SCALP disabled — live data: 0% and 22% WR respectively
+  // 2026-09-04: 1h-only daytrading book. 4h is a multi-day swing hold.
+  TREND:           ['1h'],
+  MOMENTUM:        ['1h'],
+  // Breakout stays in the file for a rewrite. Not started, not scanned.
+  BREAKOUT:        [],
 };
 
 // Per-strategy exit parameters
@@ -182,14 +168,14 @@ export const STRATEGY_EXIT_CONFIGS: Record<string, StrategyExitConfig> = {
     // since 2026-05-18 while live trades silently trailed at 2.5% (the backtest
     // that justified 0.01/0.015 claimed PF 1.67→3.71 from this one change).
     trailActivatePercent: 0.014, trailGivebackPercent: 0.03,  // 2026-06-19: 0.01→0.014 (~75% of 1.8% typical TP). At 1%, trail activated in noise zone — reversals still netted below breakeven after fees. At 1.4%, minimum locked-in gross is ~1.35%.
-    timeKillBars: 2, timeKillBarsByTf: { '1h': 4 }, timeKillMinMove: 0.007,  // 2026-07-14: 1h kills at 2 bars were premature — ≥60% of killed 1h trades reached trail activation within 4h (see docs/reviews/2026-07-14-sprint-review.md). 4h keeps 2 bars.
+    timeKillBars: 8, timeKillBarsByTf: { '1h': 8 }, timeKillMinMove: 0.007,  // 2026-09-04: 8 × 1h = full session. Session flatten at 20:00 UTC is the hard close.
     quickKillBars: 1, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
     useTrailing: true,
   },
   MOMENTUM: {
     slAtrMult: 1.5, tpAtrMult: 3.0,
     trailActivatePercent: 0.025, trailGivebackPercent: 0.05,
-    timeKillBars: 4, timeKillMinMove: 0.005,
+    timeKillBars: 8, timeKillMinMove: 0.005,
     quickKillBars: 2, quickKillMinGain: 0.006, quickKillSlMult: 1.2,
     useTrailing: true,
   },
@@ -257,15 +243,14 @@ export const MOMENTUM_CONFIG = {
   ENABLED: true,    // 2026-05-18: REBUILT — now routes through main TREND pipeline (same riskGate, exitManager, all guards). No separate engine loop.
   MIN_CONFIDENCE: 0.65,
 
-  // Tickers — chosen via wide-ticker scan in backtest. These 7 produced
-  // PF > 1 individually under v2 logic; combined PF was 1.70 (90d).
-  // ZECUSD overlaps with TREND's SCAN_TICKERS — that's intentional, the two
-  // strategies pick different signal patterns and rarely fire simultaneously.
-  SCAN_TICKERS: ['ZECUSD', 'RUNEUSD', 'FLOWUSD', 'ENAUSD', 'KASUSD', 'ICPUSD', 'WIFUSD'] as readonly string[],
-
-  CANDLE_INTERVAL: '4h' as string,  // 4h was the best timeframe — 1h gave PF 0 (too noisy)
-  ALLOWED_REGIMES: ['STRONG_UP'] as readonly string[],  // 2026-06-30: STRONG_UP-only. Edge diagnosis (42 trades): MOMENTUM STRONG_UP 94% WR/+$82 (best setup in system); UP 8% WR/−$20; SIDEWAYS −$0.65. MOMENTUM only works in strong uptrends. Rollback: re-add 'UP','SIDEWAYS'.
+  CANDLE_INTERVAL: '1h' as string,
+  ALLOWED_REGIMES: ['STRONG_UP'] as readonly string[],
   MIN_CANDLES: 50,
+
+  // Tickers — same Canadian liquid book as TREND. The previous 7-name mid-cap
+  // list (ZEC/RUNE/FLOW/ENA/KAS/ICP/WIF) is not Canadian-allowed and was a
+  // 90d backtest cherry-pick.
+  SCAN_TICKERS: [...CANADIAN_DAYTRADE_TICKERS] as readonly string[],
 
   // Entry filters (v2):
   HISTOGRAM_SPIKE_Z: 1.0,  // macdHist must be ≥1 std-dev above 20-bar rolling mean
@@ -306,12 +291,12 @@ export const MOM_EXIT_CONFIG = {
 
   // Quick-kill (v2 added):
   QUICK_KILL_ENABLED: true,
-  QUICK_KILL_BARS: 4,                  // 4 × 4h = 16h with no progress
+  QUICK_KILL_BARS: 2,                  // 2 × 1h = 2h with no progress
   QUICK_KILL_MIN_GAIN: 0.006,
   QUICK_KILL_SL_TIGHTEN: 1.2,
 
   // Time-kill:
-  TIME_KILL_BARS: 16,                  // 16 × 4h = 2.7 days — 4h candles need more room than 1h
+  TIME_KILL_BARS: 8,                   // 8 × 1h = session max; flatten at 20:00 UTC is the hard close.
   TIME_KILL_MIN_MOVE: 0.005,
 
   // Legacy field — kept for backward compat with momentumExitManager v1 references.
@@ -329,7 +314,7 @@ export const MOM_EXIT_CONFIG = {
 // ============================================
 
 export const SNIPER_CONFIG = {
-  ENABLED: true,             // master enable — both kraken + cryptocom respect this
+  ENABLED: false,            // 2026-09-04: off. New-listing snipes are not Canadian daytrading.
 
   // --- Per-exchange budgets + enable flags (2026-05-06: dual-exchange) ---
   KRAKEN_ENABLED: true,
@@ -393,9 +378,7 @@ export const MR_CONFIG = {
   ENABLED: true,
   CANDLE_INTERVAL: '1h' as string,
   ALLOWED_REGIMES: ['SIDEWAYS'] as readonly string[],
-  SCAN_TICKERS: [
-    'AKTUSD', 'ZECUSD', 'FETUSD', 'PENGUUSD', 'TAOUSD', 'PENDLEUSD',
-  ] as string[],
+  SCAN_TICKERS: [...CANADIAN_DAYTRADE_TICKERS] as string[],
 
   // ADX gate — only enter when market is ranging (primary gate)
   ADX_MAX_FOR_ENTRY: 20,

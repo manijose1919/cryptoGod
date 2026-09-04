@@ -35,12 +35,12 @@ export async function bootV2(initialBudget = 1000): Promise<void> {
       console.warn(`[V2] Bearish services failed to start: ${err.message}`);
     }
 
-    // Boot Mean Reversion engine (15m, maker orders, independent loop)
+    // Boot Mean Reversion engine (1h ranging, maker orders, independent loop)
     if (MR_CONFIG.ENABLED) {
       try {
         initMREngine(krakenV2, initialBudget);
         startMREngine();
-        console.log('[V2] Mean Reversion engine running (15m, maker fees)');
+        console.log('[V2] Mean Reversion engine running (1h, maker fees, SIDEWAYS only)');
       } catch (err: any) {
         console.warn(`[V2] Mean Reversion engine failed to start: ${err.message}`);
       }

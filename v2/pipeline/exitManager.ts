@@ -18,6 +18,7 @@ import { V2_CONFIG, STRATEGY_EXIT_CONFIGS, timeframeToMs } from '../engine/confi
 import type { StrategyExitConfig } from '../engine/config.ts';
 import type { ExchangeAdapter } from '../exchange/types.ts';
 import { updateTradeStop, markTrailingActivated, updateTradePeakPrice } from '../attribution/attributionStore.ts';
+import { shouldSessionFlatten } from './timeGate.ts';
 
 // H3: ExitMutators allow callers to swap the persistence backend. The default
 // (DB-backed) writes through attributionStore. Dual-engine paper trades live
@@ -352,7 +353,29 @@ export async function checkExits(
       }
     }
 
-    // --- 4. Time Kill ---
+    // --- 4. Session flatten (daytrading hard close) ---
+    // Runs before time-kill so a still-moving trade is not held overnight
+    // just because |pnl| >= timeKillMinMove.
+    const session = shouldSessionFlatten();
+    if (session.flatten) {
+      results.push({
+        trade,
+        shouldExit: true,
+        exitReason: EXIT_REASON.time_kill,
+        exitPrice: currentPrice,
+        newStop,
+        trailingJustActivated,
+        decision: makeDecision(trade.id, 'execute', session.reason, {
+          currentPrice,
+          holdMs,
+          pnlPercent,
+          hour: session.hour,
+        }, appliedThresholds),
+      });
+      continue;
+    }
+
+    // --- 5. Time Kill ---
     // Per-strategy: timeKillBars × entry timeframe (MOMENTUM on 4h gets ~2.7
     // days, not the global 6h that was killing it after 1.5 candles).
     if (holdMs > cfgTimeKillMs && Math.abs(pnlPercent) < cfgTimeKillMinMove) {

@@ -1,6 +1,6 @@
 # CryptoGod
 
-Automated multi-strategy cryptocurrency trading engine — Kraken execution, ML signal gating, and a React monitoring dashboard.
+Automated multi-strategy cryptocurrency **daytrading** engine for Canadian Kraken accounts — USD pairs only, fee-aware 1h TREND/MOMENTUM plus ranging mean-reversion, paper by default, React monitoring dashboard.
 
 ![CI](https://github.com/manijose1919/cryptoGod/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-Proprietary-red)
@@ -9,16 +9,20 @@ Automated multi-strategy cryptocurrency trading engine — Kraken execution, ML 
 
 ## Overview
 
-CryptoGod is a single Node process that streams Kraken market data over WebSocket, scans a fixed
-ticker set on a fixed cadence, generates signals from several independent strategy pipelines, filters
-them through a risk gate and an ML gatekeeper, and manages the resulting positions to exit. Every
-decision, rejection and fill is written to a local SQLite database, so strategy changes can be
-evaluated against a recorded history rather than an opinion.
+CryptoGod is a single Node process that streams Kraken market data over WebSocket, scans a
+Canadian-legal USD ticker set on a 1h cadence, generates signals from TREND and MOMENTUM (STRONG_UP
+only) plus a separate SIDEWAYS mean-reversion loop, filters them through a risk gate and an optional
+ML gatekeeper, and flattens positions at the NY-session close. Every decision, rejection and fill is
+written to a local SQLite database.
 
-**The deployed engine runs in paper mode.** `ecosystem.config.cjs` sets `V2_MODE: 'paper'` and
-`PAIRS_MODE: 'paper'`; orders are simulated against live prices and no real capital is committed.
-Live execution is a configuration change, not a code change — which is exactly why the risk notice
-below matters.
+**The engine runs in paper mode by default.** `V2_MODE` defaults to `paper` (and `ecosystem.config.cjs`
+sets the same). Orders are simulated against live Kraken prices; no real capital is committed. Live
+execution is a configuration change, not a code change — which is exactly why the risk notice below
+matters.
+
+This is not a promise of profit. Kraken's realistic round-trip (maker in, taker out) is **0.42%**.
+Anything that cannot clear that after slippage is a guaranteed loss, which is why the book refuses
+sub-1% ATR, sits out non-STRONG_UP TREND regimes, and will not hold overnight.
 
 The repository also contains a React dashboard (Vite) for backtesting, replay, risk and performance
 inspection, and a separate self-contained read-only monitoring page served from `public/monitor.html`.
@@ -82,13 +86,13 @@ The main loop lives in `v2/engine/tradeEngine.ts` and runs the same five stages 
 
 | Engine | Where | State | Notes |
 |---|---|---|---|
-| **TREND** | `v2/engine/tradeEngine.ts` | **Enabled** — the main pipeline | Primary strategy: 4h, long-only, `STRONG_UP` / `UP` regimes only |
-| **Momentum** | `v2/pipeline/momentumSignal.ts` | **Enabled** (`MOMENTUM_CONFIG.ENABLED = true`) | Rebuilt 2026-05-06. Routes through the TREND pipeline as stage 2b instead of running its own loop, so it inherits the same risk gate and exit manager |
-| **Mean reversion** | `v2/engine/meanReversionEngine.ts` | **Enabled** (`MR_CONFIG.ENABLED = true`) | Independent 15m loop using maker orders, restricted to `SIDEWAYS` regimes — the complement to TREND's ADX gate |
-| **Sniper** | `v2/engine/sniperEngine.ts` | **Enabled** on both Kraken and Crypto.com | Deliberately isolated: its own loop, candle cache and $500 budget per exchange, with trades tagged `SNIPER_KRAKEN` / `SNIPER_CRYPTOCOM` so it cannot contaminate day-trading attribution |
-| **Pairs** | `v2/pairs/pairsEngine.ts` | **Paper only** (`PAIRS_MODE=paper`) | Cointegration-based FIL/ICP spread trade. `live` requires both `PAIRS_MODE=live` *and* `PAIRS_LIVE_CONFIRMED=yes` |
-| **Bearish services** | `v2/engine/bearishServices.ts` | **Running**, but TREND shorts are off | Shorts, staking, arbitrage and DCA. `V2_CONFIG.SHORTS_ENABLED = false` since 2026-07-14 (see below) |
-| **Breakout** | `v2/engine/breakoutEngine.ts` | **Disabled** | Unprofitable in backtest (see below). The code is retained so it can be reworked rather than rewritten |
+| **TREND** | `v2/engine/tradeEngine.ts` | **Enabled** — the main pipeline | 1h, long-only, `STRONG_UP` only, Canadian USD majors |
+| **Momentum** | `v2/pipeline/momentumSignal.ts` | **Enabled** (`MOMENTUM_CONFIG.ENABLED = true`) | Same 1h book / risk gate / exit manager as TREND |
+| **Mean reversion** | `v2/engine/meanReversionEngine.ts` | **Enabled** (`MR_CONFIG.ENABLED = true`) | Independent 1h loop, maker orders, `SIDEWAYS` only |
+| **Sniper** | `v2/engine/sniperEngine.ts` | **Disabled** | Not daytrading |
+| **Pairs** | `v2/pairs/pairsEngine.ts` | **Off** (`PAIRS_MODE=off`) | FIL/ICP swing; not same-session |
+| **Bearish services** | `v2/engine/bearishServices.ts` | **Running**, TREND shorts off | `SHORTS_ENABLED = false` |
+| **Breakout** | `v2/engine/breakoutEngine.ts` | **Disabled** | Not in `STRATEGY_TIMEFRAMES` |
 | **Dual-exchange** | `v2/engine/dualExchangeEngine.ts` | **Off** by default (`DUAL_ENGINE` env) | A/B harness that runs identical signals on Kraken and Crypto.com to measure the fee differential |
 
 ## Evidence of engineering judgement
@@ -180,8 +184,8 @@ npm run typecheck  # tsc --noEmit
 npm run lint       # eslint
 ```
 
-The engine defaults to `shadow` mode when `V2_MODE` is unset; the deployed configuration sets it to
-`paper`. Nothing places a real order until that value is deliberately changed.
+The engine defaults to `paper` mode when `V2_MODE` is unset. Nothing places a real order until that
+value is deliberately changed to `live`.
 
 ## Project layout
 

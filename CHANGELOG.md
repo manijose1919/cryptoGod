@@ -47,7 +47,35 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
-## 2026-07-29 — Cleanup follow-ups: stale comments, dead deploy paths, /api 404 masking (NO trading change) — local-claude
+## 2026-09-04 — Canadian daytrading reshape (paper) — cursor-agent
+
+**Commits:** (this change)
+**Files changed:** `v2/engine/config.ts`, `v2/engine/canadianUniverse.ts`, `v2/pipeline/timeGate.ts`, `v2/pipeline/exitManager.ts`, `serverV2.ts`, `ecosystem.config.cjs`, `constants.ts`, `.env.example`, tests
+**Stats baseline reset:** **yes, on deploy** — this changes universe, timeframe, regimes, cooldowns, session exits, and which engines run. New `stats_baseline_time` required before reading post-change stats.
+
+**What changed:**
+
+Reshaped the running book from a 4h mid-cap swing scanner into a **Canadian Kraken daytrading** book:
+
+- Universe is the CIRO-legal Kraken USD set: BTC, ETH, XRP, SOL, ADA, DOGE, LINK, DOT, AVAX. Dropped AKT/ZEC/FET/PENGU/TAO/PENDLE (not in the allowed-base list; 90d cherry-pick that gated out together). Dropped BNB (not listed on Kraken). USDT/USDC still rejected.
+- Primary TF is **1h**, not 4h. 15m cannot clear Kraken's 0.42% real round-trip; 4h is a multi-day hold.
+- TREND/MOMENTUM are **STRONG_UP only**. UP+1h was already a documented loser. SIDEWAYS stays on the mean-reversion engine. Shorts, sniper, breakout scan, and pairs stay off.
+- Same-session flatten at 20:00 UTC (16:00 UTC Fridays). Overnight hours 21–23 UTC added to the entry block so a boosted 21:00 fill cannot ride into Asia.
+- 2h re-entry cooldown (was 0). Max 2 open names (majors are one correlated bet). Default `V2_MODE=paper`.
+
+**Why:**
+The previous book was a swing system pretending to be a daytrader: 4h candles, overnight holds, and an overfit 6-alt universe whose PF 8.64 figures do not survive a Canadian-legal, fee-aware, same-session constraint. This change makes the engine do what the product claim says.
+
+**What to monitor / watch for:**
+- Paper loops should reject `UP`/`DOWN`/`SIDEWAYS` at the regime gate (TREND) and `blocked day Friday` / `blocked hour Nh UTC` at the time gate. That is intended.
+- BTC/ETH 1h often fail `MIN_ATR_PERCENT=1.0` — intended; do not lower the floor to force fills.
+- First real entries should only appear in STRONG_UP during 08–19 UTC excluding 13, Monday–Thursday.
+- Session flatten must close leftover positions at 20:00 UTC (`exitReason=time_kill`, decision reason contains `session flatten`).
+- **Rollback:** revert this commit. Previous baseline is the pre-change `stats_baseline_time`.
+- **Private-repo fork:** this GitHub App token cannot `createRepository`. Create `manijose1919/canuck-daytrader` as private and push this branch to it.
+
+---
+
 
 **Commits:** squash `c1241b5` (PR #2)
 **Files changed:** `serverV2.ts`, `v2/index.ts`, `core/arbitrageEngine.ts`, `types/services.d.ts`, `deploy/deploy.ps1`, `deploy/setup-vps.sh`

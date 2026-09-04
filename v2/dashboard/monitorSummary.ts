@@ -59,8 +59,7 @@ function outcomeOf(pnlNet: number): 'WIN' | 'LOSS' | 'BREAKEVEN' {
 export function buildMonitorSummary(deps: MonitorDeps): MonitorSummary {
   const { status, openTrades, cohortClosedTrend, recentClosedAll, baselineTs, baselineMissing, now } = deps;
 
-  // Dominant regime across scanned tickers. A fixed BTCUSD lookup was wrong —
-  // BTC isn't in SCAN_TICKERS, so it always fell through to an arbitrary entry.
+  // Dominant regime across scanned tickers (majority of htfRegimes).
   const regimes: Record<string, string> = status.htfRegimes ?? {};
   const regimeCounts = new Map<string, number>();
   for (const r of Object.values(regimes)) {
