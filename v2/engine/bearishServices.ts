@@ -330,7 +330,7 @@ async function evaluateFearDCA(): Promise<void> {
   if (!exchange || !BEARISH_CONFIG.DCA_FEAR_ENABLED) return;
 
   // Get raw Alternative.me Fear & Greed index (not blended — DCA should trigger on real retail fear)
-  let fgIndex = 50;
+  let fgIndex: number;
   try {
     const fg = await import('../../services/fearGreedGate.js');
     const getRaw = fg.getAlternativeMeRaw || fg.default?.getAlternativeMeRaw;
@@ -359,7 +359,7 @@ async function evaluateFearDCA(): Promise<void> {
         if (r.ticker && Number.isFinite(r.last)) dcaLastBuy.set(r.ticker, r.last);
       }
       dcaCooldownLoaded = true;
-    } catch (e) {
+    } catch {
       // Best-effort — if v2_dca_buys doesn't exist yet, just proceed with empty map.
       dcaCooldownLoaded = true;
     }
