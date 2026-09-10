@@ -47,6 +47,24 @@ Bidirectional change log between local Claude (developer machine) and VPS Claude
 
 ---
 
+## 2026-09-10 20:00 UTC — Isolated SQLite path for paper soaks — local-claude
+
+**Commits:** this branch
+**Files changed:** `services/database.js`, `tests/tradingDataDir.test.ts`, `.env.example`
+**Stats baseline reset:** no — operational isolation only
+
+**What changed:**
+`initializeDatabase()` honors `TRADING_DATA_DIR` so a paper instance can use its own `trading.db` instead of locking the default `data/trading.db` already held by another process.
+
+**Why:**
+The hourly paper monitor targeted :3137, which died after VM restart. A second engine could not restart on that port without colliding with the environment shadow process on :3033.
+
+**What to monitor / watch for:**
+- Paper soak on :3137 must set `TRADING_DATA_DIR` and `V2_MODE=paper`.
+- Default path remains `data/trading.db` when the env var is unset.
+
+---
+
 ## 2026-09-09 17:30 UTC — CryptoTitan documentation and identity alignment — local-claude
 
 **Commits:** this branch

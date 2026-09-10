@@ -24,10 +24,21 @@ export function getDb() {
 }
 
 /**
+ * Directory for trading.db. TRADING_DATA_DIR lets a second process (paper soak)
+ * run without locking the default data/trading.db used by the env start script.
+ */
+export function resolveTradingDataDir(envDir, fallbackDir) {
+  if (typeof envDir === 'string' && envDir.trim() !== '') {
+    return envDir.trim();
+  }
+  return fallbackDir;
+}
+
+/**
  * Initialize the SQLite database with all required tables
  */
 export function initializeDatabase() {
-  const dataDir = join(__dirname, '..', 'data');
+  const dataDir = resolveTradingDataDir(process.env.TRADING_DATA_DIR, join(__dirname, '..', 'data'));
   mkdirSync(dataDir, { recursive: true });
 
   const dbPath = join(dataDir, 'trading.db');
