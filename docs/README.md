@@ -1,5 +1,16 @@
 # Documentation index
 
+> **CryptoGod is discontinued.** Further development continues in
+> **[CryptoTitan](https://github.com/manijose1919/CryptoTitan)** (v2.0 successor).
+>
+> Start there:
+> - [CryptoTitan README](https://github.com/manijose1919/CryptoTitan/blob/main/README.md)
+> - [CryptoTitan docs index](https://github.com/manijose1919/CryptoTitan/blob/main/docs/README.md)
+> - [CryptoTitan architecture](https://github.com/manijose1919/CryptoTitan/blob/main/docs/ARCHITECTURE.md)
+>
+> Documents below remain as the CryptoGod-era audit trail. They are not the running configuration
+> of the successor project.
+
 Everything in this directory is a record of a decision — a design that was agreed, a plan that was
 executed, an analysis that changed (or explicitly did not change) the configuration. Documents are
 kept after they ship, because the reasoning behind a parameter is usually more valuable than the

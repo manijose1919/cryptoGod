@@ -1,11 +1,25 @@
 # CryptoGod
 
-Automated multi-strategy cryptocurrency trading engine — Kraken execution, ML signal gating, and a React monitoring dashboard.
-
+![Status](https://img.shields.io/badge/status-discontinued-lightgrey)
+![Successor](https://img.shields.io/badge/successor-CryptoTitan%20v2.0-blue)
 ![CI](https://github.com/manijose1919/cryptoGod/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-Proprietary-red)
 ![Node](https://img.shields.io/badge/node-20%2B-green)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)
+
+> **Discontinued — development has moved to CryptoTitan (v2.0).**
+>
+> This repository is an **archived historical lineage**. I am no longer developing CryptoGod further.
+> Active work continues in **[CryptoTitan](https://github.com/manijose1919/CryptoTitan)** — the
+> official continuation of this project (paper-first Canadian Kraken USD universe, dual live
+> interlock, hardened paper fills).
+>
+> If you want the maintained engine, clone and follow:
+> **https://github.com/manijose1919/CryptoTitan**
+>
+> Docs index on the successor: [CryptoTitan `docs/README.md`](https://github.com/manijose1919/CryptoTitan/blob/main/docs/README.md)
+
+Automated multi-strategy cryptocurrency trading engine — Kraken execution, ML signal gating, and a React monitoring dashboard.
 
 ## Overview
 
@@ -14,6 +28,9 @@ ticker set on a fixed cadence, generates signals from several independent strate
 them through a risk gate and an ML gatekeeper, and manages the resulting positions to exit. Every
 decision, rejection and fill is written to a local SQLite database, so strategy changes can be
 evaluated against a recorded history rather than an opinion.
+
+**This tree is frozen for reference.** New features, paper hardening, and deployment posture live in
+[CryptoTitan](https://github.com/manijose1919/CryptoTitan).
 
 **The deployed engine runs in paper mode.** `ecosystem.config.cjs` sets `V2_MODE: 'paper'` and
 `PAIRS_MODE: 'paper'`; orders are simulated against live prices and no real capital is committed.

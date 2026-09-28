@@ -1,6 +1,10 @@
 # Architecture
 
-This document is for someone who is going to modify the code. It covers how the process is run, what
+> **CryptoGod is discontinued.** For the maintained architecture and runtime posture, see
+> **[CryptoTitan](https://github.com/manijose1919/CryptoTitan)** —
+> [`docs/ARCHITECTURE.md`](https://github.com/manijose1919/CryptoTitan/blob/main/docs/ARCHITECTURE.md).
+
+This document describes the CryptoGod-era process model. It covers how the process is run, what
 happens at boot, what each module in `v2/` is responsible for, how data moves through the system, and
 how a change reaches the server. For a higher-level introduction see the
 [README](../README.md).
